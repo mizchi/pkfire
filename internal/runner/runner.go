@@ -43,10 +43,16 @@ func New(opts Options) *Runner {
 	return &Runner{opts: opts}
 }
 
-// Run executes a single task. Env is built from `defaults.Env` overlaid with
-// `task.Env`; the ambient process env is *not* inherited so that future
-// hashing has a stable view of inputs.
+// Run executes a single task using the runner's default Stdout/Stderr.
 func (r *Runner) Run(ctx context.Context, name string, task *config.Task, defaults *config.Defaults) error {
+	return r.RunWithIO(ctx, name, task, defaults, r.opts.Stdout, r.opts.Stderr)
+}
+
+// RunWithIO is like Run but redirects the task's stdout/stderr to the given
+// writers (the diagnostic "[pkf] ... " prefix line goes to `stderr`).
+// Used by the parallel orchestrator to capture each task's output into a
+// buffer and flush it under a lock — that keeps log output from interleaving.
+func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, defaults *config.Defaults, stdout, stderr io.Writer) error {
 	shell := task.Shell
 	if shell == "" {
 		if defaults != nil && defaults.Shell != "" {
@@ -57,8 +63,8 @@ func (r *Runner) Run(ctx context.Context, name string, task *config.Task, defaul
 	}
 
 	cmd := exec.CommandContext(ctx, shell, "-c", task.Cmd)
-	cmd.Stdout = r.opts.Stdout
-	cmd.Stderr = r.opts.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(defaults, task)
 
 	cmd.Dir = r.opts.Workdir
@@ -66,7 +72,7 @@ func (r *Runner) Run(ctx context.Context, name string, task *config.Task, defaul
 		cmd.Dir = *task.Workdir
 	}
 
-	fmt.Fprintf(r.opts.Stderr, "[pkf] %s: %s\n", name, task.Cmd)
+	fmt.Fprintf(stderr, "[pkf] %s: %s\n", name, task.Cmd)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("task %q failed: %w", name, err)
 	}

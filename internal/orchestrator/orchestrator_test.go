@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
@@ -14,14 +15,14 @@ import (
 	"github.com/mizchi/pkfire/internal/runner"
 )
 
-func newOrch(t *testing.T) (*orchestrator.Orchestrator, string, *bytes.Buffer) {
+func newOrch(t *testing.T) (*orchestrator.Orchestrator, string, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	root := t.TempDir()
 	cas := t.TempDir()
-	var stdout, stderr, log bytes.Buffer
-	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr, Workdir: root})
-	o := orchestrator.New(cache.New(cas), r, &log)
-	return o, root, &log
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Workdir: root})
+	o := orchestrator.New(cache.New(cas), r, &stdout, &stderr, orchestrator.Options{Parallelism: 1})
+	return o, root, &stdout, &stderr
 }
 
 func basePlan(root, name string, t *config.Task) *orchestrator.Plan {
@@ -35,7 +36,7 @@ func basePlan(root, name string, t *config.Task) *orchestrator.Plan {
 }
 
 func TestExecuteCachesOutput(t *testing.T) {
-	o, root, log := newOrch(t)
+	o, root, _, stderr := newOrch(t)
 
 	first := basePlan(root, "build", &config.Task{
 		Cmd:     "mkdir -p bin && printf BIN > bin/app",
@@ -46,24 +47,21 @@ func TestExecuteCachesOutput(t *testing.T) {
 	if _, err := o.Execute(context.Background(), first); err != nil {
 		t.Fatalf("first Execute: %v", err)
 	}
-	if !strings.Contains(log.String(), "ran ") {
-		t.Errorf("expected first run to log `ran`, got %q", log.String())
+	if !strings.Contains(stderr.String(), "ran ") {
+		t.Errorf("expected first run to log `ran`, got %q", stderr.String())
 	}
 
-	// Wipe outputs to ensure restore actually replaces them.
 	if err := os.RemoveAll(filepath.Join(root, "bin")); err != nil {
 		t.Fatal(err)
 	}
+	stderr.Reset()
 
-	log.Reset()
 	second := basePlan(root, "build", &config.Task{
 		Cmd:     "echo SHOULD-NOT-RUN",
 		Shell:   "bash",
 		Outputs: []string{"bin"},
 		Cache:   true,
 	})
-	// Note: Cmd differs but Outputs is the same. Cache key includes Cmd, so
-	// this must be a *miss* — verify by checking content is "echo SHOULD-NOT-RUN" output.
 	results, err := o.Execute(context.Background(), second)
 	if err != nil {
 		t.Fatalf("second Execute: %v", err)
@@ -72,11 +70,10 @@ func TestExecuteCachesOutput(t *testing.T) {
 		t.Errorf("changing cmd should miss cache, got %v", results[0].Outcome)
 	}
 
-	// Now run an identical plan again — that should hit.
-	log.Reset()
 	if err := os.RemoveAll(filepath.Join(root, "bin")); err != nil {
 		t.Fatal(err)
 	}
+	stderr.Reset()
 	third := basePlan(root, "build", &config.Task{
 		Cmd:     "mkdir -p bin && printf BIN > bin/app",
 		Shell:   "bash",
@@ -100,7 +97,7 @@ func TestExecuteCachesOutput(t *testing.T) {
 }
 
 func TestExecuteSkipsCacheWhenDisabled(t *testing.T) {
-	o, root, log := newOrch(t)
+	o, root, _, stderr := newOrch(t)
 	plan := basePlan(root, "phony", &config.Task{
 		Cmd:   "true",
 		Shell: "bash",
@@ -113,8 +110,8 @@ func TestExecuteSkipsCacheWhenDisabled(t *testing.T) {
 	if results[0].Outcome != orchestrator.OutcomeUncached {
 		t.Errorf("expected OutcomeUncached, got %v", results[0].Outcome)
 	}
-	if !strings.Contains(log.String(), "ran (uncached)") {
-		t.Errorf("log = %q", log.String())
+	if !strings.Contains(stderr.String(), "ran (uncached)") {
+		t.Errorf("stderr = %q", stderr.String())
 	}
 }
 
@@ -140,5 +137,106 @@ func TestComputeKeyIsStableAcrossCalls(t *testing.T) {
 	}
 	if a != b {
 		t.Fatal("ComputeKey not stable across calls")
+	}
+}
+
+func TestExecuteRespectsDependencyOrderInParallel(t *testing.T) {
+	root := t.TempDir()
+	cas := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Workdir: root})
+	o := orchestrator.New(cache.New(cas), r, &stdout, &stderr, orchestrator.Options{Parallelism: 4})
+
+	// `build` writes a marker file; `test` asserts it exists. With proper dep
+	// ordering this passes; without it `test` would race ahead and fail.
+	plan := &orchestrator.Plan{
+		Order: []string{"build", "test"},
+		Tasks: map[string]*config.Task{
+			"build": {
+				Cmd:     "sleep 0.05 && printf BIN > bin",
+				Shell:   "bash",
+				Outputs: []string{"bin"},
+				Cache:   true,
+			},
+			"test": {
+				Cmd:   "test -f bin && cat bin",
+				Shell: "bash",
+				Deps:  []string{"build"},
+				Cache: false,
+			},
+		},
+		Defaults:   &config.Defaults{Shell: "bash"},
+		Root:       root,
+		ConfigHash: []byte("c"),
+	}
+	results, err := o.Execute(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "BIN" {
+		t.Errorf("stdout = %q, want BIN", got)
+	}
+	if results[0].Name != "build" || results[1].Name != "test" {
+		t.Errorf("results out of order: %+v", results)
+	}
+}
+
+func TestExecuteRunsIndependentTasksConcurrently(t *testing.T) {
+	root := t.TempDir()
+	cas := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Workdir: root})
+	o := orchestrator.New(cache.New(cas), r, &stdout, &stderr, orchestrator.Options{Parallelism: 4})
+
+	const slowMs = 200
+	mkSlow := func() *config.Task {
+		return &config.Task{
+			Cmd:   "sleep 0.2",
+			Shell: "bash",
+			Cache: false,
+		}
+	}
+	plan := &orchestrator.Plan{
+		Order: []string{"a", "b", "c", "d"},
+		Tasks: map[string]*config.Task{
+			"a": mkSlow(), "b": mkSlow(), "c": mkSlow(), "d": mkSlow(),
+		},
+		Defaults: &config.Defaults{Shell: "bash"},
+		Root:     root,
+	}
+	start := time.Now()
+	if _, err := o.Execute(context.Background(), plan); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	elapsed := time.Since(start)
+	// Serial would be ~800ms; we tolerate up to ~600ms to account for CI.
+	if elapsed > time.Duration(slowMs*3)*time.Millisecond {
+		t.Errorf("4 independent 200ms tasks took %v with parallelism=4 (expected ≪ serial)", elapsed)
+	}
+}
+
+func TestExecuteSkipsDownstreamWhenDepFails(t *testing.T) {
+	root := t.TempDir()
+	cas := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Workdir: root})
+	o := orchestrator.New(cache.New(cas), r, &stdout, &stderr, orchestrator.Options{Parallelism: 4})
+
+	plan := &orchestrator.Plan{
+		Order: []string{"setup", "step", "after"},
+		Tasks: map[string]*config.Task{
+			"setup": {Cmd: "exit 1", Shell: "bash", Cache: false},
+			"step":  {Cmd: "echo step-ran", Shell: "bash", Deps: []string{"setup"}, Cache: false},
+			"after": {Cmd: "echo after-ran", Shell: "bash", Deps: []string{"step"}, Cache: false},
+		},
+		Defaults: &config.Defaults{Shell: "bash"},
+		Root:     root,
+	}
+	_, err := o.Execute(context.Background(), plan)
+	if err == nil {
+		t.Fatal("expected error from failing setup")
+	}
+	if strings.Contains(stdout.String(), "step-ran") || strings.Contains(stdout.String(), "after-ran") {
+		t.Errorf("downstream tasks should not have produced output, stdout=%q", stdout.String())
 	}
 }

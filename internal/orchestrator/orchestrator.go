@@ -1,12 +1,19 @@
 // Package orchestrator coordinates the cache and the runner: for each task
 // in topological order it derives the action key, returns a cached result
 // when present, otherwise executes the task and stores the resulting outputs.
+//
+// Execute schedules tasks in parallel with a semaphore-bounded worker count
+// while preserving declared dependencies via per-task done-channels.
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"sync"
 
 	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
@@ -24,6 +31,8 @@ const (
 	OutcomeHit
 	// OutcomeUncached means the task executed but had `cache = false` set.
 	OutcomeUncached
+	// OutcomeSkipped means an upstream dependency failed and we never ran.
+	OutcomeSkipped
 )
 
 // String renders an Outcome for log lines and debugging.
@@ -33,12 +42,15 @@ func (o Outcome) String() string {
 		return "hit"
 	case OutcomeUncached:
 		return "ran (uncached)"
+	case OutcomeSkipped:
+		return "skipped"
 	default:
 		return "ran"
 	}
 }
 
-// Result records what happened for one task.
+// Result records what happened for one task. `Key` is the zero value when
+// the task was skipped before its key could be computed.
 type Result struct {
 	Name    string
 	Key     [32]byte
@@ -55,21 +67,34 @@ type Plan struct {
 	ConfigHash []byte
 }
 
+// Options tunes a single Execute invocation.
+type Options struct {
+	// Parallelism is the maximum number of tasks running concurrently.
+	// 0 means runtime.NumCPU(); 1 forces serial execution.
+	Parallelism int
+}
+
 // Orchestrator holds the long-lived runner and (optionally) cache.
 // A nil cache disables caching for the whole run.
 type Orchestrator struct {
 	cache  *cache.Cache
 	runner *runner.Runner
-	log    io.Writer
+	stdout io.Writer
+	stderr io.Writer
+	opts   Options
 }
 
-// New returns an Orchestrator. `log` receives one human-readable line per
-// task ("hit"/"ran") and may be io.Discard.
-func New(c *cache.Cache, r *runner.Runner, log io.Writer) *Orchestrator {
-	if log == nil {
-		log = io.Discard
+// New returns an Orchestrator. `stderr` receives one human-readable line per
+// task ("hit"/"ran"/"skipped") and may be io.Discard. `stdout` is where each
+// task's captured stdout is flushed under a lock once the task finishes.
+func New(c *cache.Cache, r *runner.Runner, stdout, stderr io.Writer, opts Options) *Orchestrator {
+	if stdout == nil {
+		stdout = io.Discard
 	}
-	return &Orchestrator{cache: c, runner: r, log: log}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	return &Orchestrator{cache: c, runner: r, stdout: stdout, stderr: stderr, opts: opts}
 }
 
 // ComputeKey assembles a `hash.Action` for `task` and returns its action key.
@@ -98,42 +123,148 @@ func ComputeKey(task *config.Task, defaults *config.Defaults, root string, confi
 	return a.Key(), nil
 }
 
-// Execute walks the plan's order. Stops on the first task error and
-// returns the results gathered so far together with the error.
+// Execute walks the plan, scheduling tasks once their declared deps complete.
+// Returns the per-task results in topological order along with the first
+// failure (if any). On failure, downstream tasks are reported as Skipped.
 func (o *Orchestrator) Execute(ctx context.Context, p *Plan) ([]Result, error) {
-	results := make([]Result, 0, len(p.Order))
-	for _, name := range p.Order {
-		task, ok := p.Tasks[name]
-		if !ok {
-			return results, fmt.Errorf("unknown task: %q", name)
-		}
-		key, err := ComputeKey(task, p.Defaults, p.Root, p.ConfigHash)
-		if err != nil {
-			return results, fmt.Errorf("compute key for %q: %w", name, err)
-		}
-		short := hash.FormatKey(key)[:12]
-
-		if task.Cache && o.cache != nil && o.cache.Has(key) {
-			if err := o.cache.Restore(key, p.Root); err != nil {
-				return results, fmt.Errorf("cache restore for %q: %w", name, err)
-			}
-			fmt.Fprintf(o.log, "[pkf] %s: hit %s\n", name, short)
-			results = append(results, Result{Name: name, Key: key, Outcome: OutcomeHit})
-			continue
-		}
-		if err := o.runner.Run(ctx, name, task, p.Defaults); err != nil {
-			return results, err
-		}
-		outcome := OutcomeRan
-		if !task.Cache {
-			outcome = OutcomeUncached
-		} else if o.cache != nil && len(task.Outputs) > 0 {
-			if err := o.cache.Store(key, p.Root, task.Outputs); err != nil {
-				return results, fmt.Errorf("cache store for %q: %w", name, err)
-			}
-		}
-		fmt.Fprintf(o.log, "[pkf] %s: %s %s\n", name, outcome, short)
-		results = append(results, Result{Name: name, Key: key, Outcome: outcome})
+	parallelism := o.opts.Parallelism
+	if parallelism <= 0 {
+		parallelism = runtime.NumCPU()
 	}
-	return results, nil
+	if parallelism > len(p.Order) {
+		parallelism = len(p.Order)
+	}
+	if parallelism == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	idx := make(map[string]int, len(p.Order))
+	for i, name := range p.Order {
+		idx[name] = i
+	}
+	results := make([]Result, len(p.Order))
+	depDone := make(map[string]chan struct{}, len(p.Order))
+	depOK := make(map[string]*bool, len(p.Order))
+	for _, name := range p.Order {
+		depDone[name] = make(chan struct{})
+		ok := true
+		depOK[name] = &ok
+	}
+
+	sema := make(chan struct{}, parallelism)
+	var ioMu sync.Mutex
+	var errMu sync.Mutex
+	var firstErr error
+
+	setErr := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+
+	var wg sync.WaitGroup
+	for _, name := range p.Order {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			defer close(depDone[name])
+			task := p.Tasks[name]
+
+			for _, d := range task.Deps {
+				ch, ok := depDone[d]
+				if !ok {
+					setErr(fmt.Errorf("task %q references unknown dep %q", name, d))
+					*depOK[name] = false
+					return
+				}
+				select {
+				case <-ch:
+					if !*depOK[d] {
+						*depOK[name] = false
+						results[idx[name]] = Result{Name: name, Outcome: OutcomeSkipped}
+						o.logLine(&ioMu, "[pkf] %s: skipped (dep %q failed)\n", name, d)
+						return
+					}
+				case <-ctx.Done():
+					*depOK[name] = false
+					results[idx[name]] = Result{Name: name, Outcome: OutcomeSkipped}
+					return
+				}
+			}
+
+			select {
+			case sema <- struct{}{}:
+			case <-ctx.Done():
+				*depOK[name] = false
+				results[idx[name]] = Result{Name: name, Outcome: OutcomeSkipped}
+				return
+			}
+			defer func() { <-sema }()
+
+			res, err := o.executeOne(ctx, name, task, p, &ioMu)
+			results[idx[name]] = res
+			if err != nil {
+				*depOK[name] = false
+				setErr(err)
+			}
+		}(name)
+	}
+	wg.Wait()
+	return results, firstErr
+}
+
+// executeOne runs a single task with cache lookup, capturing its stdout
+// and stderr into buffers that are flushed atomically under `ioMu`.
+func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config.Task, p *Plan, ioMu *sync.Mutex) (Result, error) {
+	key, err := ComputeKey(task, p.Defaults, p.Root, p.ConfigHash)
+	if err != nil {
+		return Result{Name: name}, fmt.Errorf("compute key for %q: %w", name, err)
+	}
+	short := hash.FormatKey(key)[:12]
+
+	if task.Cache && o.cache != nil && o.cache.Has(key) {
+		if err := o.cache.Restore(key, p.Root); err != nil {
+			return Result{Name: name, Key: key}, fmt.Errorf("cache restore for %q: %w", name, err)
+		}
+		o.logLine(ioMu, "[pkf] %s: hit %s\n", name, short)
+		return Result{Name: name, Key: key, Outcome: OutcomeHit}, nil
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	runErr := o.runner.RunWithIO(ctx, name, task, p.Defaults, &stdoutBuf, &stderrBuf)
+
+	ioMu.Lock()
+	io.Copy(o.stderr, &stderrBuf)
+	io.Copy(o.stdout, &stdoutBuf)
+	ioMu.Unlock()
+
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) {
+			return Result{Name: name, Key: key, Outcome: OutcomeSkipped}, runErr
+		}
+		return Result{Name: name, Key: key}, runErr
+	}
+
+	outcome := OutcomeRan
+	if !task.Cache {
+		outcome = OutcomeUncached
+	} else if o.cache != nil && len(task.Outputs) > 0 {
+		if err := o.cache.Store(key, p.Root, task.Outputs); err != nil {
+			return Result{Name: name, Key: key}, fmt.Errorf("cache store for %q: %w", name, err)
+		}
+	}
+	o.logLine(ioMu, "[pkf] %s: %s %s\n", name, outcome, short)
+	return Result{Name: name, Key: key, Outcome: outcome}, nil
+}
+
+func (o *Orchestrator) logLine(mu *sync.Mutex, format string, args ...any) {
+	mu.Lock()
+	defer mu.Unlock()
+	fmt.Fprintf(o.stderr, format, args...)
 }

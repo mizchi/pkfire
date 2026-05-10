@@ -60,7 +60,7 @@ usage:
   pkf <command> [args]
 
 commands:
-  run [-f FILE] [--print-hash] [--no-cache] <task>
+  run [-f FILE] [-j N] [--print-hash] [--no-cache] <task>
                                         run a task and its transitive deps
   list [-f FILE]                        list declared tasks
   version                               print pkf version
@@ -68,6 +68,7 @@ commands:
 
 flags:
   -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
+  -j, --jobs N           max concurrent tasks (default: NumCPU)
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
 
@@ -122,6 +123,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	file := newFileFlag(fs)
 	printHash := fs.Bool("print-hash", false, "print action keys and exit")
 	noCache := fs.Bool("no-cache", false, "disable cache for this run")
+	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
+	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -166,12 +169,10 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		}
 		cas = cache.New(dir)
 	}
-	r := runner.New(runner.Options{
-		Stdout:  stdout,
-		Stderr:  stderr,
-		Workdir: root,
+	r := runner.New(runner.Options{Workdir: root})
+	orch := orchestrator.New(cas, r, stdout, stderr, orchestrator.Options{
+		Parallelism: *jobs,
 	})
-	orch := orchestrator.New(cas, r, stderr)
 	plan := &orchestrator.Plan{
 		Order:      order,
 		Tasks:      tf.Tasks,
