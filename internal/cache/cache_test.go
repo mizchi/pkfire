@@ -76,14 +76,18 @@ func TestStoreSkipsMissingOutputs(t *testing.T) {
 	}
 }
 
-func TestStoreNoOutputsIsNoop(t *testing.T) {
+func TestStoreEmptyOutputsStillRegistersEntry(t *testing.T) {
 	c := cache.New(t.TempDir())
 	key := [32]byte{0x02}
 	if err := c.Store(key, t.TempDir(), nil); err != nil {
 		t.Fatalf("Store with no outputs: %v", err)
 	}
-	if c.Has(key) {
-		t.Error("Has should remain false when no outputs were stored")
+	// Entry must exist so that no-output tasks like `go vet` can hit cache.
+	if !c.Has(key) {
+		t.Error("Has should be true even when outputs were empty")
+	}
+	if err := c.Restore(key, t.TempDir()); err != nil {
+		t.Errorf("Restore of empty entry: %v", err)
 	}
 }
 

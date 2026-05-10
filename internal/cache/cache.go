@@ -71,10 +71,12 @@ func (c *Cache) Restore(key [32]byte, root string) error {
 // Store archives the listed `outputs` (relative to `root`) under `key`.
 // Missing outputs are ignored; that is intentional — `cache.json` style
 // strictness gets in the way of common patterns like optional artifacts.
+//
+// An empty `outputs` slice is also valid: the entry is still created (with
+// an empty archive) so that subsequent runs can detect a cache hit and
+// skip execution. This is what makes `pkf` work for tasks like `go vet`
+// that produce no artifacts but should still be incremental.
 func (c *Cache) Store(key [32]byte, root string, outputs []string) error {
-	if len(outputs) == 0 {
-		return nil
-	}
 	target := c.entryDir(key)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err

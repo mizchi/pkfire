@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 
 	"github.com/mizchi/pkfire/internal/config"
@@ -67,9 +68,17 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(defaults, task)
 
+	// `task.Workdir` is interpreted relative to the runner's base Workdir
+	// (typically the directory holding Taskfile.pkl). This matches how
+	// orchestrator.TaskRoot resolves inputs/outputs/cache, so `cmd.Dir`,
+	// hashing, and cache restoration all see the same root.
 	cmd.Dir = r.opts.Workdir
 	if task.Workdir != nil && *task.Workdir != "" {
-		cmd.Dir = *task.Workdir
+		if filepath.IsAbs(*task.Workdir) {
+			cmd.Dir = *task.Workdir
+		} else {
+			cmd.Dir = filepath.Join(r.opts.Workdir, *task.Workdir)
+		}
 	}
 
 	fmt.Fprintf(stderr, "[pkf] %s: %s\n", name, task.Cmd)
@@ -93,10 +102,25 @@ func (r *Runner) RunAll(ctx context.Context, order []string, tasks map[string]*c
 	return nil
 }
 
-// mergeEnv merges defaults.Env and task.Env into a deterministic, sorted
-// "KEY=VALUE" slice. Task entries override default entries.
+// inheritedEnvKeys are passed through from the calling shell so common
+// tools (compilers on PATH, locale-sensitive utilities, temp dirs) can
+// run. They deliberately do *not* contribute to the action key — that is
+// declared explicitly via `task.tools` so action keys stay reproducible
+// across machines with different PATHs.
+var inheritedEnvKeys = []string{
+	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TMPDIR",
+	"LANG", "LC_ALL", "LC_CTYPE", "TZ",
+}
+
+// mergeEnv merges (inherited system env) ← defaults.Env ← task.Env into a
+// deterministic, sorted "KEY=VALUE" slice. Later entries override earlier.
 func mergeEnv(defaults *config.Defaults, task *config.Task) []string {
 	merged := make(map[string]string)
+	for _, k := range inheritedEnvKeys {
+		if v, ok := os.LookupEnv(k); ok {
+			merged[k] = v
+		}
+	}
 	if defaults != nil {
 		for k, v := range defaults.Env {
 			merged[k] = v

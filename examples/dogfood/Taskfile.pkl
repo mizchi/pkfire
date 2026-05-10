@@ -1,0 +1,67 @@
+/// Dogfood Taskfile: build, test, vet, and pkl-test the pkfire repo itself
+/// using `pkf`. All tasks set `workdir = "../.."` so paths resolve against
+/// the repository root.
+///
+/// Run from anywhere:
+///
+///   pkf run -f examples/dogfood/Taskfile.pkl ci
+///
+/// or, after `cd examples/dogfood`:
+///
+///   pkf run ci
+amends "../../pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "cmd/**/*.go"
+  "internal/**/*.go"
+  "go.mod"
+  "go.sum"
+}
+
+local repoRoot: String = "../.."
+
+tasks {
+  ["build"] = new Task {
+    description = "Build the pkf CLI"
+    cmd = "go build -o bin/pkf ./cmd/pkf"
+    workdir = repoRoot
+    inputs = sources
+    outputs { "bin/pkf" }
+  }
+
+  ["go-test"] = new Task {
+    description = "Run Go unit tests with the race detector"
+    cmd = "go test -race ./..."
+    workdir = repoRoot
+    inputs {
+      ...sources
+      "examples/**/*.pkl"
+      "pkl/**/*.pkl"
+    }
+  }
+
+  ["vet"] = new Task {
+    description = "go vet"
+    cmd = "go vet ./..."
+    workdir = repoRoot
+    inputs = sources
+  }
+
+  ["pkl-test"] = new Task {
+    description = "Run Pkl schema tests"
+    cmd = "pkl test pkl/Taskfile.test.pkl"
+    workdir = repoRoot
+    inputs {
+      "pkl/Taskfile.pkl"
+      "pkl/Taskfile.test.pkl"
+      "pkl/Taskfile.test.pkl-expected.pcf"
+    }
+  }
+
+  ["ci"] = new Task {
+    description = "Aggregate gate: build, vet, go-test, pkl-test"
+    cmd = "echo all green"
+    cache = false
+    deps { "build"; "vet"; "go-test"; "pkl-test" }
+  }
+}

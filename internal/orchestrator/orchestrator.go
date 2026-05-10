@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -219,17 +220,31 @@ func (o *Orchestrator) Execute(ctx context.Context, p *Plan) ([]Result, error) {
 	return results, firstErr
 }
 
+// TaskRoot returns the directory used as the resolution base for a task's
+// inputs, outputs, and cwd. When `task.Workdir` is unset it equals
+// `plan.Root`; otherwise the workdir path is resolved relative to it.
+func TaskRoot(task *config.Task, planRoot string) string {
+	if task.Workdir == nil || *task.Workdir == "" {
+		return planRoot
+	}
+	if filepath.IsAbs(*task.Workdir) {
+		return *task.Workdir
+	}
+	return filepath.Join(planRoot, *task.Workdir)
+}
+
 // executeOne runs a single task with cache lookup, capturing its stdout
 // and stderr into buffers that are flushed atomically under `ioMu`.
 func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config.Task, p *Plan, ioMu *sync.Mutex) (Result, error) {
-	key, err := ComputeKey(task, p.Defaults, p.Root, p.ConfigHash)
+	taskRoot := TaskRoot(task, p.Root)
+	key, err := ComputeKey(task, p.Defaults, taskRoot, p.ConfigHash)
 	if err != nil {
 		return Result{Name: name}, fmt.Errorf("compute key for %q: %w", name, err)
 	}
 	short := hash.FormatKey(key)[:12]
 
 	if task.Cache && o.cache != nil && o.cache.Has(key) {
-		if err := o.cache.Restore(key, p.Root); err != nil {
+		if err := o.cache.Restore(key, taskRoot); err != nil {
 			return Result{Name: name, Key: key}, fmt.Errorf("cache restore for %q: %w", name, err)
 		}
 		o.logLine(ioMu, "[pkf] %s: hit %s\n", name, short)
@@ -254,8 +269,8 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	outcome := OutcomeRan
 	if !task.Cache {
 		outcome = OutcomeUncached
-	} else if o.cache != nil && len(task.Outputs) > 0 {
-		if err := o.cache.Store(key, p.Root, task.Outputs); err != nil {
+	} else if o.cache != nil {
+		if err := o.cache.Store(key, taskRoot, task.Outputs); err != nil {
 			return Result{Name: name, Key: key}, fmt.Errorf("cache store for %q: %w", name, err)
 		}
 	}

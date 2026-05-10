@@ -199,7 +199,8 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 	configHash := hash.HashBytes(tf.Canonical)
 	for _, name := range order {
 		task := tf.Tasks[name]
-		key, err := orchestrator.ComputeKey(task, &tf.Defaults, root, configHash)
+		taskRoot := orchestrator.TaskRoot(task, root)
+		key, err := orchestrator.ComputeKey(task, &tf.Defaults, taskRoot, configHash)
 		if err != nil {
 			return fmt.Errorf("compute key for %q: %w", name, err)
 		}

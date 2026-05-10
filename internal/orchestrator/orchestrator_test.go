@@ -215,6 +215,62 @@ func TestExecuteRunsIndependentTasksConcurrently(t *testing.T) {
 	}
 }
 
+func TestTaskWorkdirResolvesInputsAndOutputs(t *testing.T) {
+	// Plan.Root is examples/dogfood; the task workdir points one level up.
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "examples/dogfood"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "src.go"), []byte("package x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cas := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Workdir: filepath.Join(repo, "examples/dogfood")})
+	o := orchestrator.New(cache.New(cas), r, &stdout, &stderr, orchestrator.Options{Parallelism: 1})
+
+	wd := "../.."
+	plan := &orchestrator.Plan{
+		Order: []string{"build"},
+		Tasks: map[string]*config.Task{
+			"build": {
+				Cmd:     "mkdir -p bin && printf BIN > bin/app",
+				Shell:   "bash",
+				Workdir: &wd,
+				Inputs:  []string{"src.go"},
+				Outputs: []string{"bin"},
+				Cache:   true,
+			},
+		},
+		Defaults: &config.Defaults{Shell: "bash"},
+		Root:     filepath.Join(repo, "examples/dogfood"),
+	}
+	if _, err := o.Execute(context.Background(), plan); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	// `bin/app` should land at <repo>/bin/app, not under examples/dogfood.
+	if got, err := os.ReadFile(filepath.Join(repo, "bin/app")); err != nil {
+		t.Fatalf("artifact missing at repo/bin/app: %v", err)
+	} else if string(got) != "BIN" {
+		t.Errorf("artifact = %q", got)
+	}
+
+	if err := os.RemoveAll(filepath.Join(repo, "bin")); err != nil {
+		t.Fatal(err)
+	}
+	results, err := o.Execute(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if results[0].Outcome != orchestrator.OutcomeHit {
+		t.Errorf("expected cache hit on second run, got %v", results[0].Outcome)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "bin/app")); err != nil {
+		t.Errorf("Restore should recreate bin/app at workdir base: %v", err)
+	}
+}
+
 func TestExecuteSkipsDownstreamWhenDepFails(t *testing.T) {
 	root := t.TempDir()
 	cas := t.TempDir()
