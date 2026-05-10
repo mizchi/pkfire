@@ -1,0 +1,55 @@
+/// pkfire example: a single-binary Rust crate driven through `cargo`.
+///
+/// `outputs` are scoped to `target/release/greet` so the cache key stays
+/// small even though `cargo build` writes plenty of intermediate
+/// artifacts under `target/`. If you ever need them too, expand the
+/// glob — pkfire archives everything declared and nothing else.
+amends "../../pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "src/**/*.rs"
+  "Cargo.toml"
+}
+
+local fmt: Task = new {
+  name = "fmt"
+  description = "rustfmt --check"
+  cmd = "cargo fmt --check"
+  inputs = sources
+  tools { ["cargo"] = "1.92.0"; ["rustc"] = "stable" }
+}
+
+local clippy: Task = new {
+  name = "clippy"
+  description = "Lint with clippy, denying warnings"
+  cmd = "cargo clippy --all-targets -- -D warnings"
+  inputs = sources
+  tools { ["cargo"] = "1.92.0"; ["rustc"] = "stable" }
+}
+
+local test: Task = new {
+  name = "test"
+  description = "Run unit + integration tests"
+  cmd = "cargo test"
+  inputs = sources
+  tools { ["cargo"] = "1.92.0"; ["rustc"] = "stable" }
+}
+
+local build: Task = new {
+  name = "build"
+  description = "Release build of the `greet` binary"
+  cmd = "cargo build --release"
+  inputs = sources
+  outputs { "target/release/greet" }
+  tools { ["cargo"] = "1.92.0"; ["rustc"] = "stable" }
+}
+
+local ci: Task = new {
+  name = "ci"
+  description = "Aggregate gate: fmt + clippy + test + build"
+  cmd = "echo rust-ci-green"
+  cache = false
+  deps { fmt; clippy; test; build }
+}
+
+tasks { fmt; clippy; test; build; ci }

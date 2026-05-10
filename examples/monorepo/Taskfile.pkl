@@ -1,0 +1,76 @@
+/// pkfire example: pnpm workspaces with one Task per package, generated
+/// from a `packages` table.
+///
+/// `@example/cli` depends on `@example/greet`. The Taskfile encodes that
+/// edge by referencing the upstream Task instance directly in the
+/// downstream's `deps` — no string-keyed lookup, just a Pkl reference,
+/// so a typo would fail at evaluation time.
+amends "../../pkl/Taskfile.pkl"
+
+local class Package {
+  /// Workspace name (`@example/greet` etc.).
+  fullName: String
+  /// Short id used in task names (`greet`, `cli`).
+  id: String
+  /// Path relative to the Taskfile, used for `workdir`.
+  path: String
+  /// Sources whose hash drives the per-package action key.
+  sources: Listing<String>
+}
+
+local greet: Package = new {
+  fullName = "@example/greet"
+  id = "greet"
+  path = "packages/greet"
+  sources { "src/**/*.js"; "package.json" }
+}
+
+local cli: Package = new {
+  fullName = "@example/cli"
+  id = "cli"
+  path = "packages/cli"
+  sources { "src/**/*.js"; "package.json" }
+}
+
+local function testTask(p: Package, taskDeps: Listing<Task>): Task = new {
+  name = "test:\(p.id)"
+  description = "node:test for \(p.fullName)"
+  cmd = "node --test src/*.test.js"
+  workdir = p.path
+  inputs = p.sources
+  deps = taskDeps
+  tools { ["node"] = "24" }
+}
+
+local install: Task = new {
+  name = "install"
+  description = "Resolve workspace symlinks (pnpm install)"
+  cmd = "pnpm install --silent"
+  inputs {
+    "pnpm-workspace.yaml"
+    "package.json"
+    "packages/*/package.json"
+  }
+  // pnpm's `node_modules` is full of symlinks into a content-addressed
+  // store; pkfire's CAS archives only regular files and directories, so
+  // a cached restore would leave dangling links. pnpm itself is fast on
+  // a warm store, so just rerun it every time.
+  cache = false
+  tools { ["pnpm"] = "10"; ["node"] = "24" }
+}
+
+// `cli` consumes `greet`, so its tests depend on greet's Task. pkfire
+// schedules them sequentially; bumping the matrix to 10 packages would
+// keep the same one-line declaration.
+local testGreet: Task = testTask(greet, new Listing<Task> { install })
+local testCli: Task = testTask(cli, new Listing<Task> { install; testGreet })
+
+local ci: Task = new {
+  name = "ci"
+  description = "Aggregate gate: install once, then test each package"
+  cmd = "echo monorepo-ci-green"
+  cache = false
+  deps { install; testGreet; testCli }
+}
+
+tasks { install; testGreet; testCli; ci }

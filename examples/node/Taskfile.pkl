@@ -1,0 +1,46 @@
+/// pkfire example: Node + the built-in `node:test` runner.
+///
+/// This example deliberately avoids dev dependencies so a fresh checkout
+/// runs the full pipeline with nothing more than `node` on PATH.
+amends "../../pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "src/**/*.js"
+  "package.json"
+}
+
+local check: Task = new {
+  name = "check"
+  description = "Syntax-check every source file with --check"
+  cmd = "node --check src/greet.js && node --check src/greet.test.js"
+  inputs = sources
+  tools { ["node"] = "24" }
+}
+
+local test: Task = new {
+  name = "test"
+  description = "Run unit tests via the built-in node:test runner"
+  cmd = "node --test src/greet.test.js"
+  inputs = sources
+  deps { check }
+  tools { ["node"] = "24" }
+}
+
+local smoke: Task = new {
+  name = "smoke"
+  description = "Import greet() and call it with a real argument"
+  cmd = #"node -e 'import("./src/greet.js").then(m => console.log(m.greet("pkfire")))'"#
+  inputs = sources
+  deps { check }
+  tools { ["node"] = "24" }
+}
+
+local ci: Task = new {
+  name = "ci"
+  description = "Aggregate gate: check, test, smoke"
+  cmd = "echo node-ci-green"
+  cache = false
+  deps { check; test; smoke }
+}
+
+tasks { check; test; smoke; ci }

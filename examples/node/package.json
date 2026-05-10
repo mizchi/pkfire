@@ -1,0 +1,7 @@
+{
+  "name": "pkfire-example-node",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "pkfire example: a tiny Node project with the built-in test runner (no dev deps)."
+}

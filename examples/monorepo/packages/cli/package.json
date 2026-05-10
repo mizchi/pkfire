@@ -1,0 +1,12 @@
+{
+  "name": "@example/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "say-hello": "src/cli.js"
+  },
+  "dependencies": {
+    "@example/greet": "workspace:*"
+  }
+}

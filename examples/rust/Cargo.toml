@@ -1,0 +1,9 @@
+[package]
+name = "pkfire-example-rust"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "greet"
+path = "src/main.rs"

@@ -110,6 +110,17 @@ PUT  /v1/cas/<hex64>   → 201 (or 200 if already present)
 Authorization: Bearer <token>   (optional)
 ```
 
+## Examples
+
+| Path | What it shows |
+| --- | --- |
+| [`examples/basic`](./examples/basic/Taskfile.pkl) | Smallest possible Taskfile (one `hello`, one `build`, one `test`) |
+| [`examples/node`](./examples/node/) | Node project using the built-in `node:test` runner; zero dev deps |
+| [`examples/rust`](./examples/rust/) | Single-binary Rust crate driven through `cargo` (fmt + clippy + test + build) |
+| [`examples/monorepo`](./examples/monorepo/) | pnpm workspaces with one Task generated per package via a `Package` template |
+| [`examples/dogfood`](./examples/dogfood/Taskfile.pkl) | pkfire builds itself: cross-compile matrix + checksum + integration |
+| [`examples/remote-cache-worker`](./examples/remote-cache-worker/) | Cloudflare Worker that backs the remote-cache protocol with R2 |
+
 ## Why Pkl
 
 `just` recipes get unwieldy once you need shared variables, environment
