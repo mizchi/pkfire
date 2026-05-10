@@ -130,12 +130,15 @@ pick whichever option fits:
 
 | Option | `amends` line | Notes |
 | --- | --- | --- |
-| HTTPS, floating tip | `amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"` | What `pkf init` writes. Pkl fetches and caches. |
-| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/v0.1.0/pkl/Taskfile.pkl"` | Reproducible across machines and CI. |
+| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
+| HTTPS, floating tip | `amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"` | What older `pkf init` wrote. Pkl fetches and caches. |
+| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.1.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
 | Local clone | `amends "../pkfire/pkl/Taskfile.pkl"` | When `mizchi/pkfire` is a sibling checkout. |
 
-A `package://pkg.pkl-lang.org/mizchi/pkfire` URI is planned but not
-published yet — until then, do not use the form shown in older docs.
+The package is published as a GitHub release whose tag matches
+`pkfire@<version>`. `pkg.pkl-lang.org` redirects the URI above to the
+release zip — see `pkl/PklProject` for the metadata and
+`.github/workflows/pkl-publish.yml` for the publish flow.
 
 ## Remote cache
 
@@ -206,15 +209,27 @@ where four near-duplicate `just` recipes would have lived.
 | 4 | Local CAS, hit/miss, output restore | ✅ |
 | 5 | Watch mode (`pkf run --watch`) | ✅ |
 | 6 | Remote cache (HTTP backend + reference Cloudflare Worker) | ✅ |
-| 7 | Pkl package publish (`pkg.pkl-lang.org/mizchi/pkfire`) | planned |
+| 7 | Pkl package publish (`pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire`) | ✅ |
 
 ## Development
 
 ```sh
-pkl test                                      # schema-level tests
+pkl test --project-dir pkl                    # schema-level tests
+pkl project package pkl                       # build the publishable .out/pkfire@<ver>/ artifacts
 go test -race ./...                           # Go tests
 go install ./cmd/pkf
 pkf run -f examples/dogfood/Taskfile.pkl ci   # dogfood
+```
+
+To cut a Pkl package release:
+
+```sh
+# 1. bump version in pkl/PklProject
+# 2. tag and push
+git tag pkfire@0.2.0
+git push origin pkfire@0.2.0
+# 3. .github/workflows/pkl-publish.yml builds and uploads the four
+#    artifacts (metadata, .sha256, .zip, .zip.sha256) to the release.
 ```
 
 ## License

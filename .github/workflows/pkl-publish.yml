@@ -1,0 +1,68 @@
+name: Publish Pkl Package
+
+on:
+  push:
+    tags:
+      - "pkfire@*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. pkfire@0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pkl
+        run: |
+          curl -L -o pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          chmod +x pkl
+          sudo mv pkl /usr/local/bin/pkl
+          pkl --version
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF##refs/tags/}"
+          fi
+          version="${tag#pkfire@}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          declared=$(pkl eval -f json -x package.version pkl/PklProject)
+          declared="${declared//\"/}"
+          if [ "$declared" != "$version" ]; then
+            echo "::error::tag version ($version) does not match pkl/PklProject package.version ($declared)"
+            exit 1
+          fi
+
+      - name: Package
+        run: pkl project package pkl
+
+      - name: Show artifacts
+        run: ls -la "pkl/.out/${{ steps.tag.outputs.tag }}"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          dir="pkl/.out/$tag"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes "Pkl package $tag — see pkl/PklProject for metadata."
+          fi
+          gh release upload "$tag" --clobber \
+            "$dir/$tag" \
+            "$dir/$tag.sha256" \
+            "$dir/$tag.zip" \
+            "$dir/$tag.zip.sha256"

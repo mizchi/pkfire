@@ -1,0 +1,27 @@
+amends "pkl:Project"
+
+package {
+  name = "pkfire"
+  baseUri = "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/\(name)"
+  version = "0.1.0"
+  packageZipUrl = "https://github.com/mizchi/pkfire/releases/download/\(name)@\(version)/\(name)@\(version).zip"
+  description = "Typed task runner with Bazel-style incremental caching, configured in Pkl."
+  authors {
+    "mizchi <miz404@gmail.com>"
+  }
+  license = "MIT"
+  issueTracker = "https://github.com/mizchi/pkfire/issues"
+  sourceCode = "https://github.com/mizchi/pkfire/tree/\(name)@\(version)/pkl"
+  sourceCodeUrlScheme = "https://github.com/mizchi/pkfire/blob/\(name)@\(version)/pkl%{path}#L%{line}-%{endLine}"
+  exclude {
+    "*-expected.pcf"
+    "*.test.pkl"
+  }
+  apiTests {
+    "Taskfile.test.pkl"
+  }
+}
+
+tests {
+  "Taskfile.test.pkl"
+}
