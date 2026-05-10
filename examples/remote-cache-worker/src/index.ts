@@ -11,6 +11,8 @@
 interface Env {
   CACHE: R2Bucket;
   AUTH_TOKEN?: string;
+  /** TTL in days; entries older than this at GC time are removed. */
+  CACHE_TTL_DAYS?: string;
 }
 
 const CAS_RE = /^\/v1\/cas\/([0-9a-f]{64})$/;
@@ -60,5 +62,37 @@ export default {
           headers: { Allow: "GET, HEAD, PUT" },
         });
     }
+  },
+
+  // GC entries older than CACHE_TTL_DAYS. Triggered by the cron in
+  // wrangler.toml. Paginates over R2.list() in 1000-key chunks, batch
+  // deletes the stale ones, and logs how many were removed.
+  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const ttlDays = Number(env.CACHE_TTL_DAYS ?? "7");
+    if (!Number.isFinite(ttlDays) || ttlDays <= 0) {
+      console.error(`invalid CACHE_TTL_DAYS=${env.CACHE_TTL_DAYS}; skipping GC`);
+      return;
+    }
+    const cutoff = Date.now() - ttlDays * 24 * 60 * 60 * 1000;
+    let cursor: string | undefined;
+    let kept = 0;
+    let removed = 0;
+    do {
+      const list = await env.CACHE.list({ cursor, limit: 1000 });
+      const stale: string[] = [];
+      for (const obj of list.objects) {
+        if (obj.uploaded.getTime() < cutoff) {
+          stale.push(obj.key);
+        } else {
+          kept++;
+        }
+      }
+      if (stale.length > 0) {
+        await env.CACHE.delete(stale);
+        removed += stale.length;
+      }
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
+    console.log(`pkfire-cache GC: removed=${removed} kept=${kept} ttlDays=${ttlDays}`);
   },
 };

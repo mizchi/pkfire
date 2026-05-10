@@ -2,6 +2,14 @@ name = "pkfire-cache"
 main = "src/index.ts"
 compatibility_date = "2026-05-01"
 
+# Daily GC: delete CAS entries whose `uploaded` time is older than the
+# CACHE_TTL_DAYS env value (default 7). Runs at 03:00 UTC.
+[triggers]
+crons = ["0 3 * * *"]
+
+[vars]
+CACHE_TTL_DAYS = "7"
+
 # R2 bucket binding. Create the bucket once with:
 #   wrangler r2 bucket create pkfire-cache
 # `wrangler dev` will use a local emulated bucket unless --remote is passed.
