@@ -10,9 +10,29 @@ dependencies; `pkf` builds a DAG and executes only the steps whose
 action key has changed. Cached outputs are restored from a
 content-addressed store under `~/.cache/pkfire`.
 
+## Why Pkl over `just`
+
+`just` recipes get unwieldy once you need shared variables, environment
+matrices, or per-package overrides. Pkl gives a real type system,
+`amends` for template inheritance, and `pkl test` for unit-testing the
+schema itself — all while still emitting deterministic configuration.
+The complex example under [`examples/dogfood/`](./examples/dogfood/Taskfile.pkl)
+generates a cross-compile matrix with a `local function buildTask(p)`
+where four near-duplicate `just` recipes would have lived.
+
 ## Install
 
-### Nix (recommended; no Go toolchain required)
+### Go
+
+```sh
+go install github.com/mizchi/pkfire/cmd/pkf@latest
+```
+
+You also need the Pkl CLI (`pkl`) on `PATH`; install it from
+[pkl-lang.org](https://pkl-lang.org/main/current/pkl-cli/) or via your
+package manager.
+
+### Nix (no Go toolchain required)
 
 ```sh
 nix run github:mizchi/pkfire -- run hello       # one-shot
@@ -25,34 +45,8 @@ themselves. The Nix workflow on every push to `main` and on every PR
 verifies the flake builds cleanly on `aarch64-darwin` and
 `x86_64-linux` runners; the badge above tracks its status.
 
-In a home-manager flake:
-
-```nix
-{
-  inputs.pkfire.url = "github:mizchi/pkfire";
-
-  outputs = { self, nixpkgs, home-manager, pkfire, ... }: {
-    homeConfigurations.example = home-manager.lib.homeManagerConfiguration {
-      modules = [{
-        home.packages = [ pkfire.packages.${pkgs.system}.default ];
-      }];
-    };
-  };
-}
-```
-
 `nix develop` opens a shell with `go`, `pkl`, and `gopls` for working
 on pkfire itself.
-
-### Go
-
-```sh
-go install github.com/mizchi/pkfire/cmd/pkf@latest
-```
-
-You also need the Pkl CLI (`pkl`) on `PATH`; install it from
-[pkl-lang.org](https://pkl-lang.org/main/current/pkl-cli/) or via your
-package manager.
 
 ## Quick start
 
@@ -187,16 +181,6 @@ cache.
 | [`examples/monorepo`](./examples/monorepo/) | pnpm workspaces with one Task generated per package via a `Package` template |
 | [`examples/dogfood`](./examples/dogfood/Taskfile.pkl) | pkfire builds itself: cross-compile matrix + checksum + integration |
 | [`examples/remote-cache-worker`](./examples/remote-cache-worker/) | Cloudflare Worker that backs the remote-cache protocol with R2 |
-
-## Why Pkl
-
-`just` recipes get unwieldy once you need shared variables, environment
-matrices, or per-package overrides. Pkl gives a real type system,
-`amends` for template inheritance, and `pkl test` for unit-testing the
-schema itself — all while still emitting deterministic configuration.
-The complex example under [`examples/dogfood/`](./examples/dogfood/Taskfile.pkl)
-generates a cross-compile matrix with a `local function buildTask(p)`
-where four near-duplicate `just` recipes would have lived.
 
 ## Status
 
