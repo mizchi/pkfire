@@ -348,16 +348,22 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		return printHashes(stdout, root, tf, order)
 	}
 
-	var cas *cache.Cache
+	var backend cache.Backend
 	if !*noCache {
 		dir, err := cache.DefaultDir()
 		if err != nil {
 			return fmt.Errorf("resolve cache dir: %w", err)
 		}
-		cas = cache.New(dir)
+		local := cache.New(dir)
+		if remoteURL := os.Getenv("PKFIRE_REMOTE_CACHE"); remoteURL != "" {
+			remote := cache.NewRemote(remoteURL, os.Getenv("PKFIRE_REMOTE_TOKEN"))
+			backend = cache.NewLayered(local, remote)
+		} else {
+			backend = local
+		}
 	}
 	r := runner.New(runner.Options{Workdir: root})
-	orch := orchestrator.New(cas, r, stdout, stderr, orchestrator.Options{
+	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{
 		Parallelism: *jobs,
 	})
 	plan := &orchestrator.Plan{

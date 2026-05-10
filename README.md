@@ -84,6 +84,32 @@ pick whichever option fits:
 A `package://pkg.pkl-lang.org/mizchi/pkfire` URI is planned but not
 published yet — until then, do not use the form shown in older docs.
 
+## Remote cache
+
+Set `PKFIRE_REMOTE_CACHE` (and optionally `PKFIRE_REMOTE_TOKEN`) to point
+`pkf` at any HTTP server that speaks the cache protocol — the local CAS
+becomes a write-through layer, and a teammate / CI runner that has never
+built before can restore artifacts from the remote on its first run.
+
+```sh
+export PKFIRE_REMOTE_CACHE=https://pkfire-cache.<account>.workers.dev
+export PKFIRE_REMOTE_TOKEN=<auth token>
+pkf run build    # hits local first → falls back to remote → falls back to running
+```
+
+The reference backend is a 60-line Cloudflare Worker that stores blobs
+in R2 and runs a daily TTL-based GC; see
+[`examples/remote-cache-worker/`](./examples/remote-cache-worker/).
+
+Protocol summary:
+
+```
+GET  /v1/cas/<hex64>   → 200 + tar.zst | 404
+HEAD /v1/cas/<hex64>   → 200 | 404
+PUT  /v1/cas/<hex64>   → 201 (or 200 if already present)
+Authorization: Bearer <token>   (optional)
+```
+
 ## Why Pkl
 
 `just` recipes get unwieldy once you need shared variables, environment
@@ -104,7 +130,8 @@ where four near-duplicate `just` recipes would have lived.
 | 3 | Action key (BLAKE3 over cmd / env / inputs / tools / config) | ✅ |
 | 4 | Local CAS, hit/miss, output restore | ✅ |
 | 5 | Watch mode (`pkf run --watch`) | ✅ |
-| 6 | Remote cache + Pkl package publish | planned |
+| 6 | Remote cache (HTTP backend + reference Cloudflare Worker) | ✅ |
+| 7 | Pkl package publish (`pkg.pkl-lang.org/mizchi/pkfire`) | planned |
 
 ## Development
 

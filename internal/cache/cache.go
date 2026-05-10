@@ -50,6 +50,49 @@ func (c *Cache) entryDir(key [32]byte) string {
 	return filepath.Join(c.Dir, "cas", hex[:2], hex[2:])
 }
 
+// ArchivePath returns the on-disk path of the tar.zst archive for `key`,
+// regardless of whether the entry exists yet. Used by `*Layered` to push
+// a freshly stored archive to a remote backend.
+func (c *Cache) ArchivePath(key [32]byte) string {
+	return filepath.Join(c.entryDir(key), archiveName)
+}
+
+// WriteRawArchive places `body` into the cache as the archive for `key`,
+// performing the same atomic tempdir+rename dance as `Store`. This is what
+// `*Layered.Restore` calls when fetching from a remote backend so the
+// cache hit also warms the local CAS.
+func (c *Cache) WriteRawArchive(key [32]byte, body io.Reader) error {
+	target := c.entryDir(key)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(target), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+
+	archivePath := filepath.Join(tmp, archiveName)
+	f, err := os.Create(archivePath)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, body); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // Has reports whether an entry exists for `key`.
 func (c *Cache) Has(key [32]byte) bool {
 	_, err := os.Stat(filepath.Join(c.entryDir(key), archiveName))

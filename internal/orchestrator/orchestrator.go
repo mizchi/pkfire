@@ -78,7 +78,7 @@ type Options struct {
 // Orchestrator holds the long-lived runner and (optionally) cache.
 // A nil cache disables caching for the whole run.
 type Orchestrator struct {
-	cache  *cache.Cache
+	cache  cache.Backend
 	runner *runner.Runner
 	stdout io.Writer
 	stderr io.Writer
@@ -88,7 +88,9 @@ type Orchestrator struct {
 // New returns an Orchestrator. `stderr` receives one human-readable line per
 // task ("hit"/"ran"/"skipped") and may be io.Discard. `stdout` is where each
 // task's captured stdout is flushed under a lock once the task finishes.
-func New(c *cache.Cache, r *runner.Runner, stdout, stderr io.Writer, opts Options) *Orchestrator {
+// `c` may be any backend (local CAS, HTTP remote, or layered combination)
+// or nil to disable caching entirely.
+func New(c cache.Backend, r *runner.Runner, stdout, stderr io.Writer, opts Options) *Orchestrator {
 	if stdout == nil {
 		stdout = io.Discard
 	}
