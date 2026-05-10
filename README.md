@@ -26,19 +26,28 @@ your project does not need a clone of this repo.
 ```pkl
 amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
 
-tasks {
-  ["build"] = new Task {
-    cmd = "go build -o bin/app ./cmd/app"
-    inputs { "**/*.go"; "go.mod"; "go.sum" }
-    outputs { "bin/app" }
-  }
-  ["test"] = new Task {
-    cmd = "go test ./..."
-    inputs { "**/*.go" }
-    deps { "build" }
-  }
+local build = new Task {
+  name = "build"
+  cmd = "go build -o bin/app ./cmd/app"
+  inputs { "**/*.go"; "go.mod"; "go.sum" }
+  outputs { "bin/app" }
 }
+
+local test = new Task {
+  name = "test"
+  cmd = "go test ./..."
+  inputs { "**/*.go" }
+  deps { build }            // direct Task reference, typo-checked by Pkl
+}
+
+tasks { build; test }
 ```
+
+Each task is a `Task` instance with a unique `name`. Dependencies are
+*Task references* (`deps { build }`), not strings — referencing an
+undefined task fails at Pkl evaluation time with a name-resolution
+error, before the runner ever starts. Renaming a task in one place
+updates every reference automatically.
 
 ```sh
 pkf list                       # show declared tasks

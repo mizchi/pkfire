@@ -1,6 +1,7 @@
 examples {
   ["minimal build task"] {
     new {
+      name = "build"
       cmd = "go build ./..."
       shell = "bash"
       inputs {

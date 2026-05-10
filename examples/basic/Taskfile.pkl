@@ -1,19 +1,24 @@
 /// Minimal example consumed by smoke tests.
 amends "../../pkl/Taskfile.pkl"
 
-tasks {
-  ["hello"] = new Task {
-    cmd = "echo hello from pkfire"
-    description = "smoke task"
-  }
-  ["build"] = new Task {
-    cmd = "go build -o bin/app ./cmd/app"
-    inputs { "**/*.go"; "go.mod"; "go.sum" }
-    outputs { "bin/app" }
-  }
-  ["test"] = new Task {
-    cmd = "go test ./..."
-    inputs { "**/*.go" }
-    deps { "build" }
-  }
+local hello = new Task {
+  name = "hello"
+  cmd = "echo hello from pkfire"
+  description = "smoke task"
 }
+
+local build = new Task {
+  name = "build"
+  cmd = "go build -o bin/app ./cmd/app"
+  inputs { "**/*.go"; "go.mod"; "go.sum" }
+  outputs { "bin/app" }
+}
+
+local test = new Task {
+  name = "test"
+  cmd = "go test ./..."
+  inputs { "**/*.go" }
+  deps { build }
+}
+
+tasks { hello; build; test }

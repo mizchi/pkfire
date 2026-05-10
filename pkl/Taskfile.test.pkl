@@ -5,46 +5,50 @@ amends "pkl:test"
 
 import "Taskfile.pkl" as Schema
 
-local sample: Schema = new {
-  tasks {
-    ["build"] = new Schema.Task {
-      cmd = "go build ./..."
-      inputs { "**/*.go"; "go.mod" }
-      outputs { "bin/pkf" }
-    }
-    ["test"] = new Schema.Task {
-      cmd = "go test ./..."
-      inputs { "**/*.go" }
-      deps { "build" }
-    }
-  }
+local build: Schema.Task = new {
+  name = "build"
+  cmd = "go build ./..."
+  inputs { "**/*.go"; "go.mod" }
+  outputs { "bin/pkf" }
+}
+
+local test: Schema.Task = new {
+  name = "test"
+  cmd = "go test ./..."
+  inputs { "**/*.go" }
+  deps { build }
 }
 
 facts {
-  ["task names match their map keys via cmd presence"] {
-    sample.tasks["build"].cmd == "go build ./..."
-    sample.tasks["test"].cmd == "go test ./..."
+  ["task names match what was authored"] {
+    build.name == "build"
+    test.name == "test"
   }
 
   ["defaults: cache is enabled"] {
-    sample.tasks["build"].cache == true
+    build.cache == true
   }
 
   ["defaults: shell is bash"] {
-    sample.tasks["build"].shell == "bash"
+    build.shell == "bash"
   }
 
-  ["deps reference existing task names"] {
-    sample.tasks["test"].deps.toList().every((d) -> sample.tasks.containsKey(d))
+  ["deps reference returns the same Task instance"] {
+    test.deps.toList().first.name == "build"
   }
 
   ["empty cmd is rejected"] {
-    module.catch(() -> (new Schema.Task { cmd = "" }).cmd) != null
+    module.catch(() -> (new Schema.Task { name = "x"; cmd = "" }).cmd) != null
+  }
+
+  ["bad name characters are rejected"] {
+    module.catch(() -> (new Schema.Task { name = "has space"; cmd = "x" }).name) != null
+    module.catch(() -> (new Schema.Task { name = "1leading-digit"; cmd = "x" }).name) != null
   }
 }
 
 examples {
   ["minimal build task"] {
-    sample.tasks["build"]
+    build
   }
 }

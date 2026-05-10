@@ -37,12 +37,21 @@ type Defaults struct {
 //
 // `Canonical` is populated by Load with the Pkl module's canonical form
 // (PCF). It is not decoded from Pkl — the field tag is empty so pkl-go
-// skips it during EvaluateModule. Phase 3 hashes this as part of the
-// task action key so any change to the underlying Pkl invalidates caches.
+// skips it. Phase 3 hashes this as part of the task action key so any
+// change to the underlying Pkl invalidates caches.
 type Taskfile struct {
-	Defaults  Defaults         `pkl:"defaults"`
+	Defaults  *Defaults        `pkl:"defaults"`
 	Tasks     map[string]*Task `pkl:"tasks"`
 	Canonical []byte           `pkl:"-"`
+}
+
+// pkl-go decodes typed Pkl values into Go structs by class-name lookup;
+// `EvaluateOutputValue` rejects anonymous targets, so we explicitly map
+// each schema class. Keep this in sync with `pkl/Taskfile.pkl`.
+func init() {
+	pkl.RegisterMapping("pkfire.Taskfile#Rendered", Taskfile{})
+	pkl.RegisterMapping("pkfire.Taskfile#Defaults", Defaults{})
+	pkl.RegisterMapping("pkfire.Taskfile#RenderedTask", Task{})
 }
 
 // Load evaluates the Pkl module at `path` and decodes it into a Taskfile.
@@ -56,10 +65,17 @@ func Load(ctx context.Context, path string) (*Taskfile, error) {
 	}
 	defer ev.Close()
 
-	var tf Taskfile
 	src := pkl.FileSource(path)
-	if err := ev.EvaluateModule(ctx, src, &tf); err != nil {
+	// The schema renders `output.value` as a `Rendered` instance. pkl-go
+	// looks up the matching Go type via the package-level RegisterMapping
+	// (Rendered → Taskfile) and constructs a *Taskfile, so we receive it
+	// through a **Taskfile target rather than passing a value.
+	var tf *Taskfile
+	if err := ev.EvaluateOutputValue(ctx, src, &tf); err != nil {
 		return nil, fmt.Errorf("evaluate %s: %w", path, err)
+	}
+	if tf == nil {
+		return nil, errors.New("Taskfile evaluation returned no value")
 	}
 	if len(tf.Tasks) == 0 {
 		return nil, errors.New("Taskfile declares no tasks")
@@ -69,5 +85,5 @@ func Load(ctx context.Context, path string) (*Taskfile, error) {
 		return nil, fmt.Errorf("canonicalize %s: %w", path, err)
 	}
 	tf.Canonical = canonical
-	return &tf, nil
+	return tf, nil
 }

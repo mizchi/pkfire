@@ -1,15 +1,29 @@
-/// pkfire Taskfile schema.
+/// pkfire Taskfile schema (A2: typed DAG).
 ///
-/// Users author a `Taskfile.pkl` that amends this module and fills in `tasks`.
-/// The pkfire CLI (`pkf`) evaluates the result, builds a DAG, and runs tasks
-/// with content-addressed caching (Bazel-style action keys).
+/// Authoring model:
+///   - Each task is a `Task` instance with a unique `name` and direct
+///     `deps` references to other Task instances. Typos in dependency
+///     names become Pkl name-resolution errors at evaluation time.
+///   - `tasks: Listing<Task>` collects the authored tasks; the order is
+///     informational. The execution order is the topological sort over
+///     `deps`, computed by `pkf` at runtime.
+///
+/// Wire format:
+///   - `output.value` is a Mapping<String, RenderedTask> keyed by task
+///     name, with `deps` collapsed to a list of names. This is what the
+///     Go runner deserializes — keeping the wire shape identical to
+///     earlier phases so the runner did not need a decoder change.
+///   - Duplicate names raise an error before output is rendered.
 @ModuleInfo { minPklVersion = "0.31.0" }
 open module pkfire.Taskfile
 
-/// A single unit of work. Cache key is derived from `cmd`, `env`, `inputs`,
-/// `tools`, and the canonical form of this task's pkl subgraph.
+/// A unit of work authored by the user.
 class Task {
-  /// Shell command to execute. Run via `shell -c <cmd>`.
+  /// Identifier. Used as the Mapping key in the rendered output and as
+  /// the visible name in `pkf list` / `pkf graph`.
+  name: String(matches(Regex(#"^[a-zA-Z][a-zA-Z0-9_:.-]*$"#)))
+
+  /// Shell command to execute. Run via `<shell> -c <cmd>`.
   cmd: String(length > 0)
 
   /// Shell binary used to run `cmd`. Defaults to `bash`.
@@ -22,8 +36,6 @@ class Task {
   /// which means a missing file does NOT raise an error — it just contributes
   /// nothing to the action key. Use `pkf run --print-hash` if you need to
   /// confirm exactly which files end up hashed.
-  ///
-  /// Examples: "src/**/*.go", "go.mod", "config/*.yaml".
   inputs: Listing<String> = new {}
 
   /// Files or directories produced by this task. Restored on cache hit.
@@ -34,8 +46,10 @@ class Task {
   /// or use a tool that creates the directory itself (e.g. `go build -o`).
   outputs: Listing<String> = new {}
 
-  /// Names of tasks this one depends on. Cycles are rejected at load time.
-  deps: Listing<String> = new {}
+  /// Dependencies as direct Task references. The Pkl evaluator resolves
+  /// each entry to a concrete Task value, so referencing an undefined
+  /// task fails at evaluation time (`Cannot find property`).
+  deps: Listing<Task> = new {}
 
   /// Environment variables exposed to `cmd`. Only these contribute to the
   /// action key — the ambient environment is intentionally ignored.
@@ -55,14 +69,67 @@ class Task {
   description: String? = null
 }
 
-/// Project-level defaults shared by all tasks unless overridden via `amends`.
+/// Project-level defaults shared by all tasks unless overridden.
 class Defaults {
   shell: String = "bash"
   env: Mapping<String, String> = new {}
 }
 
+/// Wire format consumed by the Go runner. `name` is lifted to the Mapping
+/// key in `Rendered.tasks`; `deps` is projected from `Listing<Task>` to
+/// `Listing<String>` so the runner can deserialize without recursion.
+class RenderedTask {
+  cmd: String
+  shell: String
+  inputs: Listing<String>
+  outputs: Listing<String>
+  deps: Listing<String>
+  env: Mapping<String, String>
+  tools: Mapping<String, String>
+  cache: Boolean
+  workdir: String?
+  description: String?
+}
+
+/// Top-level shape of `output.value`. pkl-go's `EvaluateOutputValue` looks
+/// up the Go target type via `pkl.RegisterMapping("pkfire.Taskfile#Rendered", ...)`.
+class Rendered {
+  defaults: Defaults
+  tasks: Mapping<String, RenderedTask>
+}
+
 defaults: Defaults = new {}
 
-/// All declared tasks, keyed by their identifier. Empty Taskfiles are
-/// rejected by the CLI (`pkf`), not by Pkl itself.
-tasks: Mapping<String, Task> = new {}
+/// Authored task list. Append in user modules with `tasks { newTask; ... }`.
+tasks: Listing<Task> = new {}
+
+local taskNames: List<String> = tasks.toList().map((t) -> t.name)
+
+local duplicateNames: List<String> = taskNames
+  .filter((n) -> taskNames.count((m) -> m == n) > 1)
+  .distinct
+
+local rendered: Mapping<String, RenderedTask> = new Mapping {
+  for (t in tasks) {
+    [t.name] = new RenderedTask {
+      cmd = t.cmd
+      shell = t.shell
+      inputs = t.inputs
+      outputs = t.outputs
+      deps = new Listing { for (d in t.deps) { d.name } }
+      env = t.env
+      tools = t.tools
+      cache = t.cache
+      workdir = t.workdir
+      description = t.description
+    }
+  }
+}
+
+output {
+  value = new Rendered {
+    defaults = module.defaults
+    tasks = if (duplicateNames.isEmpty) rendered
+      else throw("duplicate task names: \(duplicateNames.join(", "))")
+  }
+}
