@@ -199,6 +199,23 @@ Trade-offs:
 | Many services, many teams | **C** (hierarchical amends) |
 | Mix: shared + per-service | **C with B inside each leaf** is fine |
 
+### Discovery (walk-up)
+
+`pkf` discovers `Taskfile.pkl` the way `git` finds `.git/`: when
+`-f` / `--file` is not specified, it walks up from the current
+working directory and uses the nearest ancestor that has one. Layout C
+benefits the most from this:
+
+```sh
+cd services/api/internal
+pkf run ci      # finds services/api/Taskfile.pkl automatically
+cd ../../..
+pkf run lint    # finds the project-root Taskfile.pkl
+```
+
+An explicit `-f` opts out of walk-up — useful when the path is
+relative to the *invocation* directory rather than to the Taskfile.
+
 ## Common pitfalls
 
 - **`A non-local object property cannot have a type annotation`** —

@@ -137,6 +137,34 @@ func TestGraphTargetSubgraph(t *testing.T) {
 	}
 }
 
+func TestWalkUpFindsAncestorTaskfile(t *testing.T) {
+	repo := t.TempDir()
+	root := filepath.Join(repo, "Taskfile.pkl")
+	if err := os.WriteFile(root, []byte("// stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(repo, "services/api/internal")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := walkUp(nested, "Taskfile.pkl")
+	gotResolved, _ := filepath.EvalSymlinks(got)
+	wantResolved, _ := filepath.EvalSymlinks(root)
+	if gotResolved != wantResolved {
+		t.Errorf("walkUp = %q, want %q", got, root)
+	}
+}
+
+func TestWalkUpFallsBackWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	got := walkUp(dir, "Taskfile.pkl")
+	want := filepath.Join(dir, "Taskfile.pkl")
+	if got != want {
+		t.Errorf("walkUp = %q, want %q (fallback path under start)", got, want)
+	}
+}
+
 func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {
 	requirePkl(t)
 	var stdout, stderr bytes.Buffer

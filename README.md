@@ -49,6 +49,15 @@ undefined task fails at Pkl evaluation time with a name-resolution
 error, before the runner ever starts. Renaming a task in one place
 updates every reference automatically.
 
+When `-f` is not supplied, `pkf` walks up from the current directory
+to find the nearest `Taskfile.pkl` (the same discovery rule git uses
+for `.git/`), so any of these works the same:
+
+```sh
+cd services/api/internal && pkf run ci    # uses services/api/Taskfile.pkl
+cd /repo/root && pkf run ci               # uses /repo/root/Taskfile.pkl
+```
+
 ```sh
 pkf list                       # show declared tasks
 pkf list -v                    # add cmd preview and deps
