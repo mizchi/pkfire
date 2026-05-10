@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mizchi/pkfire@pkfire@0.2.0
+      - uses: mizchi/pkfire@pkfire@0.3.0
       - run: pkf run ci
 ```
 
@@ -80,13 +80,13 @@ the runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`.
 After it runs, the rest of the workflow calls `pkf` directly — no
 `go install`, no Pkl bootstrap.
 
-Pin the action ref to a release tag (`pkfire@0.2.0`) so the action
+Pin the action ref to a release tag (`pkfire@0.3.0`) so the action
 code, the `pkf` binary, and the Pkl schema all move together. To
 share cache hits across CI runs and developers, wire the remote
 cache env:
 
 ```yaml
-      - uses: mizchi/pkfire@pkfire@0.2.0
+      - uses: mizchi/pkfire@pkfire@0.3.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -97,7 +97,7 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | the action ref, falling back to the latest release | Pin both the action and the binary together by writing `mizchi/pkfire@pkfire@0.2.0`. Override here if you want to install a different binary than the action ref. |
+| `version` | the action ref, falling back to the latest release | Pin both the action and the binary together by writing `mizchi/pkfire@pkfire@0.3.0`. Override here if you want to install a different binary than the action ref. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
 
@@ -131,7 +131,7 @@ your project does not need a clone of this repo.
 ## Authoring a Taskfile
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"
 
 local build = new Task {
   name = "build"
@@ -195,9 +195,9 @@ pick whichever option fits:
 
 | Option | `amends` line | Notes |
 | --- | --- | --- |
-| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
+| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
 | HTTPS, floating tip | `amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"` | What older `pkf init` wrote. Pkl fetches and caches. |
-| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.2.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
+| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.3.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
 | Local clone | `amends "../pkfire/pkl/Taskfile.pkl"` | When `mizchi/pkfire` is a sibling checkout. |
 
 The package is published as a GitHub release whose tag matches
@@ -268,6 +268,7 @@ cache.
 | 8 | GitHub Action (`mizchi/pkfire@pkfire@<ver>`) + pre-built binaries on release | ✅ |
 | 9 | `pkf up`: long-running services (`service = true`) with process-group cleanup and watch-driven restart | ✅ |
 | 10 | `services { ... }` on a body task: `pkf run e2e` brings up live servers, runs the test, releases everything | ✅ |
+| 11 | Readiness probes (`readyPort` / `readyCmd`): reuse already-running services and gate dependents on real readiness | ✅ |
 
 ## Development
 

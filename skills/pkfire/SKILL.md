@@ -62,13 +62,16 @@ class Task {
   service: Boolean = false                        // long-running, supervised by `pkf up`
   shutdownTimeoutSeconds: Int = 5                 // SIGTERM grace before SIGKILL
   services: Listing<Task> = new {}                // services to bring up while this task runs
+  readyPort: Int = 0                              // TCP port to probe; doubles as a reuse detector
+  readyCmd: String = ""                           // shell snippet that exits 0 when ready
+  readyTimeoutSeconds: Int = 30                   // wait budget for the probe after spawning
 }
 ```
 
 ## Authoring template (always start from this)
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   // file globs your build reads from
@@ -144,7 +147,7 @@ The root `Taskfile.pkl` `import`s each fragment and spreads its
 `tasks` Listing:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"
 import "tasks/build.pkl" as bt
 import "tasks/test.pkl" as tt
 
@@ -315,6 +318,41 @@ have both.
 Recipe 09 has the full picture, including a Drizzle migration
 check that uses just `services { db }` without `api`.
 
+### Reuse vs spawn (`readyPort` / `readyCmd`)
+
+A service with a readiness probe is *reused* when the probe
+already passes:
+
+```pkl
+local db = new Task {
+  name = "db"
+  cmd = "exec postgres -D ./data"
+  service = true
+  readyPort = 5432
+  readyTimeoutSeconds = 15
+}
+```
+
+When `pkf run e2e` (or any task with `services { db }`) starts,
+pkfire dials `localhost:5432` once. If the dial succeeds, db is
+already up — typically because `pkf up dev` is running in another
+shell, or you started postgres yourself. pkfire logs
+`reusing existing service "db"`, skips the spawn, and skips the
+teardown so the existing process keeps running after this run
+finishes.
+
+If the dial fails, pkfire spawns the cmd and then *polls* the
+probe every 250ms for up to `readyTimeoutSeconds` before letting
+dependent services or the body task proceed. Without a probe the
+runner would race — the body would `pnpm exec playwright` against
+a server that hasn't bound its port yet.
+
+`readyCmd` covers the cases TCP can't:
+`readyCmd = "pg_isready -h localhost"` (a port may be open before
+postgres has finished crash-recovery), or `redis-cli ping`, or any
+exit-0-when-ready shell snippet. `readyPort` and `readyCmd`
+compose — set both and both must pass.
+
 ## Common pitfalls
 
 - **`A non-local object property cannot have a type annotation`** —
@@ -365,7 +403,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mizchi/pkfire@pkfire@0.2.0
+      - uses: mizchi/pkfire@pkfire@0.3.0
       - run: pkf run ci
 ```
 
@@ -379,7 +417,7 @@ To share cache hits across CI runs and developer machines, point
 `pkf` at a remote cache via env:
 
 ```yaml
-      - uses: mizchi/pkfire@pkfire@0.2.0
+      - uses: mizchi/pkfire@pkfire@0.3.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -390,6 +428,6 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.2.0` to lock both the action.yml and the binary together. |
+| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.3.0` to lock both the action.yml and the binary together. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip Pkl install (e.g. when only `pkf` is needed). |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries land here, and the directory is appended to `GITHUB_PATH`. |

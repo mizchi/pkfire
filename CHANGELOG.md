@@ -12,6 +12,18 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Readiness probes (`readyPort`, `readyCmd`,
+  `readyTimeoutSeconds`).** A service that declares a probe is
+  *reused* when the probe already passes — pkfire dials once
+  before spawning, and on success skips both the spawn and the
+  teardown. `pkf run e2e` against an already-running `pkf up dev`
+  no longer port-collides; it logs `reusing existing service "db"`
+  and lets the dev session keep ownership. After a fresh spawn,
+  pkfire polls the probe (every 250ms, up to
+  `readyTimeoutSeconds`) before letting dependent services or the
+  body task's cmd start, replacing hand-rolled `until pg_isready`
+  loops in user `cmd`s. `readyPort` and `readyCmd` compose: both
+  must pass when both are set.
 - **Long-running services via `pkf up`.** A new `service: Boolean`
   field on `Task` marks a task as a supervised process. `pkf up
   <target>` runs every non-service dep first, then starts the
@@ -48,11 +60,12 @@ Action version all move together — there is one tag per release
 
 ### Changed
 
-- Schema bumped to 0.2.0. The new `service` and
-  `shutdownTimeoutSeconds` fields are optional with sensible
-  defaults, so existing 0.1.0 Taskfiles keep evaluating, but a 0.1.0
-  binary cannot decode a 0.2.0 schema. Bump `pkf` and the `amends`
-  URI together.
+- Schema bumped to 0.3.0. Adds `service`,
+  `shutdownTimeoutSeconds`, `services`, `readyPort`, `readyCmd`,
+  `readyTimeoutSeconds` to `Task`; all are optional with sensible
+  defaults, so existing 0.1.0 Taskfiles keep evaluating, but an
+  older binary cannot decode a 0.3.0 schema. Bump `pkf` and the
+  `amends` URI together.
 
 ## [0.1.0] - 2026-05-10
 

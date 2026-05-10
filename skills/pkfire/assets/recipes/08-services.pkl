@@ -7,10 +7,12 @@
 /// stops every service, re-runs the upstream build steps, and starts
 /// the services again with the new code.
 ///
-/// v1 caveat: services start *concurrently*. The runner has no
-/// readiness probe yet, so dependent services must implement their
-/// own retry (the `pg_isready` loop in `api`'s cmd is the pattern).
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
+/// Each service declares a `readyPort` (and `db` adds a postgres-
+/// specific `readyCmd`), so pkfire gates dependents on the probe
+/// passing — no hand-rolled `until pg_isready` loops needed. If
+/// `pkf up dev` is already running in another shell, a second
+/// invocation reuses the existing services instead of port-colliding.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.ts"
@@ -34,29 +36,37 @@ local db: Task = new {
   // Postgres takes ~3s to crash-recover on SIGTERM; give it more room
   // than the default 5s before we escalate to SIGKILL.
   shutdownTimeoutSeconds = 15
+  // The port can be open before crash-recovery completes; pg_isready
+  // is what tells us postgres is actually accepting queries. With
+  // both probes set, pkfire requires both to pass.
+  readyPort = 5432
+  readyCmd = "pg_isready -h localhost -p 5432"
+  readyTimeoutSeconds = 30
 }
 
 local api: Task = new {
   name = "api"
-  description = "API server; waits for postgres before exec-ing node"
-  cmd = """
-    until pg_isready -h localhost -p 5432 -q; do sleep 0.2; done
-    exec pnpm exec tsx src/api/server.ts
-    """
+  description = "API server"
+  // No hand-rolled `until pg_isready` — db's readyCmd gates api.
+  cmd = "exec pnpm exec tsx src/api/server.ts"
   inputs = sources
   deps { install; db }
   service = true
+  readyPort = 3000
+  readyTimeoutSeconds = 15
   env { ["DATABASE_URL"] = "postgres://postgres:dev@localhost:5432/postgres" }
   tools { ["node"] = "24"; ["pnpm"] = "10" }
 }
 
 local web: Task = new {
   name = "web"
-  description = "Frontend dev server; assumes api is on :3000"
+  description = "Frontend dev server"
   cmd = "exec pnpm exec vite dev --port 5173"
   inputs = sources
   deps { install; api }
   service = true
+  readyPort = 5173
+  readyTimeoutSeconds = 15
   env { ["VITE_API"] = "http://localhost:3000" }
   tools { ["node"] = "24"; ["pnpm"] = "10" }
 }

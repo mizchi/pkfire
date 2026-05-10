@@ -51,6 +51,20 @@ facts {
       e2e.services.toList().first.name == "api"
   }
 
+  ["readyPort defaults to 0 (no probe)"] {
+    build.readyPort == 0
+  }
+
+  ["readyPort accepts a valid TCP port"] {
+    (new Schema.Task { name = "db"; cmd = "postgres"; service = true; readyPort = 5432 }).readyPort == 5432
+  }
+
+  ["readyPort rejects values outside the TCP range"] {
+    module.catch(() ->
+      (new Schema.Task { name = "x"; cmd = "y"; readyPort = 99999 }).readyPort
+    ) != null
+  }
+
   ["negative shutdownTimeoutSeconds is rejected"] {
     module.catch(() ->
       (new Schema.Task { name = "x"; cmd = "y"; shutdownTimeoutSeconds = -1 }).shutdownTimeoutSeconds

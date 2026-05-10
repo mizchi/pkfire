@@ -20,6 +20,9 @@ examples {
       service = false
       shutdownTimeoutSeconds = 5
       services {}
+      readyPort = 0
+      readyCmd = ""
+      readyTimeoutSeconds = 30
     }
   }
 }

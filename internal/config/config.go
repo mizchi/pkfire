@@ -28,6 +28,9 @@ type Task struct {
 	Service                bool              `pkl:"service"`
 	ShutdownTimeoutSeconds int               `pkl:"shutdownTimeoutSeconds"`
 	Services               []string          `pkl:"services"`
+	ReadyPort              int               `pkl:"readyPort"`
+	ReadyCmd               string            `pkl:"readyCmd"`
+	ReadyTimeoutSeconds    int               `pkl:"readyTimeoutSeconds"`
 }
 
 // Defaults mirrors `pkfire.Taskfile#Defaults`.

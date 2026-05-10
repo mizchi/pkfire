@@ -340,6 +340,19 @@ func (o *Orchestrator) startServiceTree(ctx context.Context, taskName string, p 
 		}
 		started[svcName] = true
 
+		// Reuse: when the service declares a probe and that probe
+		// already succeeds, the service is up — owned by some other
+		// pkf session, a `docker compose up`, the user's IDE, etc.
+		// Skip the spawn so we don't port-collide, and skip recursing
+		// into svcTask.services because anything the existing
+		// service depends on must also be up for the probe to pass.
+		if hasProbe(svcTask) {
+			if err := probeReady(ctx, svcTask, p.Defaults); err == nil {
+				o.logLine(ioMu, "[pkf] %s: reusing existing service %q (probe passes)\n", taskName, svcName)
+				continue
+			}
+		}
+
 		// Recurse before launching so deeper services in the chain are
 		// up before the ones that depend on them.
 		if err := o.startServiceTree(ctx, svcName, p, started, wg, ioMu); err != nil {
@@ -355,6 +368,16 @@ func (o *Orchestrator) startServiceTree(ctx context.Context, taskName string, p 
 			// during the run, not buffered until the task finishes.
 			_ = o.runner.RunWithIO(ctx, name, t, p.Defaults, o.stdout, o.stderr)
 		}(svcName, svcTask)
+
+		// After spawning, gate dependent work on the probe passing.
+		// Without this, the next service in the loop (or the body
+		// task's cmd) could race the spawned process.
+		if hasProbe(svcTask) {
+			if err := waitReady(ctx, svcTask, p.Defaults); err != nil {
+				return fmt.Errorf("service %q did not become ready: %w", svcName, err)
+			}
+			o.logLine(ioMu, "[pkf] %s: service %q is ready\n", taskName, svcName)
+		}
 	}
 	return nil
 }

@@ -91,6 +91,27 @@ class Task {
   /// Typical use: end-to-end tests (`services { api; db }`) or
   /// scripts that need a real database to run against.
   services: Listing<Task> = new {}
+
+  /// TCP port on `localhost` to probe for readiness. Doubles as a
+  /// **reuse** detector: before starting this service, pkfire
+  /// connects once to the port; if it accepts a connection, the
+  /// service is treated as already up and pkfire skips both the
+  /// spawn and the teardown — useful when `pkf up dev` is already
+  /// running in another shell and you want `pkf run e2e` to reuse
+  /// it instead of port-colliding. After spawning, pkfire polls
+  /// the port until it opens (or `readyTimeoutSeconds` elapses).
+  /// 0 = no probe. (Range: 0..65535.)
+  readyPort: Int(this >= 0 && this < 65536) = 0
+
+  /// Shell snippet that exits 0 once the service is ready
+  /// (e.g. `pg_isready -h localhost`). Composable with `readyPort`:
+  /// when both are set, both must pass before the service is
+  /// considered ready. Empty string = no command probe.
+  readyCmd: String = ""
+
+  /// Seconds to wait for `readyPort` / `readyCmd` to first succeed
+  /// after starting a service. If neither is set, this is ignored.
+  readyTimeoutSeconds: Int(this >= 0) = 30
 }
 
 /// Project-level defaults shared by all tasks unless overridden.
@@ -116,6 +137,9 @@ class RenderedTask {
   service: Boolean
   shutdownTimeoutSeconds: Int
   services: Listing<String>
+  readyPort: Int
+  readyCmd: String
+  readyTimeoutSeconds: Int
 }
 
 /// Top-level shape of `output.value`. pkl-go's `EvaluateOutputValue` looks
@@ -163,6 +187,9 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       service = t.service
       shutdownTimeoutSeconds = t.shutdownTimeoutSeconds
       services = new Listing { for (s in t.services) { s.name } }
+      readyPort = t.readyPort
+      readyCmd = t.readyCmd
+      readyTimeoutSeconds = t.readyTimeoutSeconds
     }
   }
 }
