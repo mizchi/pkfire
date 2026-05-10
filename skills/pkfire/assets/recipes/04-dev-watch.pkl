@@ -1,0 +1,49 @@
+/// Recipe 04: dev loop with `pkf run --watch`.
+///
+/// A "lint → test → dev" chain where `lint` is a fast pre-flight that
+/// cache hits 99% of the time, `test` is the real signal you want on
+/// every save, and `dev` is a long-running server you keep open in
+/// another shell.
+///
+/// Run once:
+///   pkf run lint           # one-shot lint
+///   pkf run --watch test   # auto-test on every save
+///   pkf run dev            # foreground dev server (no watch needed,
+///                            it's the dev server that watches)
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "src/**/*.ts"
+  "src/**/*.tsx"
+  "package.json"
+}
+
+local lint: Task = new {
+  name = "lint"
+  description = "tsc --noEmit + biome (fast pre-flight)"
+  cmd = "pnpm exec tsc --noEmit && pnpm exec biome check src"
+  inputs = sources
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+local test: Task = new {
+  name = "test"
+  description = "Vitest run"
+  cmd = "pnpm exec vitest run"
+  inputs = sources
+  deps { lint }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+/// `dev` is intentionally `cache = false`: a server that exits when
+/// idle has no meaningful "outputs", and you almost certainly want it
+/// to start even when nothing has changed.
+local dev: Task = new {
+  name = "dev"
+  description = "Long-running dev server (cache disabled)"
+  cmd = "pnpm exec vite dev"
+  cache = false
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+tasks { lint; test; dev }

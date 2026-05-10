@@ -1,0 +1,39 @@
+/// Recipe 01: minimum viable Taskfile.
+///
+/// One `build` produces a binary, `test` depends on `build` (so it
+/// rebuilds first), and `ci` ties them together for a single
+/// command. Replace the `cmd` and `inputs` to match your project.
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  // EDIT: globs your build/test reads from.
+  "**/*.go"
+  "go.mod"
+  "go.sum"
+}
+
+local build: Task = new {
+  name = "build"
+  description = "Build the binary"
+  cmd = "go build -o bin/app ./cmd/app"
+  inputs = sources
+  outputs { "bin/app" }
+}
+
+local test: Task = new {
+  name = "test"
+  description = "Run unit tests"
+  cmd = "go test ./..."
+  inputs = sources
+  deps { build }
+}
+
+local ci: Task = new {
+  name = "ci"
+  description = "Aggregate gate"
+  cmd = "echo all-green"
+  cache = false
+  deps { build; test }
+}
+
+tasks { build; test; ci }

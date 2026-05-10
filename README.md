@@ -110,6 +110,17 @@ PUT  /v1/cas/<hex64>   → 201 (or 200 if already present)
 Authorization: Bearer <token>   (optional)
 ```
 
+## Skill
+
+If you author Pkl tasks with help from a Claude Code agent (or any
+similar tool that consumes APM-style skills), point it at
+[`skills/pkfire/SKILL.md`](./skills/pkfire/SKILL.md). It documents the
+schema, the typed-`deps` model, the cache semantics, and the common
+pitfalls, plus five copy-paste recipes under
+[`skills/pkfire/assets/recipes/`](./skills/pkfire/assets/recipes/) for
+build/test, cross-compile matrix, monorepo, dev/watch, and remote
+cache.
+
 ## Examples
 
 | Path | What it shows |

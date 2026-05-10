@@ -1,0 +1,62 @@
+/// Recipe 05: same Taskfile, made remote-cache-aware.
+///
+/// pkfire's remote cache is configured by environment variable, NOT in
+/// the Taskfile — that means a single `Taskfile.pkl` works for solo
+/// dev, team CI, and anything in between. The Taskfile only has to
+/// declare honest `inputs`, `outputs`, and `tools` so the action key
+/// stays portable across machines.
+///
+/// On a developer laptop:
+///
+///   export PKFIRE_REMOTE_CACHE=https://pkfire-cache.<account>.workers.dev
+///   export PKFIRE_REMOTE_TOKEN=<bearer token>
+///   pkf run ci   # local hit first, falls back to remote, falls back to running
+///
+/// In CI:
+///
+///   env:
+///     PKFIRE_REMOTE_CACHE: ${{ secrets.PKFIRE_REMOTE_CACHE }}
+///     PKFIRE_REMOTE_TOKEN: ${{ secrets.PKFIRE_REMOTE_TOKEN }}
+///
+/// `tools` declarations are doing the heavy lifting here: they make the
+/// action key sensitive to "go 1.26 vs 1.27" so a remote cache built
+/// by one toolchain version is not silently restored by another.
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "**/*.go"
+  "go.mod"
+  "go.sum"
+}
+
+local toolchain: Mapping<String, String> = new {
+  ["go"] = "1.26"
+  // Add anything else whose version meaningfully changes the build:
+  //   ["protoc"] = "27.3"
+  //   ["sqlc"]   = "1.27.0"
+}
+
+local build: Task = new {
+  name = "build"
+  cmd = "go build -o bin/app ./cmd/app"
+  inputs = sources
+  outputs { "bin/app" }
+  tools = toolchain
+}
+
+local test: Task = new {
+  name = "test"
+  cmd = "go test ./..."
+  inputs = sources
+  deps { build }
+  tools = toolchain
+}
+
+local ci: Task = new {
+  name = "ci"
+  cmd = "echo ci-green"
+  cache = false
+  deps { build; test }
+}
+
+tasks { build; test; ci }

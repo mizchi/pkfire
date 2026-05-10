@@ -1,0 +1,76 @@
+/// Recipe 02: cross-compile matrix.
+///
+/// Generates one `build:<os>-<arch>` Task per Platform, fans them in
+/// to a `checksum` task that aggregates SHA-256 over every binary,
+/// and gates `ci` on the lot. Adding a new target is one extra entry
+/// in `platforms`.
+///
+/// This is also a good template for any "same task across N
+/// configurations" pattern (e.g. test under multiple Node versions,
+/// build for multiple WASM targets, etc.).
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "**/*.go"
+  "go.mod"
+  "go.sum"
+}
+
+local class Platform {
+  os: String
+  arch: String
+  fixed name: String = "\(os)-\(arch)"
+}
+
+local platforms: Listing<Platform> = new {
+  new { os = "darwin"; arch = "arm64" }
+  new { os = "darwin"; arch = "amd64" }
+  new { os = "linux";  arch = "amd64" }
+  new { os = "linux";  arch = "arm64" }
+}
+
+local function buildTask(p: Platform): Task = new {
+  name = "build:\(p.name)"
+  description = "Cross-compile for \(p.name)"
+  cmd = "go build -o bin/app-\(p.name) ./cmd/app"
+  env {
+    ["GOOS"] = p.os
+    ["GOARCH"] = p.arch
+    ["CGO_ENABLED"] = "0"
+  }
+  inputs = sources
+  outputs { "bin/app-\(p.name)" }
+}
+
+local builds: Listing<Task> = new {
+  for (p in platforms) {
+    buildTask(p)
+  }
+}
+
+local checksum: Task = new {
+  name = "checksum"
+  description = "SHA-256 over every cross-compiled binary"
+  cmd = "cd bin && shasum -a 256 app-* > SHA256SUMS"
+  inputs {
+    for (p in platforms) {
+      "bin/app-\(p.name)"
+    }
+  }
+  outputs { "bin/SHA256SUMS" }
+  deps = builds
+}
+
+local ci: Task = new {
+  name = "ci"
+  description = "Aggregate gate"
+  cmd = "echo matrix-green"
+  cache = false
+  deps { checksum }
+}
+
+tasks {
+  ...builds
+  checksum
+  ci
+}

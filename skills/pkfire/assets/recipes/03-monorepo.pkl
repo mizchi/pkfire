@@ -1,0 +1,74 @@
+/// Recipe 03: monorepo with one task per package.
+///
+/// A `Package` class describes each workspace; `testTask(p, deps)`
+/// mints a `test:<id>` Task per package; downstream consumers list
+/// upstream Tasks directly in their `deps` so a typo or rename fails
+/// at Pkl evaluation time.
+///
+/// `install` is a single workspace-wide step. Its `outputs` include
+/// every per-package `node_modules` so pkfire's CAS captures the
+/// symlink graph and `pkf run install` can hit cache after the first
+/// run (CAS preserves relative symlinks).
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local class Package {
+  fullName: String
+  id: String
+  path: String
+  sources: Listing<String>
+}
+
+local greet: Package = new {
+  fullName = "@example/greet"
+  id = "greet"
+  path = "packages/greet"
+  sources { "src/**/*.js"; "package.json" }
+}
+
+local cli: Package = new {
+  fullName = "@example/cli"
+  id = "cli"
+  path = "packages/cli"
+  sources { "src/**/*.js"; "package.json" }
+}
+
+local function testTask(p: Package, taskDeps: Listing<Task>): Task = new {
+  name = "test:\(p.id)"
+  description = "node:test for \(p.fullName)"
+  cmd = "node --test src/*.test.js"
+  workdir = p.path
+  inputs = p.sources
+  deps = taskDeps    // NB: parameter is `taskDeps`, not `deps`, to avoid
+                     //     same-name shadow that triggers stack overflow.
+  tools { ["node"] = "24" }
+}
+
+local install: Task = new {
+  name = "install"
+  description = "Resolve workspace symlinks"
+  cmd = "pnpm install --silent"
+  inputs {
+    "pnpm-workspace.yaml"
+    "package.json"
+    "packages/*/package.json"
+  }
+  outputs {
+    "node_modules"
+    "packages/greet/node_modules"
+    "packages/cli/node_modules"
+  }
+  tools { ["pnpm"] = "10"; ["node"] = "24" }
+}
+
+local testGreet: Task = testTask(greet, new Listing<Task> { install })
+local testCli:   Task = testTask(cli,   new Listing<Task> { install; testGreet })
+
+local ci: Task = new {
+  name = "ci"
+  description = "Aggregate gate"
+  cmd = "echo monorepo-green"
+  cache = false
+  deps { install; testGreet; testCli }
+}
+
+tasks { install; testGreet; testCli; ci }
