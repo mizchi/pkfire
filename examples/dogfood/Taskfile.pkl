@@ -1,14 +1,28 @@
-/// Dogfood Taskfile: build, test, vet, and pkl-test the pkfire repo itself
-/// using `pkf`. All tasks set `workdir = "../.."` so paths resolve against
-/// the repository root.
+/// Complex dogfood Taskfile.
 ///
-/// Run from anywhere:
+/// DAG:
 ///
-///   pkf run -f examples/dogfood/Taskfile.pkl ci
+///   build:darwin-arm64 ┐
+///   build:darwin-amd64 ├─► checksum ─┐
+///   build:linux-amd64  │             ├─► ci
+///   build:linux-arm64  ┘             │
+///                                    │
+///   vet ───────────────────────────► ci
+///   go-test ───────────────────────► ci
+///   pkl-test ──────────────────────► ci
+///   build:darwin-arm64 ─► integration ─► ci
 ///
-/// or, after `cd examples/dogfood`:
+/// Highlights for the dogfood story:
 ///
-///   pkf run ci
+///   * `local function buildTask(p)` generates one cross-compile Task per
+///     platform — Pkl's templating earns its keep here, where a justfile
+///     would force four near-duplicate recipes.
+///   * `checksum` fans in over the per-platform binaries and feeds them
+///     back into its own action key, so editing a single `.go` file only
+///     re-runs the affected matrix entries plus checksum, and not vet,
+///     pkl-test, or unrelated platforms' archives.
+///   * `integration` runs `pkf` on `examples/basic/hello` to prove the
+///     cross-compiled host binary actually works end-to-end.
 amends "../../pkl/Taskfile.pkl"
 
 local sources: Listing<String> = new {
@@ -20,24 +34,38 @@ local sources: Listing<String> = new {
 
 local repoRoot: String = "../.."
 
-tasks {
-  ["build"] = new Task {
-    description = "Build the pkf CLI"
-    cmd = "go build -o bin/pkf ./cmd/pkf"
-    workdir = repoRoot
-    inputs = sources
-    outputs { "bin/pkf" }
-  }
+local class Platform {
+  os: String
+  arch: String
+  fixed name: String = "\(os)-\(arch)"
+}
 
-  ["go-test"] = new Task {
-    description = "Run Go unit tests with the race detector"
-    cmd = "go test -race ./..."
-    workdir = repoRoot
-    inputs {
-      ...sources
-      "examples/**/*.pkl"
-      "pkl/**/*.pkl"
-    }
+local platforms: Listing<Platform> = new {
+  new { os = "darwin"; arch = "arm64" }
+  new { os = "darwin"; arch = "amd64" }
+  new { os = "linux";  arch = "amd64" }
+  new { os = "linux";  arch = "arm64" }
+}
+
+/// First platform is the host (the one we'll run integration tests with).
+local host: Platform = platforms.first
+
+local function buildTask(p: Platform): Task = new {
+  description = "Cross-compile pkf for \(p.name)"
+  cmd = "go build -o bin/pkf-\(p.name) ./cmd/pkf"
+  workdir = repoRoot
+  env {
+    ["GOOS"] = p.os
+    ["GOARCH"] = p.arch
+    ["CGO_ENABLED"] = "0"
+  }
+  inputs = sources
+  outputs { "bin/pkf-\(p.name)" }
+}
+
+tasks {
+  for (p in platforms) {
+    ["build:\(p.name)"] = buildTask(p)
   }
 
   ["vet"] = new Task {
@@ -47,8 +75,19 @@ tasks {
     inputs = sources
   }
 
+  ["go-test"] = new Task {
+    description = "Go unit tests with race detector"
+    cmd = "go test -race ./..."
+    workdir = repoRoot
+    inputs {
+      ...sources
+      "examples/**/*.pkl"
+      "pkl/**/*.pkl"
+    }
+  }
+
   ["pkl-test"] = new Task {
-    description = "Run Pkl schema tests"
+    description = "Pkl schema tests"
     cmd = "pkl test pkl/Taskfile.test.pkl"
     workdir = repoRoot
     inputs {
@@ -58,10 +97,45 @@ tasks {
     }
   }
 
+  ["checksum"] = new Task {
+    description = "Aggregate SHA256 over the cross-compiled binaries"
+    cmd = "cd bin && shasum -a 256 pkf-* > SHA256SUMS"
+    workdir = repoRoot
+    inputs {
+      for (p in platforms) {
+        "bin/pkf-\(p.name)"
+      }
+    }
+    outputs { "bin/SHA256SUMS" }
+    deps {
+      for (p in platforms) {
+        "build:\(p.name)"
+      }
+    }
+  }
+
+  ["integration"] = new Task {
+    description = "Smoke `pkf run hello` using the freshly built host binary"
+    cmd = "bin/pkf-\(host.name) run -f examples/basic/Taskfile.pkl hello"
+    workdir = repoRoot
+    inputs {
+      "bin/pkf-\(host.name)"
+      "examples/basic/Taskfile.pkl"
+      "pkl/Taskfile.pkl"
+    }
+    deps { "build:\(host.name)" }
+  }
+
   ["ci"] = new Task {
-    description = "Aggregate gate: build, vet, go-test, pkl-test"
+    description = "Aggregate gate: vet, schema, unit tests, matrix, checksum, integration"
     cmd = "echo all green"
     cache = false
-    deps { "build"; "vet"; "go-test"; "pkl-test" }
+    deps {
+      "vet"
+      "pkl-test"
+      "go-test"
+      "checksum"
+      "integration"
+    }
   }
 }
