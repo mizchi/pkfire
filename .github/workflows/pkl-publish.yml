@@ -21,9 +21,9 @@ jobs:
 
       - name: Install Pkl
         run: |
-          curl -L -o pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
-          chmod +x pkl
-          sudo mv pkl /usr/local/bin/pkl
+          curl -L -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          chmod +x /tmp/pkl-cli
+          sudo mv /tmp/pkl-cli /usr/local/bin/pkl
           pkl --version
 
       - name: Resolve tag
