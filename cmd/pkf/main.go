@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -614,12 +613,23 @@ func cmdUp(args []string, stdout, stderr io.Writer) error {
 	if len(services) == 0 {
 		return fmt.Errorf("plan for %q contains no service task; use `pkf run` instead", target)
 	}
-	for _, n := range preOrder {
-		for _, d := range tf.Tasks[n].Deps {
-			if serviceSet[d] {
-				return fmt.Errorf("non-service task %q depends on service %q (only services may depend on services)", n, d)
+	// Pre-service tasks may legitimately list services in their `deps`
+	// (the canonical pattern is `local dev = new Task { deps { db; api;
+	// web } }` as a `pkf up dev` aggregator). Strip service deps from
+	// the prePlan's task copies so orchestrator.Execute doesn't error
+	// on references it can't satisfy — services are owned by `pkf up`,
+	// not by the orchestrator's plan walker.
+	prePlanTasks := make(map[string]*config.Task, len(preOrder))
+	for _, name := range preOrder {
+		orig := tf.Tasks[name]
+		copy := *orig
+		copy.Deps = nil
+		for _, d := range orig.Deps {
+			if !serviceSet[d] {
+				copy.Deps = append(copy.Deps, d)
 			}
 		}
+		prePlanTasks[name] = &copy
 	}
 
 	root := filepath.Dir(abs)
@@ -642,7 +652,7 @@ func cmdUp(args []string, stdout, stderr io.Writer) error {
 
 	prePlan := &orchestrator.Plan{
 		Order:      preOrder,
-		Tasks:      tf.Tasks,
+		Tasks:      prePlanTasks,
 		Defaults:   tf.Defaults,
 		Root:       root,
 		ConfigHash: hash.HashBytes(tf.Canonical),
@@ -651,28 +661,33 @@ func cmdUp(args []string, stdout, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if *watch {
-		// For watch we also need to track the services' inputs so a save in
-		// service source triggers a restart. Build a plan that includes
-		// every task in `order` for path discovery only.
-		fullPlan := &orchestrator.Plan{
-			Order: order, Tasks: tf.Tasks, Defaults: tf.Defaults, Root: root,
-			ConfigHash: prePlan.ConfigHash,
-		}
-		return runUpWatch(ctx, abs, root, fullPlan, orch, r, tf, prePlan, services, stdout, stderr)
+	fullPlan := &orchestrator.Plan{
+		Order: order, Tasks: tf.Tasks, Defaults: tf.Defaults, Root: root,
+		ConfigHash: prePlan.ConfigHash,
 	}
-	return runUpOnce(ctx, orch, r, tf, prePlan, services, stdout, stderr)
+	if *watch {
+		return runUpWatch(ctx, abs, root, fullPlan, orch, prePlan, services, stderr)
+	}
+	return runUpOnce(ctx, orch, fullPlan, prePlan, services, stderr)
 }
 
-// runUpOnce runs the pre-service tasks (build, codegen, etc.) once, then
-// starts every service concurrently. Returns when the context is cancelled
-// or the first service exits unexpectedly.
-//
-// Service ordering note: v1 starts every service simultaneously, regardless
-// of declared `deps`. The runner does not yet have a readiness probe, so
-// dependent services must implement their own retry/wait logic in `cmd`
-// (e.g. wait-for-postgres before exec-ing the api).
-func runUpOnce(ctx context.Context, orch *orchestrator.Orchestrator, r *runner.Runner, tf *config.Taskfile, prePlan *orchestrator.Plan, services []string, stdout, stderr io.Writer) error {
+// runningService tracks a single live service so the watch loop can
+// reconcile per-service: if the service's action key hasn't changed
+// after a file event, leave the process alone; if it has changed,
+// stop just that service and start it again with the new key.
+type runningService struct {
+	name string
+	stop func() // nil for reused services (nothing to tear down on our end)
+	key  [32]byte
+}
+
+// runUpOnce runs the pre-service tasks (build, codegen, etc.) once,
+// then starts each service through orchestrator.StartSingleService —
+// which honors readyPort/readyCmd reuse and gates dependents on
+// readiness — and blocks until the context is cancelled. On Ctrl+C
+// (or watch-driven restart of the whole session) the per-service
+// stop funcs run in reverse order.
+func runUpOnce(ctx context.Context, orch *orchestrator.Orchestrator, fullPlan, prePlan *orchestrator.Plan, services []string, stderr io.Writer) error {
 	if len(prePlan.Order) > 0 {
 		if _, err := orch.Execute(ctx, prePlan); err != nil {
 			return err
@@ -683,59 +698,31 @@ func runUpOnce(ctx context.Context, orch *orchestrator.Orchestrator, r *runner.R
 	}
 	fmt.Fprintf(stderr, "[pkf] up: starting %d service(s) — Ctrl+C to stop\n", len(services))
 
-	serviceCtx, serviceCancel := context.WithCancel(ctx)
-	defer serviceCancel()
+	running, err := startAllServices(ctx, orch, fullPlan, services)
+	if err != nil {
+		stopServices(running)
+		return err
+	}
+	defer stopServices(running)
 
-	type exit struct {
-		name string
-		err  error
-	}
-	exits := make(chan exit, len(services))
-	var wg sync.WaitGroup
-	for _, name := range services {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			t := tf.Tasks[name]
-			err := r.RunWithIO(serviceCtx, name, t, tf.Defaults, stdout, stderr)
-			exits <- exit{name, err}
-		}(name)
-	}
-
-	var firstErr error
-	select {
-	case <-ctx.Done():
-		// Clean shutdown requested by the caller (Ctrl+C or watch restart).
-		serviceCancel()
-	case ex := <-exits:
-		switch {
-		case errors.Is(ex.err, context.Canceled):
-			// Raced with our own cancel; nothing to surface.
-		case ex.err == nil:
-			firstErr = fmt.Errorf("service %q exited unexpectedly", ex.name)
-			fmt.Fprintf(stderr, "[pkf] %v — tearing down peers\n", firstErr)
-		default:
-			firstErr = fmt.Errorf("service %q exited: %w", ex.name, ex.err)
-			fmt.Fprintf(stderr, "[pkf] %v — tearing down peers\n", firstErr)
-		}
-		serviceCancel()
-	}
-
-	wg.Wait()
-	if firstErr != nil {
-		return firstErr
-	}
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return nil
-	}
-	return ctx.Err()
+	<-ctx.Done()
+	return nil
 }
 
-// runUpWatch wraps runUpOnce in a restart loop. On any input change inside
-// the target's subgraph, the in-flight up session is cancelled (services
-// receive SIGTERM, then SIGKILL after their grace period) and a fresh one
-// is started.
-func runUpWatch(parentCtx context.Context, taskfilePath, root string, fullPlan *orchestrator.Plan, orch *orchestrator.Orchestrator, r *runner.Runner, tf *config.Taskfile, prePlan *orchestrator.Plan, services []string, stdout, stderr io.Writer) error {
+// runUpWatch maintains a per-service running state. On every input
+// event, the pre-service plan is re-executed (cache hits skip
+// unchanged steps) and every service's action key is recomputed: a
+// service whose key changed is stopped and restarted; everything else
+// keeps running. This is the meaningful difference from a naïve
+// "stop everything, start everything" loop — when only `src/api/*`
+// changes, only `api` restarts, and `db`'s 15-second crash-recovery
+// window doesn't show up on every save.
+//
+// Limitation: Taskfile.pkl itself is NOT reloaded between
+// iterations. Editing the Taskfile during `pkf up --watch` is
+// effectively a no-op for the running services; restart pkf to pick
+// up schema-level changes.
+func runUpWatch(parentCtx context.Context, taskfilePath, root string, fullPlan *orchestrator.Plan, orch *orchestrator.Orchestrator, prePlan *orchestrator.Plan, services []string, stderr io.Writer) error {
 	paths := watchTargets(root, taskfilePath, fullPlan)
 	w, err := watcher.New(paths, 200*time.Millisecond)
 	if err != nil {
@@ -746,36 +733,126 @@ func runUpWatch(parentCtx context.Context, taskfilePath, root string, fullPlan *
 
 	fmt.Fprintf(stderr, "[pkf] up --watch: watching %d path(s) (Ctrl+C to stop)\n", len(paths))
 
-	for {
-		runCtx, runCancel := context.WithCancel(parentCtx)
-		runDone := make(chan error, 1)
-		go func() {
-			runDone <- runUpOnce(runCtx, orch, r, tf, prePlan, services, stdout, stderr)
-		}()
+	running, err := initialUp(parentCtx, orch, fullPlan, prePlan, services, stderr)
+	if err != nil {
+		stopServices(running)
+		return err
+	}
+	defer stopServices(running)
 
+	for {
 		select {
 		case <-w.Events():
-			fmt.Fprintln(stderr, "[pkf] change detected — restarting services")
-			runCancel()
-			<-runDone
 			drain(w.Events())
-		case err := <-runDone:
-			runCancel()
-			if err != nil {
-				fmt.Fprintf(stderr, "[pkf] up failed: %v — waiting for change to retry\n", err)
+			fmt.Fprintln(stderr, "[pkf] change detected — reconciling services")
+			if _, err := orch.Execute(parentCtx, prePlan); err != nil {
+				fmt.Fprintf(stderr, "[pkf] pre-service tasks failed: %v\n", err)
+				continue
 			}
-			drain(w.Events())
-			fmt.Fprintln(stderr, "[pkf] idle — waiting for changes")
-			select {
-			case <-w.Events():
-				fmt.Fprintln(stderr, "[pkf] change detected — retrying")
-			case <-parentCtx.Done():
-				return nil
+			if err := reconcileServices(parentCtx, orch, fullPlan, services, running, stderr); err != nil {
+				fmt.Fprintf(stderr, "[pkf] reconcile failed: %v\n", err)
 			}
 		case <-parentCtx.Done():
-			runCancel()
-			<-runDone
 			return nil
+		}
+	}
+}
+
+// initialUp runs the pre-service plan, then starts every service from
+// scratch. Returns the slice of running entries in start order so
+// stopServices can reap them in reverse on shutdown.
+func initialUp(ctx context.Context, orch *orchestrator.Orchestrator, fullPlan, prePlan *orchestrator.Plan, services []string, stderr io.Writer) ([]*runningService, error) {
+	if len(prePlan.Order) > 0 {
+		if _, err := orch.Execute(ctx, prePlan); err != nil {
+			return nil, err
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	fmt.Fprintf(stderr, "[pkf] up: starting %d service(s) — Ctrl+C to stop\n", len(services))
+	return startAllServices(ctx, orch, fullPlan, services)
+}
+
+// startAllServices launches each service in declared order, attaching
+// its current action key. Returns whatever has been started so far
+// even if an entry fails — the caller passes that slice to
+// stopServices to cleanly reap partial state.
+func startAllServices(ctx context.Context, orch *orchestrator.Orchestrator, fullPlan *orchestrator.Plan, services []string) ([]*runningService, error) {
+	running := make([]*runningService, 0, len(services))
+	for _, name := range services {
+		key, err := serviceKey(fullPlan, name)
+		if err != nil {
+			return running, err
+		}
+		stop, err := orch.StartSingleService(ctx, name, fullPlan)
+		if err != nil {
+			return running, err
+		}
+		running = append(running, &runningService{name: name, stop: stop, key: key})
+	}
+	return running, nil
+}
+
+// reconcileServices walks `services`, recomputes each entry's action
+// key, and restarts any whose key has changed. Service order is
+// preserved so dependents land on top of their (possibly restarted)
+// upstreams in declared topological order.
+func reconcileServices(ctx context.Context, orch *orchestrator.Orchestrator, fullPlan *orchestrator.Plan, services []string, running []*runningService, stderr io.Writer) error {
+	byName := make(map[string]*runningService, len(running))
+	for _, r := range running {
+		byName[r.name] = r
+	}
+	for _, name := range services {
+		newKey, err := serviceKey(fullPlan, name)
+		if err != nil {
+			return err
+		}
+		entry := byName[name]
+		if entry != nil && entry.key == newKey {
+			continue
+		}
+		if entry != nil {
+			fmt.Fprintf(stderr, "[pkf] %s: action key changed — restarting\n", name)
+			if entry.stop != nil {
+				entry.stop()
+			}
+			entry.stop = nil
+		}
+		stop, err := orch.StartSingleService(ctx, name, fullPlan)
+		if err != nil {
+			return err
+		}
+		if entry == nil {
+			running = append(running, &runningService{name: name, stop: stop, key: newKey})
+		} else {
+			entry.stop = stop
+			entry.key = newKey
+		}
+	}
+	return nil
+}
+
+// serviceKey computes the action key (BLAKE3 over cmd/env/inputs/etc.
+// plus the Pkl module's canonical form) used to decide whether a
+// service should be restarted.
+func serviceKey(p *orchestrator.Plan, name string) ([32]byte, error) {
+	t, ok := p.Tasks[name]
+	if !ok {
+		return [32]byte{}, fmt.Errorf("service %q not in plan", name)
+	}
+	taskRoot := orchestrator.TaskRoot(t, p.Root)
+	return orchestrator.ComputeKey(t, p.Defaults, taskRoot, p.ConfigHash)
+}
+
+// stopServices reaps every running entry in reverse start order. nil
+// stop funcs (reused services) are skipped — those processes belong
+// to whoever started them in the first place.
+func stopServices(running []*runningService) {
+	for i := len(running) - 1; i >= 0; i-- {
+		if running[i].stop != nil {
+			running[i].stop()
+			running[i].stop = nil
 		}
 	}
 }

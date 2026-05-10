@@ -12,6 +12,31 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Per-service granular restart in `pkf up --watch`.** Each service
+  now has its own action key tracked across watch iterations. On a
+  file event, `pkf` recomputes every service's key and restarts only
+  the ones whose key actually changed. Editing `src/api/foo.ts` no
+  longer takes down `db` (which had a 15-second crash-recovery
+  window), only `api`. The pre-service plan is re-executed each
+  iteration so cached steps skip immediately.
+- **Per-service log prefix.** Service stdout/stderr lines are now
+  prefixed with `[<service-name>] ` so a `pkf up dev` mixing db +
+  api + web in one terminal stays readable. Partial lines are
+  buffered until the trailing newline arrives, and any unflushed
+  remainder is emitted (with a synthesized newline) when the service
+  exits, so nothing is dropped.
+- **Reuse + readiness now apply to `pkf up`, not just
+  `pkf run` + `services { ... }`.** A service's `readyPort`/`readyCmd`
+  is consulted before `pkf up` spawns it; an already-running
+  instance (typically another `pkf up` session in a different shell
+  or a docker-compose stack) is reused, and shutdown leaves the
+  reused process alone. `pkf up dev` in two terminals no longer
+  port-collides.
+- **Aggregator targets are first-class.** A non-service task that
+  exists only to list services in `deps { ... }` (the canonical
+  `local dev = new Task { deps { db; api; web } }` pattern) now
+  works as a `pkf up dev` target — pkfire strips the service deps
+  from the pre-service plan instead of erroring out.
 - **Readiness probes (`readyPort`, `readyCmd`,
   `readyTimeoutSeconds`).** A service that declares a probe is
   *reused* when the probe already passes — pkfire dials once

@@ -360,14 +360,17 @@ func (o *Orchestrator) startServiceTree(ctx context.Context, taskName string, p 
 		}
 
 		o.logLine(ioMu, "[pkf] %s: starting service %q\n", taskName, svcName)
+		// Per-service log prefixers so a busy `pkf up dev` with db +
+		// api + web doesn't interleave into an unreadable mess.
+		stdoutW := newPrefixWriter(fmt.Sprintf("[%s] ", svcName), o.stdout)
+		stderrW := newPrefixWriter(fmt.Sprintf("[%s] ", svcName), o.stderr)
 		wg.Add(1)
-		go func(name string, t *config.Task) {
+		go func(name string, t *config.Task, sw, ew *prefixWriter) {
 			defer wg.Done()
-			// Service stdout/stderr go straight through to the
-			// orchestrator's writers — server logs are interactive
-			// during the run, not buffered until the task finishes.
-			_ = o.runner.RunWithIO(ctx, name, t, p.Defaults, o.stdout, o.stderr)
-		}(svcName, svcTask)
+			defer sw.flush()
+			defer ew.flush()
+			_ = o.runner.RunWithIO(ctx, name, t, p.Defaults, sw, ew)
+		}(svcName, svcTask, stdoutW, stderrW)
 
 		// After spawning, gate dependent work on the probe passing.
 		// Without this, the next service in the loop (or the body
@@ -380,6 +383,69 @@ func (o *Orchestrator) startServiceTree(ctx context.Context, taskName string, p 
 		}
 	}
 	return nil
+}
+
+// StartSingleService spawns one service task and returns when it is
+// "ready" — either the readiness probe passes (after polling), or
+// there is no probe and the spawn returned. The caller is responsible
+// for invoking the returned stop func when the service should be torn
+// down; stop sends SIGTERM to the process group, waits up to the
+// task's `shutdownTimeoutSeconds`, then escalates to SIGKILL.
+//
+// When the service declares a readiness probe and that probe already
+// succeeds *before* the spawn, the existing process is reused: no
+// fork, and the returned stop func is nil (the caller has nothing to
+// reap on its end). Useful for `pkf up dev` already running in another
+// shell.
+//
+// Distinct from `startServiceTree` (used by executeOne for body-task
+// `services { ... }` chains): that version walks the recursion under
+// a single shared cancel context and waits for the entire subtree to
+// exit on cleanup. `pkf up` wants per-service control so a watch loop
+// can restart only the services whose action key actually changed.
+func (o *Orchestrator) StartSingleService(ctx context.Context, name string, p *Plan) (stop func(), err error) {
+	t, ok := p.Tasks[name]
+	if !ok {
+		return nil, fmt.Errorf("service %q is not declared in the Taskfile", name)
+	}
+	if !t.Service {
+		return nil, fmt.Errorf("task %q is not a service", name)
+	}
+
+	if hasProbe(t) {
+		if err := probeReady(ctx, t, p.Defaults); err == nil {
+			fmt.Fprintf(o.stderr, "[pkf] reusing existing service %q (probe passes)\n", name)
+			return nil, nil
+		}
+	}
+
+	svcCtx, svcCancel := context.WithCancel(ctx)
+	waitCh := make(chan struct{})
+
+	fmt.Fprintf(o.stderr, "[pkf] starting service %q\n", name)
+	stdoutW := newPrefixWriter(fmt.Sprintf("[%s] ", name), o.stdout)
+	stderrW := newPrefixWriter(fmt.Sprintf("[%s] ", name), o.stderr)
+	go func() {
+		defer close(waitCh)
+		defer stdoutW.flush()
+		defer stderrW.flush()
+		_ = o.runner.RunWithIO(svcCtx, name, t, p.Defaults, stdoutW, stderrW)
+	}()
+
+	if hasProbe(t) {
+		if err := waitReady(ctx, t, p.Defaults); err != nil {
+			svcCancel()
+			<-waitCh
+			return nil, fmt.Errorf("service %q did not become ready: %w", name, err)
+		}
+		fmt.Fprintf(o.stderr, "[pkf] service %q is ready\n", name)
+	}
+
+	stop = func() {
+		svcCancel()
+		<-waitCh
+	}
+	return stop, nil
 }
 
 func (o *Orchestrator) logLine(mu *sync.Mutex, format string, args ...any) {
