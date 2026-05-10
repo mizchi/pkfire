@@ -114,12 +114,39 @@ local integration: Task = new {
   deps = builds
 }
 
+/// `pkf init` end-to-end: the cross-compiled host binary writes a
+/// starter Taskfile, and we sanity-check that the file actually came
+/// out structurally well-formed. The Go unit test (TestInitWritesSkeleton)
+/// covers the same logic at the function level; this task catches
+/// regressions that escape the unit test — a broken release-stamping
+/// of `version`, a corrupted `initSkeleton` template after a refactor,
+/// or a bin-layout mistake in the cross-compile step.
+local initSmoke: Task = new {
+  name = "init-smoke"
+  description = "pkf init writes a structurally valid Taskfile (end-to-end)"
+  cmd = """
+    rm -rf bin/init-smoke && mkdir -p bin/init-smoke
+    bin/pkf-$(go env GOOS)-$(go env GOARCH) init -f bin/init-smoke/Taskfile.pkl
+    grep -q '^amends ' bin/init-smoke/Taskfile.pkl
+    grep -q '^tasks {' bin/init-smoke/Taskfile.pkl
+    """
+  workdir = repoRoot
+  inputs {
+    for (p in platforms) {
+      "bin/pkf-\(p.name)"
+    }
+    "cmd/pkf/main.go"
+  }
+  outputs { "bin/init-smoke/Taskfile.pkl" }
+  deps = builds
+}
+
 local ci: Task = new {
   name = "ci"
-  description = "Aggregate gate: vet, schema, unit tests, matrix, checksum, integration"
+  description = "Aggregate gate: vet, schema, unit tests, matrix, checksum, integration, init-smoke"
   cmd = "echo all green"
   cache = false
-  deps { vet; pklTest; goTest; checksum; integration }
+  deps { vet; pklTest; goTest; checksum; integration; initSmoke }
 }
 
 tasks {
@@ -129,5 +156,6 @@ tasks {
   pklTest
   checksum
   integration
+  initSmoke
   ci
 }

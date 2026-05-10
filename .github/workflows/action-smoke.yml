@@ -1,10 +1,17 @@
 name: Action smoke
 
 on:
+  # Catch action.yml regressions before merge — runs against the
+  # latest published release so the action's binary download path
+  # exists.
+  pull_request:
+    paths:
+      - "action.yml"
+      - ".github/workflows/action-smoke.yml"
   workflow_dispatch:
     inputs:
       version:
-        description: "pkfire release tag to test (e.g. pkfire@0.1.0). Empty = latest."
+        description: "pkfire release tag to test (e.g. pkfire@0.3.0). Empty = latest."
         required: false
         default: ""
 
@@ -21,7 +28,12 @@ jobs:
       - name: Use the action from this checkout
         uses: ./
         with:
+          # On PR: empty → action falls back to "latest release".
+          # On dispatch: whatever the user specified.
           version: ${{ inputs.version }}
 
       - name: Run the basic example via pkf
+        # examples/basic/Taskfile.pkl amends pkfire@<current>; the
+        # action just installed a binary that speaks that schema,
+        # so this verifies install + eval + run end-to-end.
         run: pkf run -f examples/basic/Taskfile.pkl hello
