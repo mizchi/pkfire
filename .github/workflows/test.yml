@@ -1,0 +1,31 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Pkl
+        run: |
+          curl -fsSL -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          chmod +x /tmp/pkl-cli
+          sudo mv /tmp/pkl-cli /usr/local/bin/pkl
+          pkl --version
+
+      - name: Build pkf
+        run: go install ./cmd/pkf
+
+      - name: Run dogfood ci (vet + go-test + pkl-test + matrix + checksum + integration)
+        run: pkf run -f examples/dogfood/Taskfile.pkl ci
