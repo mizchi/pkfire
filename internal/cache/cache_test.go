@@ -91,6 +91,86 @@ func TestStoreEmptyOutputsStillRegistersEntry(t *testing.T) {
 	}
 }
 
+func TestStoreAndRestorePreservesSymlinks(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "out/real/data.txt"), "PAYLOAD")
+	if err := os.Symlink("real/data.txt", filepath.Join(src, "out/aliased.txt")); err != nil {
+		t.Fatalf("symlink (file): %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(src, "out/real-dir")); err != nil {
+		t.Fatalf("symlink (dir): %v", err)
+	}
+
+	c := cache.New(t.TempDir())
+	key := [32]byte{0x77}
+	if err := c.Store(key, src, []string{"out"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	dst := t.TempDir()
+	if err := c.Restore(key, dst); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	// Regular file landed.
+	got, err := os.ReadFile(filepath.Join(dst, "out/real/data.txt"))
+	if err != nil || string(got) != "PAYLOAD" {
+		t.Fatalf("real file = %q err=%v", got, err)
+	}
+
+	// File symlink: lstat sees the symlink; readlink returns the target.
+	info, err := os.Lstat(filepath.Join(dst, "out/aliased.txt"))
+	if err != nil {
+		t.Fatalf("lstat alias: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("aliased.txt was not restored as a symlink (mode=%v)", info.Mode())
+	}
+	link, err := os.Readlink(filepath.Join(dst, "out/aliased.txt"))
+	if err != nil {
+		t.Fatalf("readlink alias: %v", err)
+	}
+	if link != "real/data.txt" {
+		t.Errorf("alias linkname = %q, want real/data.txt", link)
+	}
+
+	// Dir symlink behaves the same way.
+	dirLink, err := os.Readlink(filepath.Join(dst, "out/real-dir"))
+	if err != nil {
+		t.Fatalf("readlink real-dir: %v", err)
+	}
+	if dirLink != "real" {
+		t.Errorf("real-dir linkname = %q, want real", dirLink)
+	}
+
+	// Reading through the symlink works (the target was restored).
+	through, err := os.ReadFile(filepath.Join(dst, "out/real-dir/data.txt"))
+	if err != nil || string(through) != "PAYLOAD" {
+		t.Errorf("read through dir symlink = %q err=%v", through, err)
+	}
+}
+
+func TestRestoreRejectsAbsoluteSymlink(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Absolute target — should be rejected on extract for safety.
+	if err := os.Symlink("/etc/passwd", filepath.Join(src, "out/escape")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	c := cache.New(t.TempDir())
+	key := [32]byte{0x78}
+	if err := c.Store(key, src, []string{"out"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	if err := c.Restore(key, t.TempDir()); err == nil {
+		t.Fatal("expected Restore to refuse an absolute symlink target")
+	}
+}
+
 func TestRestoreIsHermeticAgainstSiblingFiles(t *testing.T) {
 	src := t.TempDir()
 	mustWrite(t, filepath.Join(src, "out/a"), "AA")

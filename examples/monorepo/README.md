@@ -18,10 +18,12 @@ What this Taskfile demonstrates:
 - **Cross-package deps as Pkl references.** `testCli` lists `testGreet`
   in its `deps` Listing — when you rename `@example/greet`, the
   reference moves with it; a typo never compiles.
-- **`install` is intentionally uncached.** pnpm's `node_modules` is a
-  forest of symlinks into a content-addressed store; pkfire's archive
-  format only handles regular files and directories, so caching the
-  install would leave dangling links on restore. pnpm itself is fast on
-  a warm store, so rerunning it costs almost nothing.
+- **`install` is fully cached, symlinks included.** pnpm's
+  `node_modules` is a forest of relative symlinks into its
+  content-addressed store; pkfire serializes symlink entries as-is and
+  validates targets at restore time (relative paths only, resolved
+  destination must stay under the cache root). Wiping `node_modules`
+  and rerunning `pkf run install` reproduces the entire dependency
+  graph without re-running pnpm.
 - **`workdir = "packages/<id>"`** makes inputs relative to each
   package, matching how monorepo tooling normally addresses files.

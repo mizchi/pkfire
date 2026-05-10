@@ -51,11 +51,10 @@ local install: Task = new {
     "package.json"
     "packages/*/package.json"
   }
-  // pnpm's `node_modules` is full of symlinks into a content-addressed
-  // store; pkfire's CAS archives only regular files and directories, so
-  // a cached restore would leave dangling links. pnpm itself is fast on
-  // a warm store, so just rerun it every time.
-  cache = false
+  // `node_modules` is full of symlinks into pnpm's content-addressed
+  // store. pkfire archives symlinks (relative targets only) so a cache
+  // hit reproduces the dependency graph without rerunning install.
+  outputs { "node_modules"; "packages/cli/node_modules"; "packages/greet/node_modules" }
   tools { ["pnpm"] = "10"; ["node"] = "24" }
 }
 

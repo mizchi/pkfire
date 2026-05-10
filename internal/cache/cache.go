@@ -170,14 +170,19 @@ func writeArchive(w io.Writer, root string, outputs []string) error {
 			}
 			return err
 		}
-		if info.IsDir() {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			if err := writeSymlink(tw, root, rel, info); err != nil {
+				return err
+			}
+		case info.IsDir():
 			if err := walkDir(tw, root, rel); err != nil {
 				return err
 			}
-			continue
-		}
-		if err := writeFile(tw, root, rel, info); err != nil {
-			return err
+		default:
+			if err := writeFile(tw, root, rel, info); err != nil {
+				return err
+			}
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -188,6 +193,9 @@ func writeArchive(w io.Writer, root string, outputs []string) error {
 
 func walkDir(tw *tar.Writer, root, rel string) error {
 	full := filepath.Join(root, rel)
+	// filepath.Walk does not follow symlinks, so a symlinked subtree shows
+	// up here as one entry of mode ModeSymlink — exactly what we want for
+	// pnpm-style node_modules (we serialize the link, not the link target).
 	return filepath.Walk(full, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -196,16 +204,39 @@ func walkDir(tw *tar.Writer, root, rel string) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return writeSymlink(tw, root, nestedRel, info)
+		case info.IsDir():
 			hdr, err := tar.FileInfoHeader(info, "")
 			if err != nil {
 				return err
 			}
 			hdr.Name = filepath.ToSlash(nestedRel) + "/"
 			return tw.WriteHeader(hdr)
+		default:
+			return writeFile(tw, root, nestedRel, info)
 		}
-		return writeFile(tw, root, nestedRel, info)
 	})
+}
+
+// writeSymlink emits a tar header of type Symlink whose Linkname is what
+// `os.Readlink` reports — relative or absolute, exactly as authored.
+// Validation of absolute targets happens at extract time, not here.
+func writeSymlink(tw *tar.Writer, root, rel string, info os.FileInfo) error {
+	full := filepath.Join(root, rel)
+	link, err := os.Readlink(full)
+	if err != nil {
+		return fmt.Errorf("readlink %q: %w", full, err)
+	}
+	hdr, err := tar.FileInfoHeader(info, link)
+	if err != nil {
+		return err
+	}
+	hdr.Name = filepath.ToSlash(rel)
+	hdr.Typeflag = tar.TypeSymlink
+	hdr.Linkname = link
+	return tw.WriteHeader(hdr)
 }
 
 func writeFile(tw *tar.Writer, root, rel string, info os.FileInfo) error {
@@ -271,9 +302,43 @@ func extract(r io.Reader, root string) error {
 			if err := f.Close(); err != nil {
 				return err
 			}
+		case tar.TypeSymlink:
+			if err := restoreSymlink(target, cleanRoot, hdr.Linkname); err != nil {
+				return fmt.Errorf("symlink %q -> %q: %w", hdr.Name, hdr.Linkname, err)
+			}
 		default:
-			// symlinks, devices, etc. are deliberately ignored — task outputs
-			// in normal projects are regular files and directories.
+			// devices, fifos, etc. are deliberately ignored — task outputs in
+			// normal projects are regular files, directories, and symlinks.
 		}
 	}
+}
+
+// restoreSymlink writes a symlink at `target` pointing to `linkname`.
+// Absolute targets are rejected — they would let a malicious archive
+// publish a path that resolves outside the cache root after extraction.
+// Relative targets are accepted but the resolved destination is also
+// confined to `cleanRoot`, which is what blocks `../../../etc/passwd`-
+// style escapes from a relative link.
+func restoreSymlink(target, cleanRoot, linkname string) error {
+	if linkname == "" {
+		return fmt.Errorf("empty linkname")
+	}
+	if filepath.IsAbs(linkname) {
+		return fmt.Errorf("absolute symlink targets are rejected")
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(target), linkname))
+	if resolved != cleanRoot && !strings.HasPrefix(resolved, cleanRoot+string(filepath.Separator)) {
+		return fmt.Errorf("symlink target escapes cache root: resolves to %q", resolved)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	// `os.Symlink` fails if the target already exists; clear it first so
+	// repeated restores do not leave a stale entry behind.
+	if _, err := os.Lstat(target); err == nil {
+		if err := os.Remove(target); err != nil {
+			return err
+		}
+	}
+	return os.Symlink(linkname, target)
 }
