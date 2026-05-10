@@ -21,6 +21,36 @@ pkf run hello           # smoke the generated task
 `pkf init` writes a Taskfile that `amends` the schema over HTTPS, so
 your project does not need a clone of this repo.
 
+### Nix flake (no Go required)
+
+The flake at the repository root produces a `pkf` derivation that
+wraps the binary so the bundled Pkl CLI is on `PATH` automatically.
+Users do not need a Go toolchain.
+
+```sh
+nix run github:mizchi/pkfire -- run hello       # one-shot
+nix profile install github:mizchi/pkfire        # persistent
+```
+
+In a home-manager flake:
+
+```nix
+{
+  inputs.pkfire.url = "github:mizchi/pkfire";
+
+  outputs = { self, nixpkgs, home-manager, pkfire, ... }: {
+    homeConfigurations.example = home-manager.lib.homeManagerConfiguration {
+      modules = [{
+        home.packages = [ pkfire.packages.${pkgs.system}.default ];
+      }];
+    };
+  };
+}
+```
+
+`nix develop` opens a shell with `go`, `pkl`, and `gopls` for working
+on pkfire itself.
+
 ## Authoring a Taskfile
 
 ```pkl

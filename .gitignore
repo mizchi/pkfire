@@ -1,6 +1,8 @@
 /bin/
 /dist/
 /pkf
+/result
+/result-*
 *.test
 *.out
 .DS_Store
