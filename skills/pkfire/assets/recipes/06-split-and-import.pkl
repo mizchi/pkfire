@@ -1,0 +1,63 @@
+/// Recipe 06: split definitions into helper files; root has one entry.
+///
+/// Layout this Taskfile expects:
+///
+///   project/
+///   ├── Taskfile.pkl         (this file)
+///   ├── shared/
+///   │   ├── sources.pkl      # `sources: Listing<String>`, etc.
+///   │   └── toolchain.pkl    # `toolchain: Mapping<String, String>`
+///   └── tasks/
+///       ├── build.pkl        # exports `tasks: Listing<Task>`
+///       └── test.pkl         # exports `tasks: Listing<Task>`
+///
+/// Cross-file Task references work: `tasks/test.pkl` can `import
+/// "build.pkl" as bt` and write `deps { bt.build }` for a typed link.
+///
+/// This recipe ships as a documentation skeleton — the import lines
+/// are kept in comments so the file evaluates standalone. To use,
+/// uncomment the imports / spreads and create the four fragments
+/// under `tasks/` and `shared/`.
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+// import "tasks/build.pkl" as bt
+// import "tasks/test.pkl"  as tt
+
+tasks {
+  // ...bt.tasks
+  // ...tt.tasks
+}
+
+// ---------------------------------------------------------------
+// tasks/build.pkl  (sketch)
+// ---------------------------------------------------------------
+//
+//   import "https://.../Taskfile.pkl" as schema
+//   import "../shared/sources.pkl"   as src
+//   import "../shared/toolchain.pkl" as tc
+//
+//   build: schema.Task = new {
+//     name = "build"
+//     cmd = "go build ./..."
+//     inputs = src.sources
+//     tools = tc.toolchain
+//   }
+//
+//   tasks: Listing<schema.Task> = new { build }
+//
+// ---------------------------------------------------------------
+// tasks/test.pkl  (sketch)
+// ---------------------------------------------------------------
+//
+//   import "https://.../Taskfile.pkl" as schema
+//   import "../shared/sources.pkl"   as src
+//   import "build.pkl"               as bt
+//
+//   test: schema.Task = new {
+//     name = "test"
+//     cmd = "go test ./..."
+//     inputs = src.sources
+//     deps { bt.build }
+//   }
+//
+//   tasks: Listing<schema.Task> = new { test }

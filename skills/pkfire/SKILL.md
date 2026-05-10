@@ -99,6 +99,105 @@ Pin the schema URL to a tag (`/v0.1.0/`) for production / CI.
 | [`assets/recipes/03-monorepo.pkl`](./assets/recipes/03-monorepo.pkl) | Per-package tasks generated from a `Package` template |
 | [`assets/recipes/04-dev-watch.pkl`](./assets/recipes/04-dev-watch.pkl) | A long-running dev task plus a quick lint pre-flight |
 | [`assets/recipes/05-remote-cache.pkl`](./assets/recipes/05-remote-cache.pkl) | Same Taskfile, configured via env to use a remote cache |
+| [`assets/recipes/06-split-and-import.pkl`](./assets/recipes/06-split-and-import.pkl) | Single entry point, definitions split into `shared/` + `tasks/` |
+| [`assets/recipes/07-hierarchical-amends.pkl`](./assets/recipes/07-hierarchical-amends.pkl) | Per-service Taskfiles that `amends` a project-root template |
+
+## Project layout
+
+Three layouts cover the realistic spectrum of Taskfile sizes.
+Adopt them in this order — **upgrade only when the previous layout
+hurts**, not before.
+
+### A. Single Taskfile (default; up to ~30 tasks)
+
+```
+project/
+└── Taskfile.pkl
+```
+
+Pkl's `local function` + `for` keep even matrix-heavy single files
+readable; see recipe 02. Stay here unless one of B / C is solving a
+real pain.
+
+### B. Split + import (single entry point, definitions distributed)
+
+```
+project/
+├── Taskfile.pkl              # entry: amends pkfire schema, imports + spreads
+├── shared/
+│   ├── sources.pkl           # `sources: Listing<String>`, `toolchain: Mapping<...>`
+│   └── env.pkl
+└── tasks/
+    ├── build.pkl             # `import "../shared/..."`; exports `tasks: Listing<Task>`
+    └── test.pkl
+```
+
+The root `Taskfile.pkl` `import`s each fragment and spreads its
+`tasks` Listing:
+
+```pkl
+amends "https://.../Taskfile.pkl"
+import "tasks/build.pkl" as bt
+import "tasks/test.pkl" as tt
+
+tasks { ...bt.tasks; ...tt.tasks }
+```
+
+Use this when one file is fine for the runner but humans want smaller
+files. Pkfire still consumes a single `pkf run -f Taskfile.pkl <task>`
+invocation, and Task references work across files because `import`
+brings real values across the boundary.
+
+### C. Hierarchical `amends` ("Know Your Place" pattern)
+
+```
+project/
+├── Taskfile.pkl              # root: shared sources/tools, project-wide tasks (lint, format)
+└── services/
+    ├── api/
+    │   └── Taskfile.pkl      # amends "../../Taskfile.pkl"; adds build:api, test:api
+    └── web/
+        └── Taskfile.pkl      # amends "../../Taskfile.pkl"; adds build:web, test:web
+```
+
+Inspired by [Know Your Place](https://pkl-lang.org/blog/know-your-place.html)
+from the Pkl team: the **directory tree itself encodes structure**.
+Each leaf Taskfile `amends` the root and `tasks { ...new local tasks }`
+appends to the inherited Listing. Run a service in isolation:
+
+```sh
+pkf run -f services/api/Taskfile.pkl ci    # only api's subgraph
+pkf run -f Taskfile.pkl lint               # project-wide root tasks
+```
+
+Why this beats (B) at scale:
+
+- A team owning `services/api/` only edits `services/api/Taskfile.pkl`;
+  cross-team reviews stay scoped.
+- `pkl:reflect` can derive the leaf's identity (e.g. `api`, `web`) from
+  its file path — see the upstream blog post for a `findRootModule`
+  helper that walks the `amends` chain.
+- The root file stays the canonical place for shared `sources`,
+  `tools`, and policy tasks, so changing the lint command propagates
+  everywhere by editing one file.
+
+Trade-offs:
+
+- One `pkf run` invocation only sees one Taskfile. There is no
+  "umbrella ci that runs every leaf" without a small wrapper script
+  (or a deliberately authored `services/Taskfile.pkl` that imports
+  the leaves).
+- Leaf authors must remember the `amends` URI is relative, and
+  changing the root file's location breaks every leaf at once. Pin
+  the root path or use a stable HTTPS schema instead.
+
+### Picking between B and C
+
+| Situation | Use |
+| --- | --- |
+| Many tasks, single team | **B** (split, one entry) |
+| Many services, many teams | **C** (hierarchical amends) |
+| Mix: shared + per-service | **C with B inside each leaf** is fine |
 
 ## Common pitfalls
 

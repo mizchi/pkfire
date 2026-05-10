@@ -1,0 +1,97 @@
+/// Recipe 07: hierarchical amends ("Know Your Place" pattern).
+///
+/// Layout:
+///
+///   project/
+///   ├── Taskfile.pkl              # this file: project-root template
+///   └── services/
+///       ├── api/
+///       │   └── Taskfile.pkl      # amends "../../Taskfile.pkl"
+///       └── web/
+///           └── Taskfile.pkl      # amends "../../Taskfile.pkl"
+///
+/// Each leaf invokes pkfire on its own Taskfile:
+///
+///   pkf run -f services/api/Taskfile.pkl ci
+///   pkf run -f services/web/Taskfile.pkl ci
+///
+/// The root provides shared `sources`, `tools`, and project-wide
+/// tasks (`lint`, `format`). Leaves append their own service-specific
+/// tasks via `tasks { ...new tasks }`.
+///
+/// This file is the *root*. The leaf example follows below in a
+/// comment.
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "**/*.go"
+  "go.mod"
+  "go.sum"
+}
+
+local toolchain: Mapping<String, String> = new {
+  ["go"] = "1.26"
+}
+
+local lint: Task = new {
+  name = "lint"
+  description = "Project-wide lint, runs from the repo root"
+  cmd = "go vet ./..."
+  inputs = sources
+  tools = toolchain
+}
+
+local format: Task = new {
+  name = "format"
+  description = "Project-wide formatter check"
+  cmd = "gofmt -l . | tee /dev/stderr | (! read)"
+  inputs = sources
+  tools = toolchain
+}
+
+tasks { lint; format }
+
+// ---------------------------------------------------------------
+// services/api/Taskfile.pkl  (sketch — copy into a separate file)
+// ---------------------------------------------------------------
+//
+//   amends "../../Taskfile.pkl"
+//
+//   local apiBuild: Task = new {
+//     name = "build:api"
+//     description = "Build the api binary"
+//     cmd = "go build -o bin/api ./cmd/api"
+//     workdir = "../.."           // run from project root
+//     inputs {
+//       "cmd/api/**/*.go"
+//       "internal/**/*.go"
+//       "go.mod"; "go.sum"
+//     }
+//     outputs { "bin/api" }
+//   }
+//
+//   local apiTest: Task = new {
+//     name = "test:api"
+//     cmd = "go test ./cmd/api/... ./internal/..."
+//     workdir = "../.."
+//     inputs {
+//       "cmd/api/**/*.go"
+//       "internal/**/*.go"
+//       "go.mod"
+//     }
+//     deps { apiBuild }
+//   }
+//
+//   local ci: Task = new {
+//     name = "ci"
+//     description = "api gate: project-root lint + api build/test"
+//     cmd = "echo api-green"
+//     cache = false
+//     deps { lint; format; apiBuild; apiTest }   // refs root tasks too
+//   }
+//
+//   tasks { apiBuild; apiTest; ci }
+//
+// `lint` and `format` are inherited from the root and remain
+// referenceable here as plain identifiers, because Pkl evaluates
+// the leaf in the amend-merged scope.
