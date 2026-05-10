@@ -67,6 +67,30 @@ class Task {
 
   /// Free-form description shown by `pkf list`.
   description: String? = null
+
+  /// When true, this task is a long-running service. It is started by
+  /// `pkf up` and supervised until the up session ends (Ctrl+C or a
+  /// watch-driven restart). Implies `cache = false` at runtime — the
+  /// runner ignores any cache setting on a service. `pkf run` rejects
+  /// any plan that contains a service task; use `pkf up` instead.
+  service: Boolean = false
+
+  /// Seconds to wait between SIGTERM and SIGKILL when stopping a
+  /// service. Only applied when `service` is true. The runner sets
+  /// the cmd as a process-group leader so the whole subtree (e.g.
+  /// `bash -c "node server.js"` ⇒ bash + node) is signalled.
+  shutdownTimeoutSeconds: Int(this >= 0) = 5
+
+  /// Sibling tasks that must be running while this task's `cmd`
+  /// executes. Each entry must itself be `service: true`. `pkf run`
+  /// starts the listed services (in declared order) before invoking
+  /// `cmd`, then stops them with the same SIGTERM-then-SIGKILL flow
+  /// once `cmd` finishes — pass or fail. Cache lookups happen *before*
+  /// services are started, so a cache hit never spawns a server.
+  ///
+  /// Typical use: end-to-end tests (`services { api; db }`) or
+  /// scripts that need a real database to run against.
+  services: Listing<Task> = new {}
 }
 
 /// Project-level defaults shared by all tasks unless overridden.
@@ -89,6 +113,9 @@ class RenderedTask {
   cache: Boolean
   workdir: String?
   description: String?
+  service: Boolean
+  shutdownTimeoutSeconds: Int
+  services: Listing<String>
 }
 
 /// Top-level shape of `output.value`. pkl-go's `EvaluateOutputValue` looks
@@ -133,6 +160,9 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       cache = t.cache
       workdir = t.workdir
       description = t.description
+      service = t.service
+      shutdownTimeoutSeconds = t.shutdownTimeoutSeconds
+      services = new Listing { for (s in t.services) { s.name } }
     }
   }
 }

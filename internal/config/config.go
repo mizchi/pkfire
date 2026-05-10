@@ -15,16 +15,19 @@ import (
 
 // Task mirrors `pkfire.Taskfile#Task` from `pkl/Taskfile.pkl`.
 type Task struct {
-	Cmd         string            `pkl:"cmd"`
-	Shell       string            `pkl:"shell"`
-	Inputs      []string          `pkl:"inputs"`
-	Outputs     []string          `pkl:"outputs"`
-	Deps        []string          `pkl:"deps"`
-	Env         map[string]string `pkl:"env"`
-	Tools       map[string]string `pkl:"tools"`
-	Cache       bool              `pkl:"cache"`
-	Workdir     *string           `pkl:"workdir"`
-	Description *string           `pkl:"description"`
+	Cmd                    string            `pkl:"cmd"`
+	Shell                  string            `pkl:"shell"`
+	Inputs                 []string          `pkl:"inputs"`
+	Outputs                []string          `pkl:"outputs"`
+	Deps                   []string          `pkl:"deps"`
+	Env                    map[string]string `pkl:"env"`
+	Tools                  map[string]string `pkl:"tools"`
+	Cache                  bool              `pkl:"cache"`
+	Workdir                *string           `pkl:"workdir"`
+	Description            *string           `pkl:"description"`
+	Service                bool              `pkl:"service"`
+	ShutdownTimeoutSeconds int               `pkl:"shutdownTimeoutSeconds"`
+	Services               []string          `pkl:"services"`
 }
 
 // Defaults mirrors `pkfire.Taskfile#Defaults`.

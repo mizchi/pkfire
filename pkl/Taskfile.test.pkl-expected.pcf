@@ -17,6 +17,9 @@ examples {
       cache = true
       workdir = null
       description = null
+      service = false
+      shutdownTimeoutSeconds = 5
+      services {}
     }
   }
 }

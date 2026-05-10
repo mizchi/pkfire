@@ -12,6 +12,25 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Long-running services via `pkf up`.** A new `service: Boolean`
+  field on `Task` marks a task as a supervised process. `pkf up
+  <target>` runs every non-service dep first, then starts the
+  services concurrently and blocks until Ctrl+C. `pkf up --watch
+  <target>` adds a stop-rebuild-restart loop on input changes. The
+  runner now sets every cmd as a process-group leader and signals
+  the whole group on cancel (SIGTERM → grace → SIGKILL), so a
+  `bash -c "node server.js"` style task no longer leaks its node
+  child. Grace period is per-task via
+  `shutdownTimeoutSeconds: Int = 5`. Recipe at
+  `skills/pkfire/assets/recipes/08-services.pkl` shows a full
+  db + api + web stack.
+- **Tests against live services via `services { ... }` on a task.**
+  A task can declare `services: Listing<Task>`; `pkf run` brings
+  those services up before invoking `cmd` and releases them when
+  it returns (success or failure). Services nest — listing `api`
+  also brings up `api.services` (typically `db`). Cache hits skip
+  spinup entirely. Recipe 09 covers the e2e + ephemeral postgres
+  case.
 - GitHub Action at the repo root (`mizchi/pkfire@pkfire@<version>`)
   that installs `pkf` and the Pkl CLI on the runner.
 - Pre-built `pkf` binaries for `linux/darwin × amd64/arm64`,
@@ -26,6 +45,14 @@ Action version all move together — there is one tag per release
 - `pkf init` now embeds the running binary's version into the
   `amends` URI (release builds pin to their package; dev builds fall
   back to the main HTTPS URL).
+
+### Changed
+
+- Schema bumped to 0.2.0. The new `service` and
+  `shutdownTimeoutSeconds` fields are optional with sensible
+  defaults, so existing 0.1.0 Taskfiles keep evaluating, but a 0.1.0
+  binary cannot decode a 0.2.0 schema. Bump `pkf` and the `amends`
+  URI together.
 
 ## [0.1.0] - 2026-05-10
 

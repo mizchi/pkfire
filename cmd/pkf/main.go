@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -55,6 +56,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdGraph(args[1:], stdout, stderr)
 	case "run":
 		return cmdRun(args[1:], stdout, stderr)
+	case "up":
+		return cmdUp(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -71,6 +74,8 @@ commands:
   init [-f FILE] [--force]              write a starter Taskfile.pkl
   run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache] <task>
                                         run a task and its transitive deps
+  up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
+                                        Ctrl+C releases the whole process tree
   list [-f FILE] [-v]                   list declared tasks (-v: cmd/deps)
   graph [-f FILE] [--format FMT] [--target TASK]
                                         emit DAG (formats: dot, mermaid)
@@ -546,6 +551,233 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
 	}
 	return nil
+}
+
+// cmdUp starts every `service: true` task in the target's subgraph. Non-
+// service tasks in the subgraph (e.g. a build step the service depends on)
+// run first via the regular orchestrator. Once all pre-tasks succeed,
+// services start concurrently and stay alive until the parent context is
+// cancelled (Ctrl+C, SIGTERM) or, with --watch, until input changes
+// trigger a stop-rebuild-restart cycle.
+//
+// On shutdown, runner sends SIGTERM to each service's process group, waits
+// up to its `shutdownTimeoutSeconds`, then escalates to SIGKILL — so a
+// `cmd = "node server.js"` style service does not leak its node child.
+func cmdUp(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf up", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	watch := fs.Bool("watch", false, "restart services on input changes")
+	noCache := fs.Bool("no-cache", false, "disable cache for the pre-service tasks")
+	jobs := fs.Int("j", 0, "max concurrent pre-service tasks (default: NumCPU)")
+	fs.IntVar(jobs, "jobs", 0, "max concurrent pre-service tasks (default: NumCPU)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return fmt.Errorf("up requires exactly one task name")
+	}
+	target := rest[0]
+
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	parentCtx := context.Background()
+	tf, err := config.Load(parentCtx, abs)
+	if err != nil {
+		return err
+	}
+	g, err := buildGraph(tf)
+	if err != nil {
+		return err
+	}
+	if !g.Has(target) {
+		return fmt.Errorf("unknown task: %q", target)
+	}
+	order, err := g.Subgraph(target)
+	if err != nil {
+		return err
+	}
+
+	var preOrder, services []string
+	serviceSet := make(map[string]bool)
+	for _, name := range order {
+		if tf.Tasks[name].Service {
+			services = append(services, name)
+			serviceSet[name] = true
+		} else {
+			preOrder = append(preOrder, name)
+		}
+	}
+	if len(services) == 0 {
+		return fmt.Errorf("plan for %q contains no service task; use `pkf run` instead", target)
+	}
+	for _, n := range preOrder {
+		for _, d := range tf.Tasks[n].Deps {
+			if serviceSet[d] {
+				return fmt.Errorf("non-service task %q depends on service %q (only services may depend on services)", n, d)
+			}
+		}
+	}
+
+	root := filepath.Dir(abs)
+	var backend cache.Backend
+	if !*noCache {
+		dir, err := cache.DefaultDir()
+		if err != nil {
+			return fmt.Errorf("resolve cache dir: %w", err)
+		}
+		local := cache.New(dir)
+		if remoteURL := os.Getenv("PKFIRE_REMOTE_CACHE"); remoteURL != "" {
+			remote := cache.NewRemote(remoteURL, os.Getenv("PKFIRE_REMOTE_TOKEN"))
+			backend = cache.NewLayered(local, remote)
+		} else {
+			backend = local
+		}
+	}
+	r := runner.New(runner.Options{Workdir: root})
+	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs})
+
+	prePlan := &orchestrator.Plan{
+		Order:      preOrder,
+		Tasks:      tf.Tasks,
+		Defaults:   tf.Defaults,
+		Root:       root,
+		ConfigHash: hash.HashBytes(tf.Canonical),
+	}
+
+	ctx, cancel := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if *watch {
+		// For watch we also need to track the services' inputs so a save in
+		// service source triggers a restart. Build a plan that includes
+		// every task in `order` for path discovery only.
+		fullPlan := &orchestrator.Plan{
+			Order: order, Tasks: tf.Tasks, Defaults: tf.Defaults, Root: root,
+			ConfigHash: prePlan.ConfigHash,
+		}
+		return runUpWatch(ctx, abs, root, fullPlan, orch, r, tf, prePlan, services, stdout, stderr)
+	}
+	return runUpOnce(ctx, orch, r, tf, prePlan, services, stdout, stderr)
+}
+
+// runUpOnce runs the pre-service tasks (build, codegen, etc.) once, then
+// starts every service concurrently. Returns when the context is cancelled
+// or the first service exits unexpectedly.
+//
+// Service ordering note: v1 starts every service simultaneously, regardless
+// of declared `deps`. The runner does not yet have a readiness probe, so
+// dependent services must implement their own retry/wait logic in `cmd`
+// (e.g. wait-for-postgres before exec-ing the api).
+func runUpOnce(ctx context.Context, orch *orchestrator.Orchestrator, r *runner.Runner, tf *config.Taskfile, prePlan *orchestrator.Plan, services []string, stdout, stderr io.Writer) error {
+	if len(prePlan.Order) > 0 {
+		if _, err := orch.Execute(ctx, prePlan); err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	fmt.Fprintf(stderr, "[pkf] up: starting %d service(s) — Ctrl+C to stop\n", len(services))
+
+	serviceCtx, serviceCancel := context.WithCancel(ctx)
+	defer serviceCancel()
+
+	type exit struct {
+		name string
+		err  error
+	}
+	exits := make(chan exit, len(services))
+	var wg sync.WaitGroup
+	for _, name := range services {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			t := tf.Tasks[name]
+			err := r.RunWithIO(serviceCtx, name, t, tf.Defaults, stdout, stderr)
+			exits <- exit{name, err}
+		}(name)
+	}
+
+	var firstErr error
+	select {
+	case <-ctx.Done():
+		// Clean shutdown requested by the caller (Ctrl+C or watch restart).
+		serviceCancel()
+	case ex := <-exits:
+		switch {
+		case errors.Is(ex.err, context.Canceled):
+			// Raced with our own cancel; nothing to surface.
+		case ex.err == nil:
+			firstErr = fmt.Errorf("service %q exited unexpectedly", ex.name)
+			fmt.Fprintf(stderr, "[pkf] %v — tearing down peers\n", firstErr)
+		default:
+			firstErr = fmt.Errorf("service %q exited: %w", ex.name, ex.err)
+			fmt.Fprintf(stderr, "[pkf] %v — tearing down peers\n", firstErr)
+		}
+		serviceCancel()
+	}
+
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil
+	}
+	return ctx.Err()
+}
+
+// runUpWatch wraps runUpOnce in a restart loop. On any input change inside
+// the target's subgraph, the in-flight up session is cancelled (services
+// receive SIGTERM, then SIGKILL after their grace period) and a fresh one
+// is started.
+func runUpWatch(parentCtx context.Context, taskfilePath, root string, fullPlan *orchestrator.Plan, orch *orchestrator.Orchestrator, r *runner.Runner, tf *config.Taskfile, prePlan *orchestrator.Plan, services []string, stdout, stderr io.Writer) error {
+	paths := watchTargets(root, taskfilePath, fullPlan)
+	w, err := watcher.New(paths, 200*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("init watcher: %w", err)
+	}
+	defer w.Close()
+	go w.Run(parentCtx)
+
+	fmt.Fprintf(stderr, "[pkf] up --watch: watching %d path(s) (Ctrl+C to stop)\n", len(paths))
+
+	for {
+		runCtx, runCancel := context.WithCancel(parentCtx)
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- runUpOnce(runCtx, orch, r, tf, prePlan, services, stdout, stderr)
+		}()
+
+		select {
+		case <-w.Events():
+			fmt.Fprintln(stderr, "[pkf] change detected — restarting services")
+			runCancel()
+			<-runDone
+			drain(w.Events())
+		case err := <-runDone:
+			runCancel()
+			if err != nil {
+				fmt.Fprintf(stderr, "[pkf] up failed: %v — waiting for change to retry\n", err)
+			}
+			drain(w.Events())
+			fmt.Fprintln(stderr, "[pkf] idle — waiting for changes")
+			select {
+			case <-w.Events():
+				fmt.Fprintln(stderr, "[pkf] change detected — retrying")
+			case <-parentCtx.Done():
+				return nil
+			}
+		case <-parentCtx.Done():
+			runCancel()
+			<-runDone
+			return nil
+		}
+	}
 }
 
 // printDryRun walks the plan in topological order and prints each task's

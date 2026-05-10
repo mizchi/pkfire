@@ -13,9 +13,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/mizchi/pkfire/internal/config"
 )
+
+// defaultShutdownTimeout is the SIGTERM-to-SIGKILL grace period when a
+// task didn't declare one. Mirrors the schema default.
+const defaultShutdownTimeout = 5 * time.Second
 
 // Options controls runner behavior.
 type Options struct {
@@ -63,7 +68,7 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, shell, "-c", task.Cmd)
+	cmd := exec.Command(shell, "-c", task.Cmd)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(defaults, task)
@@ -81,11 +86,44 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 		}
 	}
 
+	// Make the child a process-group leader so cancellation reaches the
+	// whole subtree. exec.CommandContext only kills the direct child,
+	// which leaks grandchildren (e.g. `bash -c "node server.js"` would
+	// reap bash but leave node holding ports). See sysattr_unix.go.
+	setProcessGroup(cmd)
+
 	fmt.Fprintf(stderr, "[pkf] %s: %s\n", name, task.Cmd)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("task %q failed: %w", name, err)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("task %q failed to start: %w", name, err)
 	}
-	return nil
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	grace := defaultShutdownTimeout
+	if task.ShutdownTimeoutSeconds > 0 {
+		grace = time.Duration(task.ShutdownTimeoutSeconds) * time.Second
+	}
+
+	select {
+	case err := <-waitCh:
+		if err != nil {
+			return fmt.Errorf("task %q failed: %w", name, err)
+		}
+		return nil
+	case <-ctx.Done():
+		// Graceful: SIGTERM the whole process group, give it `grace`
+		// seconds to clean up, then SIGKILL if it's still alive.
+		_ = terminateProcessGroup(cmd.Process.Pid)
+		select {
+		case <-waitCh:
+			return ctx.Err()
+		case <-time.After(grace):
+			_ = killProcessGroup(cmd.Process.Pid)
+			<-waitCh
+			return ctx.Err()
+		}
+	}
 }
 
 // RunAll executes the given task names in order. Stops on the first error.

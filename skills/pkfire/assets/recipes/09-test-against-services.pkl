@@ -1,0 +1,113 @@
+/// Recipe 09: run a test (or any one-shot task) against live services.
+///
+/// `services { ... }` declares "for this task to run, these
+/// services must be up". `pkf run` brings them up before invoking
+/// the task's `cmd`, then tears them down once `cmd` returns —
+/// pass or fail. A cache hit skips the whole thing, so unchanged
+/// e2e suites don't pay the start-up cost.
+///
+/// Difference from recipe 08:
+///   - 08 (`pkf up`): services are the goal; user keeps them
+///     running interactively.
+///   - 09 (`pkf run` + `services { ... }`): services exist *for*
+///     a body command (test runner, smoke script, migration);
+///     pkfire owns their full lifecycle.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "src/**/*.ts"
+  "tests/**/*.ts"
+  "package.json"
+}
+
+local install: Task = new {
+  name = "install"
+  cmd = "pnpm install --frozen-lockfile --silent"
+  inputs { "package.json"; "pnpm-lock.yaml" }
+  outputs { "node_modules" }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+local db: Task = new {
+  name = "db"
+  description = "Ephemeral postgres for integration tests"
+  cmd = "docker run --rm --name=pkfire-test-db -p 5432:5432 -e POSTGRES_PASSWORD=test postgres:16"
+  service = true
+  shutdownTimeoutSeconds = 15
+}
+
+local api: Task = new {
+  name = "api"
+  description = "API under test; waits for db before exec-ing node"
+  cmd = """
+    until pg_isready -h localhost -p 5432 -q; do sleep 0.2; done
+    exec pnpm exec tsx src/api/server.ts
+    """
+  service = true
+  // api wants db; pkfire follows the chain transitively when api is
+  // started as a service for some other task.
+  services { db }
+  env { ["DATABASE_URL"] = "postgres://postgres:test@localhost:5432/postgres" }
+  deps { install }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+/// `pkf run e2e` brings up db + api, runs Playwright, releases
+/// everything. The action key includes Playwright sources, the
+/// deps' Pkl canonical form, and the toolchain — change anything
+/// material and the next run actually executes; otherwise it hits
+/// cache and skips even starting the servers.
+local e2e: Task = new {
+  name = "e2e"
+  description = "Playwright tests against the live api"
+  cmd = """
+    until curl -fsS http://localhost:3000/health >/dev/null; do sleep 0.2; done
+    pnpm exec playwright test
+    """
+  inputs = sources
+  cache = false   // e2e against external state should always run
+  services { api } // api transitively brings up db
+  deps { install }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+/// One-shot variant: `pkf run migrate-test` runs a DB migration check
+/// against the same ephemeral postgres without needing the api up.
+local migrateTest: Task = new {
+  name = "migrate-test"
+  description = "Verify the migration applies cleanly to a fresh schema"
+  cmd = """
+    until pg_isready -h localhost -p 5432 -q; do sleep 0.2; done
+    pnpm exec drizzle-kit migrate
+    pnpm exec drizzle-kit check
+    """
+  inputs { "migrations/**/*.sql"; "drizzle.config.ts" }
+  services { db }
+  deps { install }
+  env { ["DATABASE_URL"] = "postgres://postgres:test@localhost:5432/postgres" }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+tasks { install; db; api; e2e; migrateTest }
+
+// ---------------------------------------------------------------
+// Notes on `services { ... }` vs `deps { ... }`
+// ---------------------------------------------------------------
+//
+// - `deps { build }` ⇒ "build must finish before this task starts."
+//   Build-time, topological. The runner waits for build to exit.
+//
+// - `services { db }` ⇒ "db must be running while this task's cmd
+//   is running." Lifecycle-scoped. The runner starts db, runs cmd,
+//   then stops db. db's `cmd` is supposed to never exit on its own.
+//
+// The two compose: a task may have both. install (build dep) finishes
+// first, then services come up, then cmd runs, then services go down.
+//
+// v1 caveats:
+//   - No readiness probe — cmd must implement its own retry-loop
+//     for "is the server up?" (the `until pg_isready` pattern).
+//   - Services declared in `services { x }` start regardless of
+//     whether x is also reachable via `deps`.
+//   - If two tasks in the same `pkf run` invocation each declare
+//     `services { db }`, db is started independently per task.

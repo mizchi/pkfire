@@ -253,8 +253,25 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 		return Result{Name: name, Key: key, Outcome: OutcomeHit}, nil
 	}
 
+	// If the task declares `services`, bring them up before invoking
+	// the task's cmd and tear them down once it finishes (success or
+	// failure). Services run for the duration of this task only;
+	// concurrent runs of other tasks are unaffected.
+	var serviceCleanup func()
+	if len(task.Services) > 0 {
+		cleanup, err := o.startServices(ctx, name, p, ioMu)
+		if err != nil {
+			return Result{Name: name, Key: key}, err
+		}
+		serviceCleanup = cleanup
+	}
+
 	var stdoutBuf, stderrBuf bytes.Buffer
 	runErr := o.runner.RunWithIO(ctx, name, task, p.Defaults, &stdoutBuf, &stderrBuf)
+
+	if serviceCleanup != nil {
+		serviceCleanup()
+	}
 
 	ioMu.Lock()
 	io.Copy(o.stderr, &stderrBuf)
@@ -278,6 +295,68 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	}
 	o.logLine(ioMu, "[pkf] %s: %s %s\n", name, outcome, short)
 	return Result{Name: name, Key: key, Outcome: outcome}, nil
+}
+
+// startServices brings up every task listed in the named task's
+// `services` field (recursively — a service that itself declares
+// `services` has its dependencies started first). Returns a cleanup
+// func that cancels the service context and waits for every supervised
+// process to exit cleanly. The cleanup is idempotent.
+//
+// Errors are returned for: a referenced service name that isn't
+// declared in the Taskfile, or a referenced task that exists but has
+// `service = false`. Both are configuration mistakes worth surfacing
+// before the task's `cmd` ever runs.
+func (o *Orchestrator) startServices(ctx context.Context, taskName string, p *Plan, ioMu *sync.Mutex) (func(), error) {
+	svcCtx, svcCancel := context.WithCancel(ctx)
+	wg := &sync.WaitGroup{}
+	started := make(map[string]bool)
+
+	if err := o.startServiceTree(svcCtx, taskName, p, started, wg, ioMu); err != nil {
+		svcCancel()
+		wg.Wait()
+		return nil, err
+	}
+
+	cleanup := func() {
+		svcCancel()
+		wg.Wait()
+	}
+	return cleanup, nil
+}
+
+func (o *Orchestrator) startServiceTree(ctx context.Context, taskName string, p *Plan, started map[string]bool, wg *sync.WaitGroup, ioMu *sync.Mutex) error {
+	task := p.Tasks[taskName]
+	for _, svcName := range task.Services {
+		if started[svcName] {
+			continue
+		}
+		svcTask, ok := p.Tasks[svcName]
+		if !ok {
+			return fmt.Errorf("task %q references service %q, which is not declared", taskName, svcName)
+		}
+		if !svcTask.Service {
+			return fmt.Errorf("task %q lists %q in services, but %q has service=false", taskName, svcName, svcName)
+		}
+		started[svcName] = true
+
+		// Recurse before launching so deeper services in the chain are
+		// up before the ones that depend on them.
+		if err := o.startServiceTree(ctx, svcName, p, started, wg, ioMu); err != nil {
+			return err
+		}
+
+		o.logLine(ioMu, "[pkf] %s: starting service %q\n", taskName, svcName)
+		wg.Add(1)
+		go func(name string, t *config.Task) {
+			defer wg.Done()
+			// Service stdout/stderr go straight through to the
+			// orchestrator's writers — server logs are interactive
+			// during the run, not buffered until the task finishes.
+			_ = o.runner.RunWithIO(ctx, name, t, p.Defaults, o.stdout, o.stderr)
+		}(svcName, svcTask)
+	}
+	return nil
 }
 
 func (o *Orchestrator) logLine(mu *sync.Mutex, format string, args ...any) {

@@ -1,0 +1,91 @@
+/// Recipe 08: multi-service `pkf up`.
+///
+/// One command brings up a small dev stack — a database, an API that
+/// talks to the database, and a frontend that talks to the API.
+/// `pkf up dev` starts all three; Ctrl+C releases the whole tree.
+/// `pkf up --watch dev` adds the develop loop: a save in any source
+/// stops every service, re-runs the upstream build steps, and starts
+/// the services again with the new code.
+///
+/// v1 caveat: services start *concurrently*. The runner has no
+/// readiness probe yet, so dependent services must implement their
+/// own retry (the `pg_isready` loop in `api`'s cmd is the pattern).
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "src/**/*.ts"
+  "package.json"
+}
+
+local install: Task = new {
+  name = "install"
+  description = "Resolve dependencies (cached on lockfile)"
+  cmd = "pnpm install --frozen-lockfile --silent"
+  inputs { "package.json"; "pnpm-lock.yaml" }
+  outputs { "node_modules" }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+local db: Task = new {
+  name = "db"
+  description = "Postgres in a foreground container — pkf reaps it on Ctrl+C"
+  cmd = "docker run --rm --name=pkfire-db -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16"
+  service = true
+  // Postgres takes ~3s to crash-recover on SIGTERM; give it more room
+  // than the default 5s before we escalate to SIGKILL.
+  shutdownTimeoutSeconds = 15
+}
+
+local api: Task = new {
+  name = "api"
+  description = "API server; waits for postgres before exec-ing node"
+  cmd = """
+    until pg_isready -h localhost -p 5432 -q; do sleep 0.2; done
+    exec pnpm exec tsx src/api/server.ts
+    """
+  inputs = sources
+  deps { install; db }
+  service = true
+  env { ["DATABASE_URL"] = "postgres://postgres:dev@localhost:5432/postgres" }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+local web: Task = new {
+  name = "web"
+  description = "Frontend dev server; assumes api is on :3000"
+  cmd = "exec pnpm exec vite dev --port 5173"
+  inputs = sources
+  deps { install; api }
+  service = true
+  env { ["VITE_API"] = "http://localhost:3000" }
+  tools { ["node"] = "24"; ["pnpm"] = "10" }
+}
+
+/// `dev` aggregates the three services. `pkf up dev` starts them all;
+/// `pkf up api` starts only api + db (its transitive service deps).
+local dev: Task = new {
+  name = "dev"
+  description = "Bring up the full stack: db + api + web"
+  // The aggregate's cmd is a placeholder — `pkf up` never executes it
+  // because every dep is a service. It does, however, need to be valid.
+  cmd = "true"
+  cache = false
+  deps { db; api; web }
+}
+
+tasks { install; db; api; web; dev }
+
+// ---------------------------------------------------------------
+// Notes on the `cmd = "exec ..."` pattern
+// ---------------------------------------------------------------
+//
+// pkfire runs `cmd` via `<shell> -c <cmd>`. Without `exec`, the shell
+// stays as the parent process and the real server is its child. The
+// runner sets the shell as a process-group leader and signals the
+// whole group on shutdown, so even non-`exec` cmds get reaped — but
+// `exec` lets the server replace the shell and receive signals
+// directly, which gives cleaner logs and one fewer pid in `ps`.
+//
+// `cmd = "trap 'kill 0' EXIT INT TERM; node server.js & wait"` is the
+// fallback if your shell doesn't support `exec` or you need a
+// pre-flight step in the same `cmd`.

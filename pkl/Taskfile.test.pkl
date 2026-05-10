@@ -33,6 +33,30 @@ facts {
     build.shell == "bash"
   }
 
+  ["defaults: service is false"] {
+    build.service == false
+  }
+
+  ["defaults: shutdownTimeoutSeconds is 5"] {
+    build.shutdownTimeoutSeconds == 5
+  }
+
+  ["service flag round-trips"] {
+    (new Schema.Task { name = "dev"; cmd = "node server.js"; service = true }).service == true
+  }
+
+  ["services field round-trips Task references"] {
+    let (api = new Schema.Task { name = "api"; cmd = "exec node server.js"; service = true })
+    let (e2e = new Schema.Task { name = "e2e"; cmd = "vitest"; cache = false; services { api } })
+      e2e.services.toList().first.name == "api"
+  }
+
+  ["negative shutdownTimeoutSeconds is rejected"] {
+    module.catch(() ->
+      (new Schema.Task { name = "x"; cmd = "y"; shutdownTimeoutSeconds = -1 }).shutdownTimeoutSeconds
+    ) != null
+  }
+
   ["deps reference returns the same Task instance"] {
     test.deps.toList().first.name == "build"
   }

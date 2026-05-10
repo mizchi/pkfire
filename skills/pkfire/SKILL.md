@@ -59,13 +59,16 @@ class Task {
   cache: Boolean = true                           // false = always run
   workdir: String?     = null                     // relative to Taskfile dir
   description: String? = null
+  service: Boolean = false                        // long-running, supervised by `pkf up`
+  shutdownTimeoutSeconds: Int = 5                 // SIGTERM grace before SIGKILL
+  services: Listing<Task> = new {}                // services to bring up while this task runs
 }
 ```
 
 ## Authoring template (always start from this)
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   // file globs your build reads from
@@ -104,6 +107,8 @@ run, then caches the new package locally.
 | [`assets/recipes/05-remote-cache.pkl`](./assets/recipes/05-remote-cache.pkl) | Same Taskfile, configured via env to use a remote cache |
 | [`assets/recipes/06-split-and-import.pkl`](./assets/recipes/06-split-and-import.pkl) | Single entry point, definitions split into `shared/` + `tasks/` |
 | [`assets/recipes/07-hierarchical-amends.pkl`](./assets/recipes/07-hierarchical-amends.pkl) | Per-service Taskfiles that `amends` a project-root template |
+| [`assets/recipes/08-services.pkl`](./assets/recipes/08-services.pkl) | `pkf up`: multiple long-running services with shared lifecycle |
+| [`assets/recipes/09-test-against-services.pkl`](./assets/recipes/09-test-against-services.pkl) | `pkf run e2e` with `services { api }` — ephemeral stack for one-shot test |
 
 ## Project layout
 
@@ -139,7 +144,7 @@ The root `Taskfile.pkl` `import`s each fragment and spreads its
 `tasks` Listing:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl"
 import "tasks/build.pkl" as bt
 import "tasks/test.pkl" as tt
 
@@ -220,6 +225,96 @@ pkf run lint    # finds the project-root Taskfile.pkl
 An explicit `-f` opts out of walk-up — useful when the path is
 relative to the *invocation* directory rather than to the Taskfile.
 
+## Long-running services (`pkf up`)
+
+Tasks marked `service = true` are long-running processes — dev
+servers, databases, watchers — that pkfire supervises rather than
+caches. `pkf up <task>` starts every service in the target's
+subgraph, blocks until Ctrl+C, then sends SIGTERM to each service's
+*process group* (so `bash -c "node server.js"` does not leak its
+node child) and escalates to SIGKILL after `shutdownTimeoutSeconds`
+(default 5).
+
+```pkl
+local db: Task = new {
+  name = "db"
+  cmd = "exec postgres -D ./data"
+  service = true
+  shutdownTimeoutSeconds = 15
+}
+
+local api: Task = new {
+  name = "api"
+  // `until pg_isready ...` is a hand-rolled readiness wait. v1 of
+  // `pkf up` starts every service simultaneously; dependent services
+  // must retry until upstream is ready.
+  cmd = """
+    until pg_isready -q; do sleep 0.2; done
+    exec node server.js
+    """
+  service = true
+  deps { db }
+}
+
+tasks { db; api }
+```
+
+```sh
+pkf up api               # starts db + api, blocks until Ctrl+C
+pkf up --watch api       # also restarts both on a source save
+```
+
+Rules of thumb:
+
+- **Use `exec`** in the `cmd` so the real binary replaces the shell
+  and receives signals directly — gives one fewer pid in `ps` and
+  clearer logs. The runner sets the cmd's process group regardless,
+  so non-`exec` cmds still get reaped.
+- **`pkf run` rejects services in v1.** The runner happily blocks
+  forever, but `pkf up` is the supervisor that knows about the
+  service lifecycle. Use `pkf run` for tasks that terminate.
+- **Non-service tasks may not depend on services.** A `build`
+  shouldn't `deps { db }` — that means "wait for db to finish",
+  which a service never does. The reverse (`db` as a service that
+  needs `migrate` to run first) is fine.
+- **Cache is implicitly disabled** for service tasks — you never
+  want to "skip" starting a server because its inputs haven't
+  changed.
+
+### Tests that need live servers (`services { ... }` on the task)
+
+For one-shot commands that need backing services for the duration
+of their `cmd` (e2e tests, smoke scripts, migration checks),
+declare them via `services { ... }` on the body task instead of
+running a separate `pkf up`:
+
+```pkl
+local e2e: Task = new {
+  name = "e2e"
+  cmd = """
+    until curl -fsS http://localhost:3000/health >/dev/null; do sleep 0.2; done
+    pnpm exec playwright test
+    """
+  inputs { "tests/**/*.ts" }
+  cache = false
+  services { api }   // api in turn declares services { db }
+}
+```
+
+`pkf run e2e` brings up `api` (and recursively `api`'s own
+services like `db`), runs the test cmd, then stops everything in
+reverse order — same SIGTERM-grace-SIGKILL flow as `pkf up`.
+
+`services { ... }` differs from `deps { ... }` along the
+"finishing" axis: `deps { build }` waits for `build` to *exit
+successfully* before this task starts; `services { db }` waits for
+`db` to *start* (a service is never expected to exit) and keeps it
+running for the duration. The two compose — the same task can
+have both.
+
+Recipe 09 has the full picture, including a Drizzle migration
+check that uses just `services { db }` without `api`.
+
 ## Common pitfalls
 
 - **`A non-local object property cannot have a type annotation`** —
@@ -270,7 +365,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mizchi/pkfire@pkfire@0.1.0
+      - uses: mizchi/pkfire@pkfire@0.2.0
       - run: pkf run ci
 ```
 
@@ -284,7 +379,7 @@ To share cache hits across CI runs and developer machines, point
 `pkf` at a remote cache via env:
 
 ```yaml
-      - uses: mizchi/pkfire@pkfire@0.1.0
+      - uses: mizchi/pkfire@pkfire@0.2.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -295,6 +390,6 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.1.0` to lock both the action.yml and the binary together. |
+| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.2.0` to lock both the action.yml and the binary together. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip Pkl install (e.g. when only `pkf` is needed). |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries land here, and the directory is appended to `GITHUB_PATH`. |
