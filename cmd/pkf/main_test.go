@@ -35,8 +35,8 @@ func TestInitWritesSkeleton(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if !strings.Contains(string(body), `amends "https://raw.githubusercontent.com/mizchi/pkfire/`) {
-		t.Errorf("skeleton missing HTTPS amends line:\n%s", body)
+	if !strings.Contains(string(body), `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@`) {
+		t.Errorf("skeleton missing package amends line:\n%s", body)
 	}
 	if !strings.Contains(string(body), `tasks {`) {
 		t.Errorf("skeleton missing tasks block:\n%s", body)

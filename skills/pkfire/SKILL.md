@@ -65,7 +65,7 @@ class Task {
 ## Authoring template (always start from this)
 
 ```pkl
-amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   // file globs your build reads from
@@ -136,7 +136,7 @@ The root `Taskfile.pkl` `import`s each fragment and spreads its
 `tasks` Listing:
 
 ```pkl
-amends "https://.../Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"
 import "tasks/build.pkl" as bt
 import "tasks/test.pkl" as tt
 

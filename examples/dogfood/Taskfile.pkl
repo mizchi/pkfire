@@ -3,6 +3,12 @@
 /// All deps are *direct Task references*; renaming a task in one place
 /// updates every reference, and a typo becomes a Pkl name-resolution
 /// error before the runner ever starts.
+///
+/// This file deliberately uses a relative `amends` to the in-tree
+/// schema rather than the published package URI: it tests pkfire
+/// against the schema in this commit, including unreleased changes.
+/// Other examples use the package URI — see those for the recommended
+/// form to copy into your own project.
 amends "../../pkl/Taskfile.pkl"
 
 local sources: Listing<String> = new {

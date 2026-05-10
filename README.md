@@ -68,7 +68,7 @@ your project does not need a clone of this repo.
 ## Authoring a Taskfile
 
 ```pkl
-amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"
 
 local build = new Task {
   name = "build"
