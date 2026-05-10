@@ -1,0 +1,15 @@
+name = "pkfire-cache"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+# R2 bucket binding. Create the bucket once with:
+#   wrangler r2 bucket create pkfire-cache
+# `wrangler dev` will use a local emulated bucket unless --remote is passed.
+[[r2_buckets]]
+binding = "CACHE"
+bucket_name = "pkfire-cache"
+
+# AUTH_TOKEN is set as a secret (not committed):
+#   wrangler secret put AUTH_TOKEN
+# When unset, the worker accepts unauthenticated requests — only do this for
+# local development.

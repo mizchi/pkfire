@@ -1,0 +1,15 @@
+{
+  "name": "pkfire-cache-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "smoke": "bash smoke.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250103.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^3.99.0"
+  }
+}
