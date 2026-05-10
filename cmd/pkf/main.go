@@ -1,8 +1,5 @@
 // Command pkf is the pkfire CLI: a typed task runner that loads `Taskfile.pkl`
-// and (eventually) executes tasks with Bazel-style content-addressed caching.
-//
-// Phase 3 wires loading + DAG + serial execution + action-key calculation.
-// Cache restore lands in phase 4; parallel scheduling in phase 5.
+// and executes tasks with Bazel-style content-addressed caching.
 package main
 
 import (
@@ -13,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
@@ -47,6 +45,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdInit(args[1:], stdout, stderr)
 	case "list":
 		return cmdList(args[1:], stdout, stderr)
+	case "graph":
+		return cmdGraph(args[1:], stdout, stderr)
 	case "run":
 		return cmdRun(args[1:], stdout, stderr)
 	default:
@@ -63,17 +63,21 @@ usage:
 
 commands:
   init [-f FILE] [--force]              write a starter Taskfile.pkl
-  run [-f FILE] [-j N] [--print-hash] [--no-cache] <task>
+  run [-f FILE] [-j N] [--dry-run] [--print-hash] [--no-cache] <task>
                                         run a task and its transitive deps
-  list [-f FILE]                        list declared tasks
+  list [-f FILE] [-v]                   list declared tasks (-v: cmd/deps)
+  graph [-f FILE] [--format FMT] [--target TASK]
+                                        emit DAG (formats: dot, mermaid)
   version                               print pkf version
   help                                  show this message
 
 flags:
   -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
   -j, --jobs N           max concurrent tasks (default: NumCPU)
+      --dry-run          print the execution plan and exit (no exec, no cache)
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
+  -v, --verbose          (list only) include cmd preview and deps
 
 cache directory:
   $PKFIRE_CACHE_DIR if set, otherwise $XDG_CACHE_HOME/pkfire (~/.cache/pkfire).
@@ -131,6 +135,8 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("pkf list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
+	verbose := fs.Bool("v", false, "show cmd preview and deps")
+	fs.BoolVar(verbose, "verbose", false, "show cmd preview and deps")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -150,13 +156,132 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	for _, n := range names {
-		t := tf.Tasks[n]
-		desc := ""
-		if t.Description != nil {
-			desc = "  — " + *t.Description
+	if !*verbose {
+		for _, n := range names {
+			t := tf.Tasks[n]
+			desc := ""
+			if t.Description != nil {
+				desc = "  — " + *t.Description
+			}
+			fmt.Fprintf(stdout, "%s%s\n", n, desc)
 		}
-		fmt.Fprintf(stdout, "%s%s\n", n, desc)
+		return nil
+	}
+	for i, n := range names {
+		if i > 0 {
+			fmt.Fprintln(stdout)
+		}
+		t := tf.Tasks[n]
+		fmt.Fprintf(stdout, "%s\n", n)
+		if t.Description != nil {
+			fmt.Fprintf(stdout, "  desc: %s\n", *t.Description)
+		}
+		fmt.Fprintf(stdout, "  cmd:  %s\n", t.Cmd)
+		if len(t.Deps) > 0 {
+			fmt.Fprintf(stdout, "  deps: %s\n", strings.Join(t.Deps, ", "))
+		}
+		if !t.Cache {
+			fmt.Fprintf(stdout, "  cache: disabled\n")
+		}
+	}
+	return nil
+}
+
+func cmdGraph(args []string, stdout, _ io.Writer) error {
+	fs := flag.NewFlagSet("pkf graph", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	format := fs.String("format", "dot", "output format: dot or mermaid")
+	target := fs.String("target", "", "render only the subgraph rooted at this task")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("graph takes no positional args, got %v", fs.Args())
+	}
+	abs, err := filepath.Abs(*file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+	g, err := buildGraph(tf)
+	if err != nil {
+		return err
+	}
+
+	var nodes []string
+	if *target != "" {
+		if !g.Has(*target) {
+			return fmt.Errorf("unknown task: %q", *target)
+		}
+		nodes, err = g.Subgraph(*target)
+		if err != nil {
+			return err
+		}
+	} else {
+		nodes = g.Names()
+	}
+	keep := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		keep[n] = true
+	}
+
+	switch *format {
+	case "dot":
+		return writeDOT(stdout, tf, nodes, keep)
+	case "mermaid":
+		return writeMermaid(stdout, tf, nodes, keep)
+	default:
+		return fmt.Errorf("unknown format %q (want: dot, mermaid)", *format)
+	}
+}
+
+func writeDOT(w io.Writer, tf *config.Taskfile, nodes []string, keep map[string]bool) error {
+	fmt.Fprintln(w, "digraph pkfire {")
+	fmt.Fprintln(w, "  rankdir=LR;")
+	fmt.Fprintln(w, `  node [shape=box, style="rounded,filled", fillcolor="#f8f8ff"];`)
+	for _, n := range nodes {
+		t := tf.Tasks[n]
+		label := n
+		if t.Description != nil {
+			label = fmt.Sprintf("%s\\n%s", n, *t.Description)
+		}
+		fmt.Fprintf(w, "  %q [label=%q];\n", n, label)
+	}
+	for _, n := range nodes {
+		for _, d := range tf.Tasks[n].Deps {
+			if keep[d] {
+				fmt.Fprintf(w, "  %q -> %q;\n", d, n)
+			}
+		}
+	}
+	fmt.Fprintln(w, "}")
+	return nil
+}
+
+// mermaidIDReplacer turns task names into Mermaid-safe node IDs. The set
+// of unsafe characters is conservative — only [A-Za-z0-9_] is accepted by
+// the renderer in id positions.
+var mermaidIDReplacer = strings.NewReplacer(
+	":", "_", "-", "_", "/", "_", ".", "_", " ", "_",
+)
+
+func mermaidID(s string) string { return mermaidIDReplacer.Replace(s) }
+
+func writeMermaid(w io.Writer, tf *config.Taskfile, nodes []string, keep map[string]bool) error {
+	fmt.Fprintln(w, "flowchart LR")
+	for _, n := range nodes {
+		fmt.Fprintf(w, "  %s[%q]\n", mermaidID(n), n)
+	}
+	for _, n := range nodes {
+		for _, d := range tf.Tasks[n].Deps {
+			if keep[d] {
+				fmt.Fprintf(w, "  %s --> %s\n", mermaidID(d), mermaidID(n))
+			}
+		}
 	}
 	return nil
 }
@@ -166,6 +291,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
 	printHash := fs.Bool("print-hash", false, "print action keys and exit")
+	dryRun := fs.Bool("dry-run", false, "print the execution plan and exit")
 	noCache := fs.Bool("no-cache", false, "disable cache for this run")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
@@ -201,7 +327,12 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}
 
 	root := filepath.Dir(abs)
-	if *printHash {
+	switch {
+	case *dryRun && *printHash:
+		return fmt.Errorf("--dry-run and --print-hash are mutually exclusive")
+	case *dryRun:
+		return printDryRun(stdout, tf, order)
+	case *printHash:
 		return printHashes(stdout, root, tf, order)
 	}
 
@@ -249,6 +380,30 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 			return fmt.Errorf("compute key for %q: %w", name, err)
 		}
 		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
+	}
+	return nil
+}
+
+// printDryRun walks the plan in topological order and prints each task's
+// cmd, deps, and cache disposition without running anything or touching
+// the cache directory.
+func printDryRun(stdout io.Writer, tf *config.Taskfile, order []string) error {
+	for i, name := range order {
+		t := tf.Tasks[name]
+		fmt.Fprintf(stdout, "%d. %s\n", i+1, name)
+		if t.Description != nil {
+			fmt.Fprintf(stdout, "   desc: %s\n", *t.Description)
+		}
+		fmt.Fprintf(stdout, "   cmd:  %s\n", t.Cmd)
+		if len(t.Deps) > 0 {
+			fmt.Fprintf(stdout, "   deps: %s\n", strings.Join(t.Deps, ", "))
+		}
+		if !t.Cache {
+			fmt.Fprintf(stdout, "   cache: disabled\n")
+		}
+		if t.Workdir != nil && *t.Workdir != "" {
+			fmt.Fprintf(stdout, "   workdir: %s\n", *t.Workdir)
+		}
 	}
 	return nil
 }

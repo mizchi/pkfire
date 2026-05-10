@@ -41,11 +41,23 @@ tasks {
 ```
 
 ```sh
-pkf list                # show declared tasks
-pkf run test            # builds first, then tests; second run hits cache
-pkf run -j 8 test       # cap parallelism at 8
-pkf run --print-hash test   # show action keys without executing
-pkf run --no-cache test     # bypass cache for this run
+pkf list                       # show declared tasks
+pkf list -v                    # add cmd preview and deps
+pkf run test                   # builds first, then tests; second run hits cache
+pkf run -j 8 test              # cap parallelism at 8
+pkf run --dry-run test         # print the execution plan, do not execute
+pkf run --print-hash test      # print action keys, do not execute
+pkf run --no-cache test        # bypass cache for this run
+pkf graph                      # emit Graphviz DOT for the full DAG
+pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
+pkf graph --target test        # only the subgraph rooted at `test`
+```
+
+Visualizing a Taskfile is a single pipeline:
+
+```sh
+pkf graph | dot -Tsvg -o tasks.svg
+pkf graph --format mermaid > tasks.mmd
 ```
 
 ## Pointing at the schema

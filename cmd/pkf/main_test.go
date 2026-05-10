@@ -3,10 +3,27 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func requirePkl(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("pkl"); err != nil {
+		t.Skip("pkl CLI not on PATH; skipping integration test")
+	}
+}
+
+func basicTaskfile(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs("../../examples/basic/Taskfile.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
 
 func TestInitWritesSkeleton(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "Taskfile.pkl")
@@ -55,5 +72,81 @@ func TestInitForceOverwrites(t *testing.T) {
 	}
 	if string(body) == "// existing" {
 		t.Error("--force should have overwritten the file")
+	}
+}
+
+func TestListVerboseShowsCmdAndDeps(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", basicTaskfile(t), "-v"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList -v: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "cmd:  go build") {
+		t.Errorf("verbose output missing build cmd:\n%s", out)
+	}
+	if !strings.Contains(out, "deps: build") {
+		t.Errorf("verbose output missing deps line:\n%s", out)
+	}
+}
+
+func TestGraphDOT(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", basicTaskfile(t)}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "digraph pkfire {") {
+		t.Errorf("DOT output missing header:\n%s", out)
+	}
+	if !strings.Contains(out, `"build" -> "test"`) {
+		t.Errorf("DOT output missing build->test edge:\n%s", out)
+	}
+}
+
+func TestGraphMermaid(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	err := cmdGraph([]string{"-f", basicTaskfile(t), "--format", "mermaid"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("cmdGraph mermaid: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "flowchart LR") {
+		t.Errorf("mermaid output missing header:\n%s", out)
+	}
+	if !strings.Contains(out, "build --> test") {
+		t.Errorf("mermaid output missing build->test edge:\n%s", out)
+	}
+}
+
+func TestGraphTargetSubgraph(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	err := cmdGraph([]string{"-f", basicTaskfile(t), "--target", "build"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("cmdGraph --target build: %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, `"test"`) {
+		t.Errorf("--target build should exclude `test` node:\n%s", out)
+	}
+	if !strings.Contains(out, `"build"`) {
+		t.Errorf("--target build should include `build` node:\n%s", out)
+	}
+}
+
+func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", basicTaskfile(t), "--dry-run", "test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun --dry-run: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"1. build", "2. test", "cmd:  go build", "cmd:  go test"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry-run output missing %q:\n%s", want, out)
+		}
 	}
 }

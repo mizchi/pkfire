@@ -16,11 +16,22 @@ class Task {
   shell: String = "bash"
 
   /// Glob patterns of input files. Their content hash feeds the action key.
-  /// Examples: "src/**/*.go", "go.mod".
+  ///
+  /// Patterns support `*`, `**`, `?`, and character classes via doublestar.
+  /// Literal paths that do not exist are *silently ignored* (matched 0 times),
+  /// which means a missing file does NOT raise an error — it just contributes
+  /// nothing to the action key. Use `pkf run --print-hash` if you need to
+  /// confirm exactly which files end up hashed.
+  ///
+  /// Examples: "src/**/*.go", "go.mod", "config/*.yaml".
   inputs: Listing<String> = new {}
 
   /// Files or directories produced by this task. Restored on cache hit.
-  /// Paths are relative to `workdir` (or repo root when `workdir` is null).
+  ///
+  /// Paths are relative to `workdir` (or the Taskfile's directory when
+  /// `workdir` is null). *Parent directories are not auto-created* — if
+  /// your `cmd` writes to `bin/app`, prefix it with `mkdir -p bin && ...`
+  /// or use a tool that creates the directory itself (e.g. `go build -o`).
   outputs: Listing<String> = new {}
 
   /// Names of tasks this one depends on. Cycles are rejected at load time.
