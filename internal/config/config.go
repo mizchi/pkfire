@@ -34,9 +34,15 @@ type Defaults struct {
 }
 
 // Taskfile is the decoded top-level module.
+//
+// `Canonical` is populated by Load with the Pkl module's canonical form
+// (PCF). It is not decoded from Pkl — the field tag is empty so pkl-go
+// skips it during EvaluateModule. Phase 3 hashes this as part of the
+// task action key so any change to the underlying Pkl invalidates caches.
 type Taskfile struct {
-	Defaults Defaults         `pkl:"defaults"`
-	Tasks    map[string]*Task `pkl:"tasks"`
+	Defaults  Defaults         `pkl:"defaults"`
+	Tasks     map[string]*Task `pkl:"tasks"`
+	Canonical []byte           `pkl:"-"`
 }
 
 // Load evaluates the Pkl module at `path` and decodes it into a Taskfile.
@@ -51,11 +57,17 @@ func Load(ctx context.Context, path string) (*Taskfile, error) {
 	defer ev.Close()
 
 	var tf Taskfile
-	if err := ev.EvaluateModule(ctx, pkl.FileSource(path), &tf); err != nil {
+	src := pkl.FileSource(path)
+	if err := ev.EvaluateModule(ctx, src, &tf); err != nil {
 		return nil, fmt.Errorf("evaluate %s: %w", path, err)
 	}
 	if len(tf.Tasks) == 0 {
 		return nil, errors.New("Taskfile declares no tasks")
 	}
+	canonical, err := ev.EvaluateOutputBytes(ctx, src)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize %s: %w", path, err)
+	}
+	tf.Canonical = canonical
 	return &tf, nil
 }

@@ -1,8 +1,8 @@
 // Command pkf is the pkfire CLI: a typed task runner that loads `Taskfile.pkl`
 // and (eventually) executes tasks with Bazel-style content-addressed caching.
 //
-// Phase 1 wires loading + DAG + serial execution. Cache, parallelism, and
-// remote storage land in later phases.
+// Phase 3 wires loading + DAG + serial execution + action-key calculation.
+// Cache restore lands in phase 4; parallel scheduling in phase 5.
 package main
 
 import (
@@ -16,6 +16,7 @@ import (
 
 	"github.com/mizchi/pkfire/internal/config"
 	"github.com/mizchi/pkfire/internal/graph"
+	"github.com/mizchi/pkfire/internal/hash"
 	"github.com/mizchi/pkfire/internal/runner"
 )
 
@@ -57,40 +58,38 @@ usage:
   pkf <command> [args]
 
 commands:
-  run [-f FILE] <task>   run a task and its transitive deps
-  list [-f FILE]         list declared tasks
-  version                print pkf version
-  help                   show this message
+  run [-f FILE] [--print-hash] <task>   run a task and its transitive deps
+  list [-f FILE]                        list declared tasks
+  version                               print pkf version
+  help                                  show this message
 
 flags:
   -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
+      --print-hash       print action keys for the target subgraph and exit
 `)
 }
 
-func parseFile(args []string) (string, []string, error) {
-	fs := flag.NewFlagSet("pkf", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+func newFileFlag(fs *flag.FlagSet) *string {
 	file := fs.String("f", "Taskfile.pkl", "path to Taskfile.pkl")
 	fs.StringVar(file, "file", "Taskfile.pkl", "path to Taskfile.pkl")
-	if err := fs.Parse(args); err != nil {
-		return "", nil, err
-	}
-	abs, err := filepath.Abs(*file)
-	if err != nil {
-		return "", nil, err
-	}
-	return abs, fs.Args(), nil
+	return file
 }
 
 func cmdList(args []string, stdout, _ io.Writer) error {
-	file, rest, err := parseFile(args)
+	fs := flag.NewFlagSet("pkf list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("list takes no positional args, got %v", fs.Args())
+	}
+	abs, err := filepath.Abs(*file)
 	if err != nil {
 		return err
 	}
-	if len(rest) > 0 {
-		return fmt.Errorf("list takes no positional args, got %v", rest)
-	}
-	tf, err := config.Load(context.Background(), file)
+	tf, err := config.Load(context.Background(), abs)
 	if err != nil {
 		return err
 	}
@@ -111,26 +110,30 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 }
 
 func cmdRun(args []string, stdout, stderr io.Writer) error {
-	file, rest, err := parseFile(args)
-	if err != nil {
+	fs := flag.NewFlagSet("pkf run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	printHash := fs.Bool("print-hash", false, "print action keys and exit")
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	rest := fs.Args()
 	if len(rest) != 1 {
 		return fmt.Errorf("run requires exactly one task name")
 	}
 	target := rest[0]
 
+	abs, err := filepath.Abs(*file)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
-	tf, err := config.Load(ctx, file)
+	tf, err := config.Load(ctx, abs)
 	if err != nil {
 		return err
 	}
 
-	nodes := make([]graph.Node, 0, len(tf.Tasks))
-	for name, t := range tf.Tasks {
-		nodes = append(nodes, graph.Node{Name: name, Deps: append([]string(nil), t.Deps...)})
-	}
-	g, err := graph.Build(nodes)
+	g, err := buildGraph(tf)
 	if err != nil {
 		return err
 	}
@@ -142,10 +145,51 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	root := filepath.Dir(abs)
+	if *printHash {
+		return printHashes(stdout, root, tf, order)
+	}
+
 	r := runner.New(runner.Options{
 		Stdout:  stdout,
 		Stderr:  stderr,
-		Workdir: filepath.Dir(file),
+		Workdir: root,
 	})
 	return r.RunAll(ctx, order, tf.Tasks, &tf.Defaults)
+}
+
+func buildGraph(tf *config.Taskfile) (*graph.Graph, error) {
+	nodes := make([]graph.Node, 0, len(tf.Tasks))
+	for name, t := range tf.Tasks {
+		nodes = append(nodes, graph.Node{Name: name, Deps: append([]string(nil), t.Deps...)})
+	}
+	return graph.Build(nodes)
+}
+
+// printHashes computes and prints the action key of every task in `order`.
+// Cache state is not consulted; this is a diagnostic for understanding why
+// a task does or does not hit cache.
+func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []string) error {
+	configHash := hash.HashBytes(tf.Canonical)
+	for _, name := range order {
+		task := tf.Tasks[name]
+		entries, err := hash.HashInputs(root, task.Inputs)
+		if err != nil {
+			return fmt.Errorf("hash inputs for %q: %w", name, err)
+		}
+		shell := task.Shell
+		if shell == "" {
+			shell = tf.Defaults.Shell
+		}
+		action := &hash.Action{
+			Cmd:        task.Cmd,
+			Shell:      shell,
+			Env:        hash.MergeEnv(tf.Defaults.Env, task.Env),
+			Tools:      task.Tools,
+			Inputs:     entries,
+			ConfigHash: configHash,
+		}
+		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(action.Key()))
+	}
+	return nil
 }
