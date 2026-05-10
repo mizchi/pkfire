@@ -24,6 +24,9 @@ jobs:
           sudo mv /tmp/pkl-cli /usr/local/bin/pkl
           pkl --version
 
+      - name: Check pkfire@<ver> reference consistency
+        run: scripts/check-version-consistency.sh
+
       - name: Build pkf
         run: go install ./cmd/pkf
 

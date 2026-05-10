@@ -1,6 +1,7 @@
 # pkfire
 
-[![Nix CI](https://github.com/mizchi/pkfire/actions/workflows/nix.yml/badge.svg)](https://github.com/mizchi/pkfire/actions/workflows/nix.yml)
+[![Test](https://github.com/mizchi/pkfire/actions/workflows/test.yml/badge.svg)](https://github.com/mizchi/pkfire/actions/workflows/test.yml)
+[![Nix](https://github.com/mizchi/pkfire/actions/workflows/nix.yml/badge.svg)](https://github.com/mizchi/pkfire/actions/workflows/nix.yml)
 
 > Typed task runner with Bazel-style incremental caching, configured in [Pkl](https://pkl-lang.org/).
 
@@ -262,6 +263,7 @@ cache.
 | 5 | Watch mode (`pkf run --watch`) | ✅ |
 | 6 | Remote cache (HTTP backend + reference Cloudflare Worker) | ✅ |
 | 7 | Pkl package publish (`pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire`) | ✅ |
+| 8 | GitHub Action (`mizchi/pkfire@pkfire@<ver>`) + pre-built binaries on release | ✅ |
 
 ## Development
 
@@ -276,13 +278,19 @@ pkf run -f examples/dogfood/Taskfile.pkl ci   # dogfood
 To cut a Pkl package release:
 
 ```sh
-# 1. bump version in pkl/PklProject
-# 2. tag and push
-git tag pkfire@0.2.0
-git push origin pkfire@0.2.0
-# 3. .github/workflows/pkl-publish.yml builds and uploads the four
-#    artifacts (metadata, .sha256, .zip, .zip.sha256) to the release.
+# 1. bump every `pkfire@<old>` reference (PklProject + examples + recipes
+#    + skills + README) in one shot
+scripts/bump-version.sh <new-version>
+# 2. commit, tag, push
+git commit -am "release: pkfire@<new-version>"
+git tag    "pkfire@<new-version>"
+git push origin main "pkfire@<new-version>"
+# 3. .github/workflows/pkl-publish.yml gates on the test suite, then
+#    builds and uploads the Pkl package + cross-compiled binaries.
 ```
+
+Both pre-commit and CI run `scripts/check-version-consistency.sh` so a
+forgotten reference becomes a red build, not a stale URI in the wild.
 
 ## License
 

@@ -35,11 +35,29 @@ func TestInitWritesSkeleton(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if !strings.Contains(string(body), `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@`) {
-		t.Errorf("skeleton missing package amends line:\n%s", body)
+	hasPackageURI := strings.Contains(string(body), `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@`)
+	hasFallbackURL := strings.Contains(string(body), `amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"`)
+	if !hasPackageURI && !hasFallbackURL {
+		t.Errorf("skeleton missing a valid amends line:\n%s", body)
 	}
 	if !strings.Contains(string(body), `tasks {`) {
 		t.Errorf("skeleton missing tasks block:\n%s", body)
+	}
+}
+
+func TestSchemaAmendsURIVariesWithVersion(t *testing.T) {
+	prev := version
+	t.Cleanup(func() { version = prev })
+
+	version = "dev"
+	if got := schemaAmendsURI(); !strings.HasPrefix(got, "https://raw.githubusercontent.com/") {
+		t.Errorf("dev build should fall back to HTTPS, got %q", got)
+	}
+
+	version = "0.2.0"
+	want := `package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.2.0#/Taskfile.pkl`
+	if got := schemaAmendsURI(); got != want {
+		t.Errorf("release build should pin to its version: got %q want %q", got, want)
 	}
 }
 
