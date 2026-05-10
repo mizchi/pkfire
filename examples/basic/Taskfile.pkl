@@ -1,0 +1,19 @@
+/// Minimal example consumed by smoke tests.
+amends "../../pkl/Taskfile.pkl"
+
+tasks {
+  ["hello"] = new Task {
+    cmd = "echo hello from pkfire"
+    description = "smoke task"
+  }
+  ["build"] = new Task {
+    cmd = "go build -o bin/app ./cmd/app"
+    inputs { "**/*.go"; "go.mod"; "go.sum" }
+    outputs { "bin/app" }
+  }
+  ["test"] = new Task {
+    cmd = "go test ./..."
+    inputs { "**/*.go" }
+    deps { "build" }
+  }
+}

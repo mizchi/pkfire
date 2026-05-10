@@ -1,0 +1,13 @@
+/bin/
+/dist/
+*.test
+*.out
+.DS_Store
+
+# pkl
+.out/
+*.pkl-expected.pcf.actual
+
+# editor
+.idea/
+.vscode/

@@ -1,0 +1,50 @@
+/// Schema-level tests for `Taskfile.pkl`.
+///
+/// Run with: `pkl test pkl/Taskfile.test.pkl`
+amends "pkl:test"
+
+import "Taskfile.pkl" as Schema
+
+local sample: Schema = new {
+  tasks {
+    ["build"] = new Schema.Task {
+      cmd = "go build ./..."
+      inputs { "**/*.go"; "go.mod" }
+      outputs { "bin/pkf" }
+    }
+    ["test"] = new Schema.Task {
+      cmd = "go test ./..."
+      inputs { "**/*.go" }
+      deps { "build" }
+    }
+  }
+}
+
+facts {
+  ["task names match their map keys via cmd presence"] {
+    sample.tasks["build"].cmd == "go build ./..."
+    sample.tasks["test"].cmd == "go test ./..."
+  }
+
+  ["defaults: cache is enabled"] {
+    sample.tasks["build"].cache == true
+  }
+
+  ["defaults: shell is bash"] {
+    sample.tasks["build"].shell == "bash"
+  }
+
+  ["deps reference existing task names"] {
+    sample.tasks["test"].deps.toList().every((d) -> sample.tasks.containsKey(d))
+  }
+
+  ["empty cmd is rejected"] {
+    module.catch(() -> (new Schema.Task { cmd = "" }).cmd) != null
+  }
+}
+
+examples {
+  ["minimal build task"] {
+    sample.tasks["build"]
+  }
+}

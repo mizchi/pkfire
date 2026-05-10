@@ -1,0 +1,5 @@
+amends "pkl:Project"
+
+tests {
+  "pkl/Taskfile.test.pkl"
+}

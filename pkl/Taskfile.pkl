@@ -1,0 +1,57 @@
+/// pkfire Taskfile schema.
+///
+/// Users author a `Taskfile.pkl` that amends this module and fills in `tasks`.
+/// The pkfire CLI (`pkf`) evaluates the result, builds a DAG, and runs tasks
+/// with content-addressed caching (Bazel-style action keys).
+@ModuleInfo { minPklVersion = "0.31.0" }
+open module pkfire.Taskfile
+
+/// A single unit of work. Cache key is derived from `cmd`, `env`, `inputs`,
+/// `tools`, and the canonical form of this task's pkl subgraph.
+class Task {
+  /// Shell command to execute. Run via `shell -c <cmd>`.
+  cmd: String(length > 0)
+
+  /// Shell binary used to run `cmd`. Defaults to `bash`.
+  shell: String = "bash"
+
+  /// Glob patterns of input files. Their content hash feeds the action key.
+  /// Examples: "src/**/*.go", "go.mod".
+  inputs: Listing<String> = new {}
+
+  /// Files or directories produced by this task. Restored on cache hit.
+  /// Paths are relative to `workdir` (or repo root when `workdir` is null).
+  outputs: Listing<String> = new {}
+
+  /// Names of tasks this one depends on. Cycles are rejected at load time.
+  deps: Listing<String> = new {}
+
+  /// Environment variables exposed to `cmd`. Only these contribute to the
+  /// action key — the ambient environment is intentionally ignored.
+  env: Mapping<String, String> = new {}
+
+  /// External tools whose version should be part of the action key
+  /// (e.g. "go" -> "1.26.2"). Typically populated from mise / `which`.
+  tools: Mapping<String, String> = new {}
+
+  /// When false, the task always runs and its result is never cached.
+  cache: Boolean = true
+
+  /// Working directory relative to repo root. Null means repo root.
+  workdir: String? = null
+
+  /// Free-form description shown by `pkf list`.
+  description: String? = null
+}
+
+/// Project-level defaults shared by all tasks unless overridden via `amends`.
+class Defaults {
+  shell: String = "bash"
+  env: Mapping<String, String> = new {}
+}
+
+defaults: Defaults = new {}
+
+/// All declared tasks, keyed by their identifier. Empty Taskfiles are
+/// rejected by the CLI (`pkf`), not by Pkl itself.
+tasks: Mapping<String, Task> = new {}

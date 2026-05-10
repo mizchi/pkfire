@@ -1,0 +1,21 @@
+examples {
+  ["minimal build task"] {
+    new {
+      cmd = "go build ./..."
+      shell = "bash"
+      inputs {
+        "**/*.go"
+        "go.mod"
+      }
+      outputs {
+        "bin/pkf"
+      }
+      deps {}
+      env {}
+      tools {}
+      cache = true
+      workdir = null
+      description = null
+    }
+  }
+}
