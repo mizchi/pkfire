@@ -61,23 +61,44 @@ package manager.
 
 ### GitHub Actions
 
-```yaml
-- uses: mizchi/pkfire@pkfire@0.1.0
-- run: pkf run ci
-```
-
-The action installs the matching `pkf` binary and the Pkl CLI on the
-runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`. Pin
-the action ref to a release tag for reproducibility; `@main` works
-for testing but tracks unreleased commits.
+A setup-only composite action lives at the repo root:
 
 ```yaml
-# pin to a specific release explicitly:
-- uses: mizchi/pkfire@main
-  with:
-    version: pkfire@0.1.0
-    pkl-version: "0.31.1"   # default, set to "none" to skip Pkl install
+# .github/workflows/ci.yml
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mizchi/pkfire@pkfire@0.1.0
+      - run: pkf run ci
 ```
+
+The action downloads the matching `pkf` binary and the Pkl CLI for
+the runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`.
+After it runs, the rest of the workflow calls `pkf` directly — no
+`go install`, no Pkl bootstrap.
+
+Pin the action ref to a release tag (`pkfire@0.1.0`) so the action
+code, the `pkf` binary, and the Pkl schema all move together. To
+share cache hits across CI runs and developers, wire the remote
+cache env:
+
+```yaml
+      - uses: mizchi/pkfire@pkfire@0.1.0
+      - run: pkf run ci
+        env:
+          PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
+          PKFIRE_REMOTE_TOKEN: ${{ secrets.PKFIRE_REMOTE_TOKEN }}
+```
+
+Inputs:
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `version` | the action ref, falling back to the latest release | Pin both the action and the binary together by writing `mizchi/pkfire@pkfire@0.1.0`. Override here if you want to install a different binary than the action ref. |
+| `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
+| `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
 
 ### Nix (no Go toolchain required)
 

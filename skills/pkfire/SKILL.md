@@ -261,3 +261,40 @@ Local cache stays the source of truth; the remote is consulted on a
 local miss and warmed on a remote hit. See `examples/remote-cache-worker/`
 in the upstream repo for a Cloudflare Worker reference backend that
 GCs entries older than `CACHE_TTL_DAYS` (default 7) on a daily cron.
+
+## Running pkfire in GitHub Actions
+
+```yaml
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mizchi/pkfire@pkfire@0.1.0
+      - run: pkf run ci
+```
+
+The `mizchi/pkfire` action is a setup-only composite that installs
+the matching `pkf` binary plus the Pkl CLI on the runner
+(`linux/darwin × amd64/arm64`) and adds them to `PATH`. After it
+runs, the rest of the workflow uses `pkf` directly — no extra
+tooling steps.
+
+To share cache hits across CI runs and developer machines, point
+`pkf` at a remote cache via env:
+
+```yaml
+      - uses: mizchi/pkfire@pkfire@0.1.0
+      - run: pkf run ci
+        env:
+          PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
+          PKFIRE_REMOTE_TOKEN: ${{ secrets.PKFIRE_REMOTE_TOKEN }}
+```
+
+Inputs:
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.1.0` to lock both the action.yml and the binary together. |
+| `pkl-version` | `0.31.1` | Set to `none` to skip Pkl install (e.g. when only `pkf` is needed). |
+| `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries land here, and the directory is appended to `GITHUB_PATH`. |
