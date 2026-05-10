@@ -1,5 +1,7 @@
 # pkfire
 
+[![Nix CI](https://github.com/mizchi/pkfire/actions/workflows/nix.yml/badge.svg)](https://github.com/mizchi/pkfire/actions/workflows/nix.yml)
+
 > Typed task runner with Bazel-style incremental caching, configured in [Pkl](https://pkl-lang.org/).
 
 `pkfire` (CLI: `pkf`) replaces hand-written `justfile`s with a typed,
@@ -8,29 +10,20 @@ dependencies; `pkf` builds a DAG and executes only the steps whose
 action key has changed. Cached outputs are restored from a
 content-addressed store under `~/.cache/pkfire`.
 
-## Quick start
+## Install
 
-```sh
-go install github.com/mizchi/pkfire/cmd/pkf@latest
-
-mkdir my-project && cd my-project
-pkf init                # writes a starter Taskfile.pkl
-pkf run hello           # smoke the generated task
-```
-
-`pkf init` writes a Taskfile that `amends` the schema over HTTPS, so
-your project does not need a clone of this repo.
-
-### Nix flake (no Go required)
-
-The flake at the repository root produces a `pkf` derivation that
-wraps the binary so the bundled Pkl CLI is on `PATH` automatically.
-Users do not need a Go toolchain.
+### Nix (recommended; no Go toolchain required)
 
 ```sh
 nix run github:mizchi/pkfire -- run hello       # one-shot
 nix profile install github:mizchi/pkfire        # persistent
 ```
+
+The flake builds the `pkf` binary and wraps it so the bundled Pkl CLI
+is on `PATH` automatically — end users do not install Go or Pkl
+themselves. The Nix workflow on every push to `main` and on every PR
+verifies the flake builds cleanly on `aarch64-darwin` and
+`x86_64-linux` runners; the badge above tracks its status.
 
 In a home-manager flake:
 
@@ -50,6 +43,27 @@ In a home-manager flake:
 
 `nix develop` opens a shell with `go`, `pkl`, and `gopls` for working
 on pkfire itself.
+
+### Go
+
+```sh
+go install github.com/mizchi/pkfire/cmd/pkf@latest
+```
+
+You also need the Pkl CLI (`pkl`) on `PATH`; install it from
+[pkl-lang.org](https://pkl-lang.org/main/current/pkl-cli/) or via your
+package manager.
+
+## Quick start
+
+```sh
+mkdir my-project && cd my-project
+pkf init                # writes a starter Taskfile.pkl
+pkf run hello           # smoke the generated task
+```
+
+`pkf init` writes a Taskfile that `amends` the schema over HTTPS, so
+your project does not need a clone of this repo.
 
 ## Authoring a Taskfile
 
