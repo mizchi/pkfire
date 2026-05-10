@@ -8,7 +8,7 @@ inputs:
   version:
     description: |
       pkfire release tag to install (e.g. `pkfire@0.1.0`). When empty, the
-      action tries `${{ github.action_ref }}` first (so pinning the action via
+      action tries the action ref first (so pinning the action via
       `mizchi/pkfire@pkfire@0.1.0` Just Works) and falls back to the latest
       published release.
     required: false
