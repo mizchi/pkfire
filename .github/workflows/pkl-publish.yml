@@ -45,7 +45,8 @@ jobs:
           fi
 
       - name: Package
-        run: pkl project package pkl
+        working-directory: pkl
+        run: pkl project package .
 
       - name: Show artifacts
         run: ls -la "pkl/.out/${{ steps.tag.outputs.tag }}"
