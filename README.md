@@ -10,15 +10,42 @@ dependencies; `pkf` builds a DAG and executes only the steps whose
 action key has changed. Cached outputs are restored from a
 content-addressed store under `~/.cache/pkfire`.
 
-## Why Pkl over `just`
+## Why pkfire
 
-`just` recipes get unwieldy once you need shared variables, environment
-matrices, or per-package overrides. Pkl gives a real type system,
-`amends` for template inheritance, and `pkl test` for unit-testing the
-schema itself — all while still emitting deterministic configuration.
-The complex example under [`examples/dogfood/`](./examples/dogfood/Taskfile.pkl)
-generates a cross-compile matrix with a `local function buildTask(p)`
-where four near-duplicate `just` recipes would have lived.
+pkfire competes with the same lightweight task runners you already
+reach for — `make`, [`just`](https://github.com/casey/just), npm
+scripts, `package.json` `"scripts"`, `Taskfile.yml`. They all work
+fine for a handful of one-line shell commands. The pain shows up
+once a project has:
+
+- **Shared inputs** ("these 6 globs of `.go` files feed three
+  different tasks") that you keep copy-pasting.
+- **Matrix duplication** — four near-identical recipes for
+  `linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`.
+- **Per-package overrides** in a monorepo where every package has a
+  `build` and `test` step that differs only in path and toolchain.
+- **No way to verify** the runner config itself — a typo in a task
+  name only fails when you run that task, in CI, on a Friday.
+
+These tools are string-based: every task is shell, every value is
+text, every reference is by name. They have no notion of "this
+identifier should resolve to a Task that already exists". So they
+duplicate.
+
+pkfire describes the same tasks in [Pkl](https://pkl-lang.org/),
+which is a typed configuration language with template inheritance
+(`amends`), per-module testing (`pkl test`), and ordinary functions.
+A cross-compile matrix becomes a one-line `local function
+buildTask(p)` that the schema invokes for each platform — see
+[`examples/dogfood/`](./examples/dogfood/Taskfile.pkl), where four
+near-duplicate `just` recipes were collapsed into a single template.
+Renaming a task in one place updates every reference; misspelling a
+dependency fails at evaluation time, before the runner starts.
+
+On top of the language layer, pkfire adds the parts a string-based
+runner can't: a content-addressed cache keyed on inputs/cmd/env, an
+HTTP remote cache so CI and teammates can share hits, and a watch
+mode that reruns only the affected subgraph.
 
 ## Install
 
