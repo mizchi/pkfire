@@ -54,6 +54,7 @@ pkf list                       # show declared tasks
 pkf list -v                    # add cmd preview and deps
 pkf run test                   # builds first, then tests; second run hits cache
 pkf run -j 8 test              # cap parallelism at 8
+pkf run --watch test           # re-run on input changes (Ctrl+C to stop)
 pkf run --dry-run test         # print the execution plan, do not execute
 pkf run --print-hash test      # print action keys, do not execute
 pkf run --no-cache test        # bypass cache for this run
@@ -102,7 +103,7 @@ where four near-duplicate `just` recipes would have lived.
 | 2 | Parallel execution honoring `deps` (per-task IO capture) | ✅ |
 | 3 | Action key (BLAKE3 over cmd / env / inputs / tools / config) | ✅ |
 | 4 | Local CAS, hit/miss, output restore | ✅ |
-| 5 | Watch mode | planned |
+| 5 | Watch mode (`pkf run --watch`) | ✅ |
 | 6 | Remote cache + Pkl package publish | planned |
 
 ## Development

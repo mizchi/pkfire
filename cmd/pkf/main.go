@@ -4,13 +4,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
@@ -18,6 +22,7 @@ import (
 	"github.com/mizchi/pkfire/internal/hash"
 	"github.com/mizchi/pkfire/internal/orchestrator"
 	"github.com/mizchi/pkfire/internal/runner"
+	"github.com/mizchi/pkfire/internal/watcher"
 )
 
 const version = "0.0.0"
@@ -63,7 +68,7 @@ usage:
 
 commands:
   init [-f FILE] [--force]              write a starter Taskfile.pkl
-  run [-f FILE] [-j N] [--dry-run] [--print-hash] [--no-cache] <task>
+  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache] <task>
                                         run a task and its transitive deps
   list [-f FILE] [-v]                   list declared tasks (-v: cmd/deps)
   graph [-f FILE] [--format FMT] [--target TASK]
@@ -74,6 +79,7 @@ commands:
 flags:
   -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
   -j, --jobs N           max concurrent tasks (default: NumCPU)
+      --watch            re-run on input changes (Ctrl+C to stop)
       --dry-run          print the execution plan and exit (no exec, no cache)
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
@@ -296,6 +302,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	printHash := fs.Bool("print-hash", false, "print action keys and exit")
 	dryRun := fs.Bool("dry-run", false, "print the execution plan and exit")
 	noCache := fs.Bool("no-cache", false, "disable cache for this run")
+	watch := fs.Bool("watch", false, "re-run on input changes")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
@@ -333,6 +340,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	switch {
 	case *dryRun && *printHash:
 		return fmt.Errorf("--dry-run and --print-hash are mutually exclusive")
+	case *watch && (*dryRun || *printHash):
+		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash")
 	case *dryRun:
 		return printDryRun(stdout, tf, order)
 	case *printHash:
@@ -358,8 +367,91 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		Root:       root,
 		ConfigHash: hash.HashBytes(tf.Canonical),
 	}
+	if *watch {
+		return runWatch(ctx, abs, root, target, orch, plan, stderr)
+	}
 	_, err = orch.Execute(ctx, plan)
 	return err
+}
+
+// runWatch loops: execute the plan, then wait for input changes (or Ctrl+C),
+// then re-execute. An in-flight run is cancelled when a fresh change lands so
+// the user always sees results for the latest source state.
+func runWatch(parentCtx context.Context, taskfilePath, root, target string, orch *orchestrator.Orchestrator, plan *orchestrator.Plan, stderr io.Writer) error {
+	ctx, cancel := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	paths := watchTargets(root, taskfilePath, plan)
+	w, err := watcher.New(paths, 200*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("init watcher: %w", err)
+	}
+	defer w.Close()
+	go w.Run(ctx)
+
+	fmt.Fprintf(stderr, "[pkf] watching %d path(s) for %q (Ctrl+C to stop)\n", len(paths), target)
+
+	for {
+		runCtx, runCancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			_, e := orch.Execute(runCtx, plan)
+			done <- e
+		}()
+
+		err := <-done
+		runCancel()
+		if err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintf(stderr, "[pkf] run failed: %v\n", err)
+		}
+
+		// Drop every event the run itself may have produced (output writes,
+		// pkl evaluator scratch files, etc.) — only post-run edits should
+		// count toward the next iteration.
+		drain(w.Events())
+		fmt.Fprintln(stderr, "[pkf] idle — waiting for changes")
+
+		select {
+		case <-w.Events():
+			fmt.Fprintln(stderr, "[pkf] change detected — re-running")
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func drain(ch <-chan struct{}) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+// watchTargets collects the set of filesystem paths whose changes should
+// trigger a re-run: the Taskfile itself, every input glob's expansion, and
+// (since glob expansion may miss new files) the workdir of each task.
+func watchTargets(root, taskfilePath string, plan *orchestrator.Plan) []string {
+	seen := map[string]struct{}{taskfilePath: {}}
+	for _, name := range plan.Order {
+		t := plan.Tasks[name]
+		taskRoot := orchestrator.TaskRoot(t, plan.Root)
+		seen[taskRoot] = struct{}{}
+		entries, err := hash.HashInputs(taskRoot, t.Inputs)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			seen[filepath.Join(taskRoot, e.Path)] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	return out
 }
 
 func buildGraph(tf *config.Taskfile) (*graph.Graph, error) {
