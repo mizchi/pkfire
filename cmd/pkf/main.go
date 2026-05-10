@@ -14,9 +14,11 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
 	"github.com/mizchi/pkfire/internal/graph"
 	"github.com/mizchi/pkfire/internal/hash"
+	"github.com/mizchi/pkfire/internal/orchestrator"
 	"github.com/mizchi/pkfire/internal/runner"
 )
 
@@ -58,7 +60,8 @@ usage:
   pkf <command> [args]
 
 commands:
-  run [-f FILE] [--print-hash] <task>   run a task and its transitive deps
+  run [-f FILE] [--print-hash] [--no-cache] <task>
+                                        run a task and its transitive deps
   list [-f FILE]                        list declared tasks
   version                               print pkf version
   help                                  show this message
@@ -66,6 +69,10 @@ commands:
 flags:
   -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
       --print-hash       print action keys for the target subgraph and exit
+      --no-cache         disable cache lookup and store for this run
+
+cache directory:
+  $PKFIRE_CACHE_DIR if set, otherwise $XDG_CACHE_HOME/pkfire (~/.cache/pkfire).
 `)
 }
 
@@ -114,6 +121,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
 	printHash := fs.Bool("print-hash", false, "print action keys and exit")
+	noCache := fs.Bool("no-cache", false, "disable cache for this run")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -150,12 +158,29 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		return printHashes(stdout, root, tf, order)
 	}
 
+	var cas *cache.Cache
+	if !*noCache {
+		dir, err := cache.DefaultDir()
+		if err != nil {
+			return fmt.Errorf("resolve cache dir: %w", err)
+		}
+		cas = cache.New(dir)
+	}
 	r := runner.New(runner.Options{
 		Stdout:  stdout,
 		Stderr:  stderr,
 		Workdir: root,
 	})
-	return r.RunAll(ctx, order, tf.Tasks, &tf.Defaults)
+	orch := orchestrator.New(cas, r, stderr)
+	plan := &orchestrator.Plan{
+		Order:      order,
+		Tasks:      tf.Tasks,
+		Defaults:   &tf.Defaults,
+		Root:       root,
+		ConfigHash: hash.HashBytes(tf.Canonical),
+	}
+	_, err = orch.Execute(ctx, plan)
+	return err
 }
 
 func buildGraph(tf *config.Taskfile) (*graph.Graph, error) {
@@ -173,23 +198,11 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 	configHash := hash.HashBytes(tf.Canonical)
 	for _, name := range order {
 		task := tf.Tasks[name]
-		entries, err := hash.HashInputs(root, task.Inputs)
+		key, err := orchestrator.ComputeKey(task, &tf.Defaults, root, configHash)
 		if err != nil {
-			return fmt.Errorf("hash inputs for %q: %w", name, err)
+			return fmt.Errorf("compute key for %q: %w", name, err)
 		}
-		shell := task.Shell
-		if shell == "" {
-			shell = tf.Defaults.Shell
-		}
-		action := &hash.Action{
-			Cmd:        task.Cmd,
-			Shell:      shell,
-			Env:        hash.MergeEnv(tf.Defaults.Env, task.Env),
-			Tools:      task.Tools,
-			Inputs:     entries,
-			ConfigHash: configHash,
-		}
-		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(action.Key()))
+		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
 	}
 	return nil
 }
