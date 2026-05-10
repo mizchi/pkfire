@@ -53,8 +53,6 @@ local builds: Listing<Task> = new {
   }
 }
 
-local hostBuild: Task = builds[0]
-
 local vet: Task = new {
   name = "vet"
   description = "go vet"
@@ -101,19 +99,19 @@ local checksum: Task = new {
   deps = builds
 }
 
-local hostBinary: String = hostBuild.outputs[0]
-
 local integration: Task = new {
   name = "integration"
   description = "Smoke `pkf run hello` using the freshly built host binary"
-  cmd = "\(hostBinary) run -f examples/basic/Taskfile.pkl hello"
+  cmd = "bin/pkf-$(go env GOOS)-$(go env GOARCH) run -f examples/basic/Taskfile.pkl hello"
   workdir = repoRoot
   inputs {
-    hostBinary
+    for (p in platforms) {
+      "bin/pkf-\(p.name)"
+    }
     "examples/basic/Taskfile.pkl"
     "pkl/Taskfile.pkl"
   }
-  deps { hostBuild }
+  deps = builds
 }
 
 local ci: Task = new {
