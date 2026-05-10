@@ -100,7 +100,18 @@ class Rendered {
 
 defaults: Defaults = new {}
 
-/// Authored task list. Append in user modules with `tasks { newTask; ... }`.
+/// Authored task list. In user modules, declare each task as a `local`
+/// binding and add it here:
+///
+///     local build = new Task { name = "build"; cmd = "go build" }
+///     local test  = new Task { name = "test"; cmd = "go test"; deps { build } }
+///     tasks { build; test }
+///
+/// **Forgetting to add a declared `local` to this listing is the most
+/// common pitfall.** Pkl's `amends` semantics intentionally forbid adding
+/// new top-level fields, so reflect-based auto-collection is not viable;
+/// each task must be listed explicitly. Duplicate names in the listing
+/// raise an error before output is rendered (see `output.value` below).
 tasks: Listing<Task> = new {}
 
 local taskNames: List<String> = tasks.toList().map((t) -> t.name)
