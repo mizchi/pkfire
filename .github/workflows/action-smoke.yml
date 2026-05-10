@@ -1,0 +1,27 @@
+name: Action smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "pkfire release tag to test (e.g. pkfire@0.1.0). Empty = latest."
+        required: false
+        default: ""
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the action from this checkout
+        uses: ./
+        with:
+          version: ${{ inputs.version }}
+
+      - name: Run the basic example via pkf
+        run: pkf run -f examples/basic/Taskfile.pkl hello

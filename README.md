@@ -59,6 +59,26 @@ You also need the Pkl CLI (`pkl`) on `PATH`; install it from
 [pkl-lang.org](https://pkl-lang.org/main/current/pkl-cli/) or via your
 package manager.
 
+### GitHub Actions
+
+```yaml
+- uses: mizchi/pkfire@pkfire@0.1.0
+- run: pkf run ci
+```
+
+The action installs the matching `pkf` binary and the Pkl CLI on the
+runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`. Pin
+the action ref to a release tag for reproducibility; `@main` works
+for testing but tracks unreleased commits.
+
+```yaml
+# pin to a specific release explicitly:
+- uses: mizchi/pkfire@main
+  with:
+    version: pkfire@0.1.0
+    pkl-version: "0.31.1"   # default, set to "none" to skip Pkl install
+```
+
 ### Nix (no Go toolchain required)
 
 ```sh

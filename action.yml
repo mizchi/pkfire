@@ -1,0 +1,97 @@
+name: Setup pkfire
+description: Install the pkf task runner and the Pkl CLI on the runner.
+branding:
+  icon: zap
+  color: orange
+
+inputs:
+  version:
+    description: |
+      pkfire release tag to install (e.g. `pkfire@0.1.0`). When empty, the
+      action tries `${{ github.action_ref }}` first (so pinning the action via
+      `mizchi/pkfire@pkfire@0.1.0` Just Works) and falls back to the latest
+      published release.
+    required: false
+    default: ""
+  pkl-version:
+    description: Pkl CLI version to install. Set to `none` to skip Pkl install.
+    required: false
+    default: "0.31.1"
+  install-dir:
+    description: Directory where binaries are placed. Added to GITHUB_PATH.
+    required: false
+    default: ${{ runner.temp }}/pkfire-bin
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve version and platform
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="${{ inputs.version }}"
+        if [ -z "$version" ]; then
+          ref="${{ github.action_ref }}"
+          case "$ref" in
+            pkfire@*) version="$ref" ;;
+            "" | main | master) version="" ;;
+            *) version="$ref" ;;
+          esac
+        fi
+        if [ -z "$version" ]; then
+          version=$(curl -fsSL https://api.github.com/repos/mizchi/pkfire/releases/latest \
+            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+        fi
+        if [ -z "$version" ]; then
+          echo "::error::could not resolve a pkfire release tag"
+          exit 1
+        fi
+
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64)   plat=linux-amd64;  pkl_plat=linux-amd64 ;;
+          Linux-ARM64) plat=linux-arm64;  pkl_plat=linux-aarch64 ;;
+          macOS-ARM64) plat=darwin-arm64; pkl_plat=macos-aarch64 ;;
+          macOS-X64)   plat=darwin-amd64; pkl_plat=macos-amd64 ;;
+          *)
+            echo "::error::unsupported runner ${RUNNER_OS}-${RUNNER_ARCH}"
+            exit 1
+            ;;
+        esac
+
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "plat=$plat" >> "$GITHUB_OUTPUT"
+        echo "pkl_plat=$pkl_plat" >> "$GITHUB_OUTPUT"
+        echo "::notice::installing pkfire $version ($plat)"
+
+    - name: Install pkf
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="${{ inputs.install-dir }}"
+        mkdir -p "$dir"
+        url="https://github.com/mizchi/pkfire/releases/download/${{ steps.resolve.outputs.version }}/pkf-${{ steps.resolve.outputs.plat }}.tar.gz"
+        curl -fsSL "$url" | tar -xzf - -C "$dir"
+        chmod +x "$dir/pkf"
+        echo "$dir" >> "$GITHUB_PATH"
+
+    - name: Install Pkl CLI
+      if: inputs.pkl-version != 'none'
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="${{ inputs.install-dir }}"
+        mkdir -p "$dir"
+        url="https://github.com/apple/pkl/releases/download/${{ inputs.pkl-version }}/pkl-${{ steps.resolve.outputs.pkl_plat }}"
+        curl -fsSL -o "$dir/pkl" "$url"
+        chmod +x "$dir/pkl"
+
+    - name: Smoke-test
+      shell: bash
+      env:
+        PATH: ${{ inputs.install-dir }}:${{ env.PATH }}
+      run: |
+        pkf version
+        if [ "${{ inputs.pkl-version }}" != "none" ]; then
+          pkl --version
+        fi

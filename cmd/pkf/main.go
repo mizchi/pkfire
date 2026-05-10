@@ -25,7 +25,8 @@ import (
 	"github.com/mizchi/pkfire/internal/watcher"
 )
 
-const version = "0.0.0"
+// version is overridden at link time via `-ldflags "-X main.version=…"`.
+var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
