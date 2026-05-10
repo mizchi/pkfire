@@ -88,7 +88,10 @@ local test: Task = new {
 tasks { build; test }
 ```
 
-Pin the schema URL to a tag (`/v0.1.0/`) for production / CI.
+The `package://...` URI is already version-pinned, so the same
+checkout reproduces across machines and CI. To upgrade, bump the
+`@<version>` segment — Pkl re-resolves and re-fetches on the next
+run, then caches the new package locally.
 
 ## Recipes (copy-paste starters)
 
@@ -189,7 +192,8 @@ Trade-offs:
   the leaves).
 - Leaf authors must remember the `amends` URI is relative, and
   changing the root file's location breaks every leaf at once. Pin
-  the root path or use a stable HTTPS schema instead.
+  the root path, or have leaves amend the pkfire package URI directly
+  if they don't actually need anything from a project-root Taskfile.
 
 ### Picking between B and C
 
