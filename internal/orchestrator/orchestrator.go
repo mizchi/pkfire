@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
@@ -51,11 +52,14 @@ func (o Outcome) String() string {
 }
 
 // Result records what happened for one task. `Key` is the zero value when
-// the task was skipped before its key could be computed.
+// the task was skipped before its key could be computed. `Duration` is
+// the wall time spent on the task itself — cache restore for a hit,
+// cmd execution for a run, zero for a skip.
 type Result struct {
-	Name    string
-	Key     [32]byte
-	Outcome Outcome
+	Name     string
+	Key      [32]byte
+	Outcome  Outcome
+	Duration time.Duration
 }
 
 // Plan is everything Execute needs that is not the orchestrator's own
@@ -274,6 +278,7 @@ func TaskRoot(task *config.Task, planRoot string) string {
 // executeOne runs a single task with cache lookup, capturing its stdout
 // and stderr into buffers that are flushed atomically under `ioMu`.
 func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config.Task, p *Plan, ioMu *sync.Mutex) (Result, error) {
+	start := time.Now()
 	taskRoot := TaskRoot(task, p.Root)
 	inv := invocationFor(p, name)
 	key, err := ComputeKey(task, p.Defaults, taskRoot, p.ConfigHash, inv)
@@ -284,10 +289,10 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 
 	if task.Cache && o.cache != nil && !p.Refresh && o.cache.Has(key) {
 		if err := o.cache.Restore(key, taskRoot); err != nil {
-			return Result{Name: name, Key: key}, fmt.Errorf("cache restore for %q: %w", name, err)
+			return Result{Name: name, Key: key, Duration: time.Since(start)}, fmt.Errorf("cache restore for %q: %w", name, err)
 		}
 		o.logLine(ioMu, "[pkf] %s: hit %s\n", name, short)
-		return Result{Name: name, Key: key, Outcome: OutcomeHit}, nil
+		return Result{Name: name, Key: key, Outcome: OutcomeHit, Duration: time.Since(start)}, nil
 	}
 
 	// If the task declares `services`, bring them up before invoking
@@ -298,7 +303,7 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	if len(task.Services) > 0 {
 		cleanup, err := o.startServices(ctx, name, p, ioMu)
 		if err != nil {
-			return Result{Name: name, Key: key}, err
+			return Result{Name: name, Key: key, Duration: time.Since(start)}, err
 		}
 		serviceCleanup = cleanup
 	}
@@ -317,9 +322,9 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) {
-			return Result{Name: name, Key: key, Outcome: OutcomeSkipped}, runErr
+			return Result{Name: name, Key: key, Outcome: OutcomeSkipped, Duration: time.Since(start)}, runErr
 		}
-		return Result{Name: name, Key: key}, runErr
+		return Result{Name: name, Key: key, Duration: time.Since(start)}, runErr
 	}
 
 	outcome := OutcomeRan
@@ -327,11 +332,11 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 		outcome = OutcomeUncached
 	} else if o.cache != nil {
 		if err := o.cache.Store(key, taskRoot, task.Outputs); err != nil {
-			return Result{Name: name, Key: key}, fmt.Errorf("cache store for %q: %w", name, err)
+			return Result{Name: name, Key: key, Duration: time.Since(start)}, fmt.Errorf("cache store for %q: %w", name, err)
 		}
 	}
 	o.logLine(ioMu, "[pkf] %s: %s %s\n", name, outcome, short)
-	return Result{Name: name, Key: key, Outcome: outcome}, nil
+	return Result{Name: name, Key: key, Outcome: outcome, Duration: time.Since(start)}, nil
 }
 
 // startServices brings up every task listed in the named task's

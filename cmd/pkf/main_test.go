@@ -191,16 +191,20 @@ func TestSplitRunArgsAcceptsTrailingFlags(t *testing.T) {
 		name       string
 		args       []string
 		wantGlobal []string
-		wantTask   string
+		wantTasks  []string
 		wantTail   []string
 	}{
-		{"task only", []string{"build"}, nil, "build", nil},
-		{"global before task", []string{"-f", "x.pkl", "build"}, []string{"-f", "x.pkl"}, "build", nil},
-		{"flag after task", []string{"build", "--watch"}, nil, "build", []string{"--watch"}},
-		{"param after task", []string{"run", "--bump=patch"}, nil, "run", []string{"--bump=patch"}},
-		{"tail args", []string{"run", "--", "a", "b"}, nil, "run", []string{"--", "a", "b"}},
-		{"j with value before task", []string{"-j", "4", "build"}, []string{"-j", "4"}, "build", nil},
-		{"--file=x form", []string{"--file=x.pkl", "build"}, []string{"--file=x.pkl"}, "build", nil},
+		{"task only", []string{"build"}, nil, []string{"build"}, nil},
+		{"global before task", []string{"-f", "x.pkl", "build"}, []string{"-f", "x.pkl"}, []string{"build"}, nil},
+		{"flag after task", []string{"build", "--watch"}, nil, []string{"build"}, []string{"--watch"}},
+		{"param after task", []string{"run", "--bump=patch"}, nil, []string{"run"}, []string{"--bump=patch"}},
+		{"tail args", []string{"run", "--", "a", "b"}, nil, []string{"run"}, []string{"--", "a", "b"}},
+		{"j with value before task", []string{"-j", "4", "build"}, []string{"-j", "4"}, []string{"build"}, nil},
+		{"--file=x form", []string{"--file=x.pkl", "build"}, []string{"--file=x.pkl"}, []string{"build"}, nil},
+		{"multi target", []string{"a", "b", "c"}, nil, []string{"a", "b", "c"}, nil},
+		{"multi target + flag after", []string{"a", "b", "--watch"}, nil, []string{"a", "b"}, []string{"--watch"}},
+		{"global + multi target", []string{"-j", "8", "a", "b"}, []string{"-j", "8"}, []string{"a", "b"}, nil},
+		{"no task (default fallback hint)", []string{"--watch"}, []string{"--watch"}, nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -211,19 +215,13 @@ func TestSplitRunArgsAcceptsTrailingFlags(t *testing.T) {
 			if !equalStrSlice(gl, tc.wantGlobal) {
 				t.Errorf("globalArgs = %v, want %v", gl, tc.wantGlobal)
 			}
-			if tn != tc.wantTask {
-				t.Errorf("taskName = %q, want %q", tn, tc.wantTask)
+			if !equalStrSlice(tn, tc.wantTasks) {
+				t.Errorf("taskNames = %v, want %v", tn, tc.wantTasks)
 			}
 			if !equalStrSlice(tl, tc.wantTail) {
 				t.Errorf("taskArgs = %v, want %v", tl, tc.wantTail)
 			}
 		})
-	}
-}
-
-func TestSplitRunArgsRequiresTaskName(t *testing.T) {
-	if _, _, _, err := splitRunArgs([]string{"--watch"}); err == nil {
-		t.Fatal("expected error when no task name is present")
 	}
 }
 
@@ -507,6 +505,54 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 		t.Fatalf("expected --no-cache + --refresh to error, got %v", err)
 	}
 }
+
+func TestTasksMatchingChangesHonorsWorkdir(t *testing.T) {
+	wd := "services/api"
+	tf := &config.Taskfile{
+		Tasks: map[string]*config.Task{
+			"build:api": {Inputs: []string{"src/**/*.ts"}, Workdir: &wd},
+			"build:web": {Inputs: []string{"src/**/*.ts"}, Workdir: stringPtr("services/web")},
+			"docs":      {Inputs: []string{"docs/**/*.md"}},
+			"nothing":   {}, // no inputs declared
+		},
+	}
+	got := tasksMatchingChanges(tf, "/repo", []string{
+		"services/api/src/foo.ts",
+		"docs/intro.md",
+	})
+	want := map[string]bool{"build:api": true, "docs": true}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("missing %q in result", k)
+		}
+	}
+}
+
+func TestExpandToDependentsClosure(t *testing.T) {
+	tf := &config.Taskfile{
+		Tasks: map[string]*config.Task{
+			"build":     {Deps: []string{"gen"}},
+			"gen":       {Deps: []string{}},
+			"test":      {Deps: []string{"build"}},
+			"unrelated": {Deps: []string{}},
+		},
+	}
+	direct := map[string]bool{"gen": true}
+	got := expandToDependents(tf, direct)
+	for _, want := range []string{"gen", "build", "test"} {
+		if !got[want] {
+			t.Errorf("expected %q in closure, got %v", want, got)
+		}
+	}
+	if got["unrelated"] {
+		t.Errorf("unrelated task should not be in closure")
+	}
+}
+
+func stringPtr(s string) *string { return &s }
 
 func TestHooksInstallWritesShim(t *testing.T) {
 	requirePkl(t)

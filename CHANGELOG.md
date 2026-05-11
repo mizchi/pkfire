@@ -12,6 +12,32 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf affected --since=<ref>`.** Monorepo-CI killer: runs only
+  tasks whose declared `inputs` glob matches a file in the
+  asymmetric diff `<ref>...HEAD`, plus their transitive
+  *dependents* in the deps DAG. The unaffected deps that come
+  along in the resulting plan hit cache, so the actual work is
+  minimal. Default ref is `origin/main` (fallback `origin/master`,
+  then `HEAD~1`). Optional positional task names filter the
+  affected set: `pkf affected --since=origin/main test:unit
+  test:integration` restricts to those exact targets. `--dry-run`
+  prints the plan with the same cache-prediction format the
+  built-in `pkf run --dry-run` uses.
+- **Multi-target `pkf run`.** `pkf run a b c` computes the
+  topological union of the targets' subgraphs and runs once. Tail
+  args / `--param=` are rejected with multi-target (which target
+  would they apply to?) — single-target run keeps the existing
+  invocation overlay.
+- **Default task.** `pkf run` with no positional argument now
+  invokes a task named `default` if one is declared. Errors with
+  a `try pkf list` hint when neither a target nor a `default` task
+  exists.
+- **End-of-run summary + `--timing`.** Every non-watch `pkf run`
+  / `pkf affected` now prints a one-line summary at the end:
+  `[pkf] done: 6 tasks · 3 hit · 3 ran · 2 uncached (11.3s wall,
+  12.0s CPU)`. Adding `--timing` follows with a per-task
+  duration breakdown sorted descending — pinpoints the slow task
+  without a profiler.
 - **`pkf run --dry-run` previews cache state per task.** The
   output is a compact table with one row per task and a status
   column: `hit` (cache lookup will succeed → restore from CAS),

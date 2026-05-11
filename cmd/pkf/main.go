@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/mizchi/pkfire/internal/cache"
 	"github.com/mizchi/pkfire/internal/config"
 	"github.com/mizchi/pkfire/internal/graph"
@@ -79,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdFormat(args[1:], stdout, stderr)
 	case "hooks":
 		return cmdHooks(args[1:], stdout, stderr)
+	case "affected":
+		return cmdAffected(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -93,8 +96,8 @@ usage:
 
 commands:
   init [-f FILE] [--force]              write a starter Taskfile.pkl
-  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache|--refresh] <task>
-                                        run a task and its transitive deps
+  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache|--refresh] [--timing] [task...]
+                                        run one or more tasks (no arg = the default task); multi-target runs the union
   up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
                                         Ctrl+C releases the whole process tree
   list [-f FILE] [-v] [--json]          list declared tasks (-v: cmd/deps; --json: machine-readable)
@@ -104,6 +107,8 @@ commands:
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   hooks <install|uninstall|list> [-f FILE] [--force]
                                         manage .git/hooks shims that delegate to pkf run
+  affected [--since=<ref>] [--dry-run] [task...]
+                                        run only tasks whose inputs changed since <ref> (and their dependents)
   version                               print pkf version
   help                                  show this message
 
@@ -474,10 +479,7 @@ func writeMermaid(w io.Writer, tf *config.Taskfile, nodes []string, keep map[str
 }
 
 func cmdRun(args []string, stdout, stderr io.Writer) error {
-	// Split args so we can position-anchor on the task name: anything
-	// before it is a global flag, everything after is task-scoped
-	// (param flags + tail `-- a b c`).
-	globalArgs, target, postArgs, err := splitRunArgs(args)
+	globalArgs, targets, postArgs, err := splitRunArgs(args)
 	if err != nil {
 		return err
 	}
@@ -490,6 +492,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	noCache := fs.Bool("no-cache", false, "disable cache lookup AND store for this run")
 	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results (re-baseline)")
 	watch := fs.Bool("watch", false, "re-run on input changes")
+	timing := fs.Bool("timing", false, "print per-task duration at end of run")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(globalArgs); err != nil {
@@ -509,21 +512,48 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	// Fall back to the `default` task when no target was given. Errors
+	// loudly when neither a target nor a default exists — silent
+	// behavior here would be confusing for users typing `pkf run` to
+	// see what runs.
+	if len(targets) == 0 {
+		if _, ok := tf.Tasks["default"]; ok {
+			targets = []string{"default"}
+		} else {
+			return fmt.Errorf("no task specified and no `default` task declared; try `pkf list` to see available tasks")
+		}
+	}
+
+	// Multiple targets are unambiguous for non-overlay flags, but
+	// `--param=value` and `-- tail args` can't be safely routed to two
+	// different tasks. Reject the combination early.
+	if len(targets) > 1 && len(postArgs) > 0 {
+		return fmt.Errorf("multi-target run cannot accept --param / -- args (which target would they apply to?)")
+	}
+
 	g, err := buildGraph(tf)
 	if err != nil {
 		return err
 	}
-	if !g.Has(target) {
-		return fmt.Errorf("unknown task: %q", target)
+	for _, t := range targets {
+		if !g.Has(t) {
+			return fmt.Errorf("unknown task: %q", t)
+		}
 	}
-	order, err := g.Subgraph(target)
+	order, err := unionSubgraph(g, targets)
 	if err != nil {
 		return err
 	}
 
-	inv, err := resolveInvocation(tf.Tasks[target], target, postArgs)
-	if err != nil {
-		return err
+	// Invocation overlay only meaningful for a single target.
+	var inv *runner.Invocation
+	var invTarget string
+	if len(targets) == 1 {
+		invTarget = targets[0]
+		inv, err = resolveInvocation(tf.Tasks[invTarget], invTarget, postArgs)
+		if err != nil {
+			return err
+		}
 	}
 
 	root := filepath.Dir(abs)
@@ -535,9 +565,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	case *watch && (*dryRun || *printHash):
 		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash")
 	case *dryRun:
-		return printDryRun(stdout, root, tf, order, target, inv, *noCache || *refresh)
+		return printDryRun(stdout, root, tf, order, invTarget, inv, *noCache || *refresh)
 	case *printHash:
-		return printHashes(stdout, root, tf, order, target, inv)
+		return printHashes(stdout, root, tf, order, invTarget, inv)
 	}
 
 	var backend cache.Backend
@@ -564,15 +594,93 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		Defaults:         tf.Defaults,
 		Root:             root,
 		ConfigHash:       hash.HashBytes(tf.Canonical),
-		Target:           target,
+		Target:           invTarget,
 		TargetInvocation: inv,
 		Refresh:          *refresh,
 	}
 	if *watch {
-		return runWatch(ctx, abs, root, target, orch, plan, stderr)
+		// Watch mode is still single-target only — its restart
+		// semantics revolve around the named target's subgraph.
+		if len(targets) != 1 {
+			return fmt.Errorf("--watch requires exactly one task")
+		}
+		return runWatch(ctx, abs, root, targets[0], orch, plan, stderr)
 	}
-	_, err = orch.Execute(ctx, plan)
+	start := time.Now()
+	results, err := orch.Execute(ctx, plan)
+	wall := time.Since(start)
+	printRunSummary(stderr, results, wall, *timing)
 	return err
+}
+
+// unionSubgraph computes the topological order over the union of
+// every target's subgraph. The graph package already sorts each
+// subgraph, so for multi-target we walk in declared target order
+// and dedupe by name — that preserves "anything reachable from
+// target[i] lands before target[i+1] unless already scheduled".
+func unionSubgraph(g *graph.Graph, targets []string) ([]string, error) {
+	seen := make(map[string]bool)
+	var out []string
+	for _, t := range targets {
+		sub, err := g.Subgraph(t)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range sub {
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	return out, nil
+}
+
+// printRunSummary emits a single line summarizing outcomes after a
+// non-watch `pkf run`. With `--timing`, also prints per-task durations
+// in descending order. Goes to stderr so structured stdout consumers
+// (like JSON output paths) aren't polluted.
+func printRunSummary(stderr io.Writer, results []orchestrator.Result, wall time.Duration, timing bool) {
+	if len(results) == 0 {
+		return
+	}
+	var hits, ran, uncached, skipped int
+	var taskWall time.Duration
+	for _, r := range results {
+		taskWall += r.Duration
+		switch r.Outcome {
+		case orchestrator.OutcomeHit:
+			hits++
+		case orchestrator.OutcomeRan:
+			ran++
+		case orchestrator.OutcomeUncached:
+			uncached++
+		case orchestrator.OutcomeSkipped:
+			skipped++
+		}
+	}
+	fmt.Fprintf(stderr, "[pkf] done: %d task%s · %d hit · %d ran · %d uncached",
+		len(results), plural(len(results)), hits, ran+uncached, uncached)
+	if skipped > 0 {
+		fmt.Fprintf(stderr, " · %d skipped", skipped)
+	}
+	fmt.Fprintf(stderr, " (%s wall", wall.Round(time.Millisecond))
+	if taskWall > 0 && taskWall > wall {
+		fmt.Fprintf(stderr, ", %s CPU", taskWall.Round(time.Millisecond))
+	}
+	fmt.Fprintln(stderr, ")")
+
+	if timing {
+		sorted := append([]orchestrator.Result(nil), results...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Duration > sorted[j].Duration })
+		fmt.Fprintln(stderr, "[pkf] timing:")
+		for _, r := range sorted {
+			if r.Duration == 0 {
+				continue
+			}
+			fmt.Fprintf(stderr, "  %8s  %s\n", r.Duration.Round(time.Millisecond), r.Name)
+		}
+	}
 }
 
 // splitRunArgs walks args splitting at the first non-global-flag token —
@@ -585,14 +693,23 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 // parsing `--watch` as a global. Hand-rolling lets us keep the
 // pre-0.4 flag order (`pkf run -f x.pkl mytask`) while also accepting
 // the new shape (`pkf run mytask --param=val -- tail`).
-func splitRunArgs(args []string) (globalArgs []string, taskName string, taskArgs []string, err error) {
+// splitRunArgs walks args splitting at the first task name. Returns
+// (globalFlags, taskNames, taskArgs). Multiple consecutive non-flag
+// positionals all become task names — `pkf run a b c` runs the
+// topological union of a, b, c. After the last task name, any
+// flag-shaped tokens (and `--`/tail args) are task-scoped.
+func splitRunArgs(args []string) (globalArgs []string, taskNames []string, taskArgs []string, err error) {
 	i := 0
 	for i < len(args) {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
-			taskName = a
 			globalArgs = args[:i]
-			taskArgs = args[i+1:]
+			// Collect every consecutive non-flag positional as a target.
+			for i < len(args) && !strings.HasPrefix(args[i], "-") {
+				taskNames = append(taskNames, args[i])
+				i++
+			}
+			taskArgs = args[i:]
 			return
 		}
 		// `--` before a task name is unusual; preserve it as a global
@@ -615,7 +732,10 @@ func splitRunArgs(args []string) (globalArgs []string, taskName string, taskArgs
 		// report it.
 		i++
 	}
-	err = fmt.Errorf("run requires exactly one task name")
+	// No task name. Callers may handle this as "run the default task";
+	// signal with an empty slice + nil error so the cmd layer can
+	// apply that fallback consistently.
+	globalArgs = args
 	return
 }
 
@@ -875,6 +995,266 @@ var gitHookEvents = []string{
 // refuses to delete hooks without the marker so a hand-written hook
 // doesn't disappear on `pkf hooks uninstall`.
 const pkfHookMarker = "# managed by pkf hooks install"
+
+// cmdAffected runs only those tasks whose declared `inputs` glob
+// matches at least one file changed between `--since=<ref>` and HEAD,
+// plus their transitive *dependents* (downstream tasks reachable in
+// the deps DAG). The monorepo-CI killer: in a PR with a small diff,
+// it lets `pkf affected --since=origin/main test` run only the test
+// tasks that actually depend on what changed.
+//
+// Two kinds of decisions about "what's affected":
+//
+//   - Task with non-empty inputs: affected iff at least one input
+//     glob (interpreted relative to the task's workdir) matches a
+//     changed file path.
+//   - Task with empty inputs: never affected by file changes. (If
+//     it's `cache = false`, the user marked it as "always run when
+//     invoked" — `pkf affected` doesn't drag those in by default.)
+//
+// After computing the directly-affected set, the function expands to
+// include every task that transitively depends on an affected one
+// (forward closure in the deps DAG). Without this, you'd miss
+// downstream rebuilds.
+//
+// Optional positional args filter the resulting plan to a subset of
+// task names (exact-match), so `pkf affected --since=origin/main
+// test:unit test:integration` restricts the gate to those two.
+func cmdAffected(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf affected", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	since := fs.String("since", "", "git ref to diff against (default: origin/main, fallback HEAD~1)")
+	dryRun := fs.Bool("dry-run", false, "print the affected plan and exit")
+	noCache := fs.Bool("no-cache", false, "disable cache for this run")
+	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results")
+	timing := fs.Bool("timing", false, "print per-task duration at end of run")
+	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
+	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	tf, err := config.Load(ctx, abs)
+	if err != nil {
+		return err
+	}
+	root := filepath.Dir(abs)
+
+	sinceRef := *since
+	if sinceRef == "" {
+		sinceRef = defaultAffectedRef(root)
+		fmt.Fprintf(stderr, "[pkf] affected: using --since=%s (no explicit ref given)\n", sinceRef)
+	}
+	changed, err := gitChangedFiles(root, sinceRef)
+	if err != nil {
+		return fmt.Errorf("compute changed files: %w", err)
+	}
+	if len(changed) == 0 {
+		fmt.Fprintln(stderr, "[pkf] affected: no changed files — nothing to do")
+		return nil
+	}
+
+	direct := tasksMatchingChanges(tf, root, changed)
+	affectedSet := expandToDependents(tf, direct)
+	if len(affectedSet) == 0 {
+		fmt.Fprintln(stderr, "[pkf] affected: changes don't intersect any task's inputs — nothing to do")
+		return nil
+	}
+
+	// Filter to user-supplied targets if any.
+	if len(fs.Args()) > 0 {
+		filter := make(map[string]bool, len(fs.Args()))
+		for _, n := range fs.Args() {
+			if _, ok := tf.Tasks[n]; !ok {
+				return fmt.Errorf("unknown task: %q", n)
+			}
+			filter[n] = true
+		}
+		for name := range affectedSet {
+			if !filter[name] {
+				delete(affectedSet, name)
+			}
+		}
+		if len(affectedSet) == 0 {
+			fmt.Fprintln(stderr, "[pkf] affected: none of the named tasks are in the affected set")
+			return nil
+		}
+	}
+
+	g, err := buildGraph(tf)
+	if err != nil {
+		return err
+	}
+	// Build the plan as the union of subgraphs rooted at each
+	// affected task. This brings in each affected task's own deps so
+	// the runtime DAG stays self-consistent (dep order honored).
+	roots := make([]string, 0, len(affectedSet))
+	for n := range affectedSet {
+		roots = append(roots, n)
+	}
+	sort.Strings(roots)
+	order, err := unionSubgraph(g, roots)
+	if err != nil {
+		return err
+	}
+
+	if *noCache && *refresh {
+		return fmt.Errorf("--no-cache and --refresh are mutually exclusive")
+	}
+	if *dryRun {
+		return printDryRun(stdout, root, tf, order, "", nil, *noCache || *refresh)
+	}
+
+	var backend cache.Backend
+	if !*noCache {
+		dir, err := cache.DefaultDir()
+		if err != nil {
+			return fmt.Errorf("resolve cache dir: %w", err)
+		}
+		local := cache.New(dir)
+		if remoteURL := os.Getenv("PKFIRE_REMOTE_CACHE"); remoteURL != "" {
+			remote := cache.NewRemote(remoteURL, os.Getenv("PKFIRE_REMOTE_TOKEN"))
+			backend = cache.NewLayered(local, remote)
+		} else {
+			backend = local
+		}
+	}
+	r := runner.New(runner.Options{Workdir: root})
+	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs})
+	plan := &orchestrator.Plan{
+		Order:      order,
+		Tasks:      tf.Tasks,
+		Defaults:   tf.Defaults,
+		Root:       root,
+		ConfigHash: hash.HashBytes(tf.Canonical),
+		Refresh:    *refresh,
+	}
+	start := time.Now()
+	results, err := orch.Execute(ctx, plan)
+	wall := time.Since(start)
+	printRunSummary(stderr, results, wall, *timing)
+	return err
+}
+
+// defaultAffectedRef picks a sensible default for `--since` when the
+// user doesn't supply one. Tries `origin/main` first (the standard
+// CI base), then `origin/master`, falling back to `HEAD~1` (compare
+// against the previous commit — useful for local "what just
+// changed").
+func defaultAffectedRef(repoRoot string) string {
+	for _, candidate := range []string{"origin/main", "origin/master"} {
+		cmd := exec.Command("git", "-C", repoRoot, "rev-parse", "--verify", candidate)
+		if cmd.Run() == nil {
+			return candidate
+		}
+	}
+	return "HEAD~1"
+}
+
+// gitChangedFiles returns the file set in the asymmetric diff range
+// `<since>...HEAD` — commits in HEAD not in <since>, restricted to
+// added/copied/modified/renamed files (a deleted file can't appear in
+// any task's inputs by definition). Path strings are relative to the
+// repo root.
+func gitChangedFiles(repoRoot, since string) ([]string, error) {
+	args := []string{"-C", repoRoot, "diff", "--name-only", "--diff-filter=ACMR", since + "...HEAD"}
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		files = append(files, line)
+	}
+	return files, nil
+}
+
+// tasksMatchingChanges returns the set of task names whose declared
+// `inputs` globs match at least one file in `changed`. Each task's
+// glob is interpreted relative to its `workdir`, so a task with
+// `workdir = "services/api"` and `inputs = "src/**/*.ts"` matches
+// changed file `services/api/src/foo.ts`.
+//
+// Tasks with empty `inputs` cannot be matched here (they have no
+// declared file dependencies; `pkf affected` doesn't speculate).
+func tasksMatchingChanges(tf *config.Taskfile, root string, changed []string) map[string]bool {
+	out := make(map[string]bool)
+	for name, task := range tf.Tasks {
+		if len(task.Inputs) == 0 {
+			continue
+		}
+		taskRoot := orchestrator.TaskRoot(task, root)
+		// Convert changed-file repo-relative paths into paths
+		// relative to the task's root for glob matching.
+		rel, err := filepath.Rel(root, taskRoot)
+		if err != nil || rel == "" {
+			rel = "."
+		}
+		prefix := ""
+		if rel != "." {
+			prefix = filepath.ToSlash(rel) + "/"
+		}
+		for _, file := range changed {
+			file = filepath.ToSlash(file)
+			if prefix != "" {
+				if !strings.HasPrefix(file, prefix) {
+					continue
+				}
+				file = strings.TrimPrefix(file, prefix)
+			}
+			for _, pat := range task.Inputs {
+				if ok, _ := doublestar.PathMatch(pat, file); ok {
+					out[name] = true
+					break
+				}
+			}
+			if out[name] {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// expandToDependents takes a set of directly-affected task names and
+// adds every task that transitively depends on any of them. Walks the
+// deps DAG forward (a task A `deps { B }` means A reaches B; here we
+// want the reverse — what reaches A's affected node).
+func expandToDependents(tf *config.Taskfile, direct map[string]bool) map[string]bool {
+	// Build the reverse adjacency: `dependents[B]` = [A : A.deps contains B]
+	dependents := make(map[string][]string, len(tf.Tasks))
+	for name, task := range tf.Tasks {
+		for _, dep := range task.Deps {
+			dependents[dep] = append(dependents[dep], name)
+		}
+	}
+	result := make(map[string]bool, len(direct))
+	queue := make([]string, 0, len(direct))
+	for n := range direct {
+		result[n] = true
+		queue = append(queue, n)
+	}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		for _, d := range dependents[n] {
+			if !result[d] {
+				result[d] = true
+				queue = append(queue, d)
+			}
+		}
+	}
+	return result
+}
 
 // cmdHooks implements `pkf hooks <install|uninstall|list>`. The
 // convention is: any task whose `name` matches a git client-side hook

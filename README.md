@@ -197,6 +197,10 @@ pkf format                     # pkl format -w on the Taskfile's directory
 pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
 pkf hooks install              # write .git/hooks/<event> shims for matching tasks
 pkf hooks list                 # show which hook events are wired
+pkf affected --since=origin/main test  # run only tasks affected by the PR diff
+pkf run a b c                  # run multiple targets in one go (topological union)
+pkf run                        # no args = the `default` task (errors if absent)
+pkf run --timing build         # also print per-task wall time at the end
 ```
 
 Visualizing a Taskfile is a single pipeline:
