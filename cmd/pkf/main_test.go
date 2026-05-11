@@ -509,6 +509,25 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestProfileChangesActionKey(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local probe = new Task { name = "probe"; cmd = "echo p"; cache = true; inputs { "Taskfile.pkl" } }
+tasks { probe }
+`)
+	var devOut, ciOut bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "--profile=dev", "--print-hash", "probe"}, &devOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("dev print-hash: %v", err)
+	}
+	if err := cmdRun([]string{"-f", taskfile, "--profile=ci", "--print-hash", "probe"}, &ciOut, &bytes.Buffer{}); err != nil {
+		t.Fatalf("ci print-hash: %v", err)
+	}
+	if devOut.String() == ciOut.String() {
+		t.Errorf("different profiles should yield different action keys:\ndev=%s\nci= %s",
+			devOut.String(), ciOut.String())
+	}
+}
+
 func TestCmdExplainShowsKeyComponents(t *testing.T) {
 	requirePkl(t)
 	var stdout, stderr bytes.Buffer

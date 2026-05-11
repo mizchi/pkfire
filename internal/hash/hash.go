@@ -34,6 +34,13 @@ type FileEntry struct {
 // tasks (their action key is solely a function of declared inputs), and
 // populated for the explicit target so `pkf run task -- foo` and
 // `pkf run task -- bar` produce distinct cache entries.
+//
+// Profile is the run-wide profile name (`--profile=<name>` on the CLI).
+// Empty when no profile is set. Distinct profiles cache as distinct
+// entries by design — `pkf run --profile=ci` and `pkf run --profile=dev`
+// won't share a cache slot even if every declared field is otherwise
+// identical, so a profile-specific cmd branch (`if [ "$PKF_PROFILE" =
+// "ci" ]; then ...; fi`) doesn't pollute the other profile's cache.
 type Action struct {
 	Cmd        string
 	Shell      string
@@ -43,6 +50,7 @@ type Action struct {
 	ConfigHash []byte
 	Args       []string
 	Params     map[string]string
+	Profile    string
 }
 
 // Key returns the 32-byte BLAKE3 digest of `a`.
@@ -62,6 +70,9 @@ func (a *Action) Key() [32]byte {
 		fmt.Fprintf(h, "arg:%d:%s\n", i, v)
 	}
 	writeMap(h, "param", a.Params)
+	if a.Profile != "" {
+		fmt.Fprintf(h, "profile:%s\n", a.Profile)
+	}
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out

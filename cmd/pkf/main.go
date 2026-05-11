@@ -38,7 +38,7 @@ import (
 // behavior — needed because `--<param>=<value>` and `-- <args>` appear
 // AFTER the task name.
 var runGlobalValueFlags = map[string]bool{
-	"f": true, "file": true, "j": true, "jobs": true,
+	"f": true, "file": true, "j": true, "jobs": true, "profile": true, "on-fail": true,
 }
 var runGlobalBoolFlags = map[string]bool{
 	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true,
@@ -509,6 +509,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
 	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
 	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
+	profile := fs.String("profile", "", "profile name passed as $PKF_PROFILE and folded into action keys")
+	onFail := fs.String("on-fail", "", "action on task failure: 'shell' drops into $SHELL in the failed task's workdir")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(globalArgs); err != nil {
@@ -589,9 +591,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	case *watch && (*dryRun || *printHash):
 		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash")
 	case *dryRun:
-		return printDryRun(stdout, root, tf, order, invTarget, inv, *noCache || *refresh)
+		return printDryRun(stdout, root, tf, order, invTarget, inv, *noCache || *refresh, *profile)
 	case *printHash:
-		return printHashes(stdout, root, tf, order, invTarget, inv)
+		return printHashes(stdout, root, tf, order, invTarget, inv, *profile)
 	}
 
 	var backend cache.Backend
@@ -608,7 +610,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 			backend = local
 		}
 	}
-	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet})
+	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet, Profile: *profile})
 	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{
 		Parallelism: *jobs,
 		Quiet:       *quiet,
@@ -623,6 +625,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		Target:           invTarget,
 		TargetInvocation: inv,
 		Refresh:          *refresh,
+		Profile:          *profile,
 	}
 	if *watch {
 		// Watch mode is still single-target only — its restart
@@ -636,7 +639,62 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	results, err := orch.Execute(ctx, plan)
 	wall := time.Since(start)
 	printRunSummary(stderr, results, wall, *timing)
+	if err != nil && *onFail == "shell" {
+		if shellErr := dropIntoFailShell(stderr, results, tf, root, *profile); shellErr != nil {
+			fmt.Fprintf(stderr, "[pkf] on-fail=shell: %v\n", shellErr)
+		}
+	}
 	return err
+}
+
+// dropIntoFailShell, when --on-fail=shell is set and the run produced
+// at least one failure, spawns an interactive shell in the failed
+// task's workdir with PKF_* env vars populated. The user can poke
+// around (check files, re-run the failing cmd manually, etc.).
+//
+// Doesn't try to reconstruct the failed task's full declared env —
+// that would require duplicating runner.mergeEnv here. The shell
+// inherits the user's terminal env plus PKF_TASK_NAME / PKF_TASK_ROOT
+// / PKF_WORKSPACE_ROOT / PKF_PROFILE so the user can `pkf explain
+// <task>` from the shell to dig further.
+func dropIntoFailShell(stderr io.Writer, results []orchestrator.Result, tf *config.Taskfile, root string, profile string) error {
+	var failed *orchestrator.Result
+	for i := range results {
+		if results[i].Err != nil && !errors.Is(results[i].Err, context.Canceled) {
+			failed = &results[i]
+			break
+		}
+	}
+	if failed == nil {
+		return nil
+	}
+	task, ok := tf.Tasks[failed.Name]
+	if !ok {
+		return fmt.Errorf("failed task %q not found in Taskfile (internal inconsistency)", failed.Name)
+	}
+	taskRoot := orchestrator.TaskRoot(task, root)
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	fmt.Fprintln(stderr)
+	fmt.Fprintf(stderr, "[pkf] on-fail=shell: task %q exited with %v\n", failed.Name, failed.Err)
+	fmt.Fprintf(stderr, "[pkf] entering %s in %s — type `exit` to return to pkf\n", shell, taskRoot)
+	cmd := exec.Command(shell)
+	cmd.Dir = taskRoot
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	env := append(os.Environ(),
+		"PKF_TASK_NAME="+failed.Name,
+		"PKF_TASK_ROOT="+taskRoot,
+		"PKF_WORKSPACE_ROOT="+root,
+	)
+	if profile != "" {
+		env = append(env, "PKF_PROFILE="+profile)
+	}
+	cmd.Env = env
+	return cmd.Run()
 }
 
 // unionSubgraph computes the topological order over the union of
@@ -982,7 +1040,7 @@ func buildGraph(tf *config.Taskfile) (*graph.Graph, error) {
 // printHashes computes and prints the action key of every task in `order`.
 // Cache state is not consulted; this is a diagnostic for understanding why
 // a task does or does not hit cache.
-func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation) error {
+func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation, profile string) error {
 	configHash := hash.HashBytes(tf.Canonical)
 	for _, name := range order {
 		task := tf.Tasks[name]
@@ -991,7 +1049,7 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 		if name == target {
 			taskInv = inv
 		}
-		key, err := orchestrator.ComputeKey(task, tf.Defaults, taskRoot, configHash, taskInv)
+		key, err := orchestrator.ComputeKey(task, tf.Defaults, taskRoot, configHash, taskInv, profile)
 		if err != nil {
 			return fmt.Errorf("compute key for %q: %w", name, err)
 		}
@@ -1620,6 +1678,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
 	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
 	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
+	profile := fs.String("profile", "", "profile name passed as $PKF_PROFILE and folded into action keys")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
@@ -1705,7 +1764,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("--no-cache and --refresh are mutually exclusive")
 	}
 	if *dryRun {
-		return printDryRun(stdout, root, tf, order, "", nil, *noCache || *refresh)
+		return printDryRun(stdout, root, tf, order, "", nil, *noCache || *refresh, *profile)
 	}
 
 	var backend cache.Backend
@@ -1722,7 +1781,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 			backend = local
 		}
 	}
-	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet})
+	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet, Profile: *profile})
 	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs, Quiet: *quiet, KeepGoing: *keepGoing})
 	plan := &orchestrator.Plan{
 		Order:      order,
@@ -1731,6 +1790,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 		Root:       root,
 		ConfigHash: hash.HashBytes(tf.Canonical),
 		Refresh:    *refresh,
+		Profile:    *profile,
 	}
 	start := time.Now()
 	results, err := orch.Execute(ctx, plan)
@@ -2643,7 +2703,7 @@ func serviceKey(p *orchestrator.Plan, name string) ([32]byte, error) {
 	taskRoot := orchestrator.TaskRoot(t, p.Root)
 	// Services in `pkf up` never receive caller args/params (those
 	// are scoped to `pkf run`), so the invocation is always nil here.
-	return orchestrator.ComputeKey(t, p.Defaults, taskRoot, p.ConfigHash, nil)
+	return orchestrator.ComputeKey(t, p.Defaults, taskRoot, p.ConfigHash, nil, p.Profile)
 }
 
 // stopServices reaps every running entry in reverse start order. nil
@@ -2670,7 +2730,7 @@ func stopServices(running []*runningService) {
 // inert so every cacheable task shows as "will run". `inv` carries
 // the per-invocation overlay (params / tail args) for the target
 // task so its action key matches what Execute would compute.
-func printDryRun(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation, skipCacheLookup bool) error {
+func printDryRun(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation, skipCacheLookup bool, profile string) error {
 	configHash := hash.HashBytes(tf.Canonical)
 
 	// Try to open the local cache for hit/miss prediction. A missing
@@ -2713,7 +2773,7 @@ func printDryRun(stdout io.Writer, root string, tf *config.Taskfile, order []str
 			uncached++
 		default:
 			taskRoot := orchestrator.TaskRoot(t, root)
-			key, err := orchestrator.ComputeKey(t, tf.Defaults, taskRoot, configHash, taskInv)
+			key, err := orchestrator.ComputeKey(t, tf.Defaults, taskRoot, configHash, taskInv, profile)
 			if err != nil {
 				return fmt.Errorf("compute key for %q: %w", name, err)
 			}

@@ -213,6 +213,8 @@ pkf completion zsh > "${fpath[1]}/_pkf"
 pkf completion fish > ~/.config/fish/completions/pkf.fish
 pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
 pkf explain build              # dump every input to the action key (cache-miss debug)
+pkf run --profile=ci build     # tag the run; $PKF_PROFILE + cache splits per profile
+pkf run --on-fail=shell build  # drop into $SHELL in the failed task's workdir on error
 ```
 
 Inside `cmd`, three env vars are always injected so tasks can

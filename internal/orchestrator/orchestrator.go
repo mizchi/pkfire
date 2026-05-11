@@ -54,12 +54,15 @@ func (o Outcome) String() string {
 // Result records what happened for one task. `Key` is the zero value when
 // the task was skipped before its key could be computed. `Duration` is
 // the wall time spent on the task itself — cache restore for a hit,
-// cmd execution for a run, zero for a skip.
+// cmd execution for a run, zero for a skip. `Err` is the task's own
+// failure (cmd exit non-zero, cache I/O failure, etc.); nil for
+// successes and for skips.
 type Result struct {
 	Name     string
 	Key      [32]byte
 	Outcome  Outcome
 	Duration time.Duration
+	Err      error
 }
 
 // Plan is everything Execute needs that is not the orchestrator's own
@@ -87,6 +90,11 @@ type Plan struct {
 	Target           string
 	TargetInvocation *runner.Invocation
 	Refresh          bool
+	// Profile is the run-wide --profile=<name> value. Folded into
+	// every task's action key (via hash.Action.Profile) so distinct
+	// profiles cache as distinct entries. The runner also injects
+	// it as $PKF_PROFILE so cmd can branch on it.
+	Profile string
 }
 
 // Options tunes a single Execute invocation.
@@ -140,7 +148,7 @@ func New(c cache.Backend, r *runner.Runner, stdout, stderr io.Writer, opts Optio
 // pass nil for non-target tasks. When non-nil and non-empty, its
 // contents are part of the digest so caller-supplied params/args
 // invalidate the cache for that single task.
-func ComputeKey(task *config.Task, defaults *config.Defaults, root string, configHash []byte, inv *runner.Invocation) ([32]byte, error) {
+func ComputeKey(task *config.Task, defaults *config.Defaults, root string, configHash []byte, inv *runner.Invocation, profile string) ([32]byte, error) {
 	entries, err := hash.HashInputs(root, task.Inputs)
 	if err != nil {
 		return [32]byte{}, err
@@ -160,6 +168,7 @@ func ComputeKey(task *config.Task, defaults *config.Defaults, root string, confi
 		Tools:      task.Tools,
 		Inputs:     entries,
 		ConfigHash: configHash,
+		Profile:    profile,
 	}
 	if inv != nil {
 		a.Args = inv.Args
@@ -297,15 +306,17 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	start := time.Now()
 	taskRoot := TaskRoot(task, p.Root)
 	inv := invocationFor(p, name)
-	key, err := ComputeKey(task, p.Defaults, taskRoot, p.ConfigHash, inv)
+	key, err := ComputeKey(task, p.Defaults, taskRoot, p.ConfigHash, inv, p.Profile)
 	if err != nil {
-		return Result{Name: name}, fmt.Errorf("compute key for %q: %w", name, err)
+		wrapped := fmt.Errorf("compute key for %q: %w", name, err)
+		return Result{Name: name, Err: wrapped}, wrapped
 	}
 	short := hash.FormatKey(key)[:12]
 
 	if task.Cache && o.cache != nil && !p.Refresh && o.cache.Has(key) {
 		if err := o.cache.Restore(key, taskRoot); err != nil {
-			return Result{Name: name, Key: key, Duration: time.Since(start)}, fmt.Errorf("cache restore for %q: %w", name, err)
+			wrapped := fmt.Errorf("cache restore for %q: %w", name, err)
+			return Result{Name: name, Key: key, Duration: time.Since(start), Err: wrapped}, wrapped
 		}
 		o.logLine(ioMu, "[pkf] %s: hit %s\n", name, short)
 		return Result{Name: name, Key: key, Outcome: OutcomeHit, Duration: time.Since(start)}, nil
@@ -319,7 +330,7 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	if len(task.Services) > 0 {
 		cleanup, err := o.startServices(ctx, name, p, ioMu)
 		if err != nil {
-			return Result{Name: name, Key: key, Duration: time.Since(start)}, err
+			return Result{Name: name, Key: key, Duration: time.Since(start), Err: err}, err
 		}
 		serviceCleanup = cleanup
 	}
@@ -338,9 +349,9 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) {
-			return Result{Name: name, Key: key, Outcome: OutcomeSkipped, Duration: time.Since(start)}, runErr
+			return Result{Name: name, Key: key, Outcome: OutcomeSkipped, Duration: time.Since(start), Err: runErr}, runErr
 		}
-		return Result{Name: name, Key: key, Duration: time.Since(start)}, runErr
+		return Result{Name: name, Key: key, Duration: time.Since(start), Err: runErr}, runErr
 	}
 
 	outcome := OutcomeRan
@@ -348,7 +359,8 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 		outcome = OutcomeUncached
 	} else if o.cache != nil {
 		if err := o.cache.Store(key, taskRoot, task.Outputs); err != nil {
-			return Result{Name: name, Key: key, Duration: time.Since(start)}, fmt.Errorf("cache store for %q: %w", name, err)
+			wrapped := fmt.Errorf("cache store for %q: %w", name, err)
+			return Result{Name: name, Key: key, Duration: time.Since(start), Err: wrapped}, wrapped
 		}
 	}
 	o.logLine(ioMu, "[pkf] %s: %s %s\n", name, outcome, short)

@@ -12,6 +12,21 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --profile=<name>` (also `pkf affected`).** Run-wide
+  profile tag injected as `$PKF_PROFILE` so `cmd` can branch
+  (`if [ "$PKF_PROFILE" = "ci" ]; then ...; fi`). Folded into
+  every task's action key, so distinct profiles cache as
+  distinct entries — `pkf run --profile=ci` and
+  `--profile=dev` never share a cache slot even when every
+  declared field is otherwise identical.
+- **`pkf run --on-fail=shell`.** After a non-zero run, drop into
+  `$SHELL` (or `/bin/bash`) in the first-failed task's
+  resolved workdir, with `PKF_TASK_NAME` / `PKF_TASK_ROOT` /
+  `PKF_WORKSPACE_ROOT` / `PKF_PROFILE` populated. `exit` returns
+  to pkf with the original exit code. Doesn't reconstruct the
+  failed task's full declared env (use `pkf explain <task>` from
+  inside the shell to see it) — just enough context to poke
+  around at the workdir.
 - **`pkf run --keep-going` (also wired into `pkf affected`).**
   Bazel `-k` / make `-k` semantics: a failure in one subgraph
   doesn't cancel other independent subgraphs. Transitive

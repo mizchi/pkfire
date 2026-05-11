@@ -31,6 +31,11 @@ type Options struct {
 	// the runner emits before invoking `cmd`. Failures and the task
 	// process's own stdout/stderr still pass through unmodified.
 	Quiet bool
+	// Profile is the run-wide --profile=<name> value. Injected as
+	// $PKF_PROFILE into every cmd's env so tasks can branch on it.
+	// Action-key folding happens at the orchestrator level (via
+	// Plan.Profile); the runner just propagates the env var.
+	Profile string
 }
 
 // Runner is a stateless executor; it is parameterized by Options.
@@ -127,6 +132,9 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 		"PKF_TASK_NAME=" + name,
 		"PKF_TASK_ROOT=" + cmd.Dir,
 		"PKF_WORKSPACE_ROOT=" + r.opts.Workdir,
+	}
+	if r.opts.Profile != "" {
+		pkfEnv = append(pkfEnv, "PKF_PROFILE="+r.opts.Profile)
 	}
 	cmd.Env = append(mergeEnv(defaults, task, inv), pkfEnv...)
 

@@ -175,11 +175,11 @@ func TestComputeKeyIsStableAcrossCalls(t *testing.T) {
 		Env:    map[string]string{"A": "1"},
 	}
 	defaults := &config.Defaults{Shell: "bash"}
-	a, err := orchestrator.ComputeKey(task, defaults, root, []byte("c"), nil)
+	a, err := orchestrator.ComputeKey(task, defaults, root, []byte("c"), nil, "")
 	if err != nil {
 		t.Fatalf("ComputeKey: %v", err)
 	}
-	b, err := orchestrator.ComputeKey(task, defaults, root, []byte("c"), nil)
+	b, err := orchestrator.ComputeKey(task, defaults, root, []byte("c"), nil, "")
 	if err != nil {
 		t.Fatalf("ComputeKey: %v", err)
 	}
