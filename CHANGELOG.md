@@ -10,6 +10,13 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-11
+
+Pkl schema is unchanged from 0.4.0 / 0.5.0 — this release ships
+the second wave of `pkf` CLI features and runtime behavior on top
+of the same schema surface. Existing Taskfiles keep working; the
+`amends` URI bump is mechanical.
+
 ### Added
 
 - **`pkf <plugin> <args>` plugin dispatch.** When `args[0]` isn't a

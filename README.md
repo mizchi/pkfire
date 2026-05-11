@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: mizchi/pkfire@v0.5.0       # or @v0 to track the latest 0.x
+      - uses: mizchi/pkfire@v0.6.0       # or @v0 to track the latest 0.x
       - run: pkf run ci
 ```
 
@@ -80,7 +80,7 @@ the runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`.
 After it runs, the rest of the workflow calls `pkf` directly — no
 `go install`, no Pkl bootstrap.
 
-> **Why `@v0.5.0` and not `@pkfire@0.5.0`?** GitHub Actions cannot
+> **Why `@v0.5.0` and not `@pkfire@0.6.0`?** GitHub Actions cannot
 > parse `uses: <repo>@<ref>` when the ref itself contains `@` — the
 > whole workflow file fails to load with a generic
 > "workflow file issue" error and zero jobs run. Pkl release tags
@@ -95,7 +95,7 @@ binary, and the Pkl schema all move together. To share cache hits
 across CI runs and developers, wire the remote cache env:
 
 ```yaml
-      - uses: mizchi/pkfire@v0.5.0
+      - uses: mizchi/pkfire@v0.6.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -106,7 +106,7 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | the action ref, falling back to the latest release | Accepts `v0.5.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.5.0`. Pinning via `uses: mizchi/pkfire@v0.5.0` is the recommended form. |
+| `version` | the action ref, falling back to the latest release | Accepts `v0.5.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.6.0`. Pinning via `uses: mizchi/pkfire@v0.6.0` is the recommended form. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
 | `cache-pkl` | `false` | Set to `true` to cache `~/.pkl/cache` between runs. Useful for projects that consume remote Pkl packages (`amends` / `import` of `package://pkg.pkl-lang.org/...`). |
@@ -142,7 +142,7 @@ your project does not need a clone of this repo.
 ## Authoring a Taskfile
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.5.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0#/Taskfile.pkl"
 
 local build = new Task {
   name = "build"
@@ -343,9 +343,9 @@ pick whichever option fits:
 
 | Option | `amends` line | Notes |
 | --- | --- | --- |
-| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.5.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
+| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
 | HTTPS, floating tip | `amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"` | What older `pkf init` wrote. Pkl fetches and caches. |
-| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.5.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
+| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.6.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
 | Local clone | `amends "../pkfire/pkl/Taskfile.pkl"` | When `mizchi/pkfire` is a sibling checkout. |
 
 The package is published as a GitHub release whose tag matches
