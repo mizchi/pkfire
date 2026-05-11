@@ -73,8 +73,15 @@ jobs:
             fi
           }
 
-          tags=$(gh api "repos/${REPO}/git/matching-refs/tags/pkfire@" \
-                 --jq '.[].ref' | sed 's|^refs/tags/||' | sort -V)
+          # Use /git/refs/tags (generic list) + client-side filter
+          # rather than /git/matching-refs/tags/pkfire@ — the trailing
+          # `@` in the path 403s in this repo's actions context even
+          # with `Contents: write`. The generic endpoint works.
+          tags=$(gh api --paginate "repos/${REPO}/git/refs/tags" \
+                 --jq '.[].ref' \
+                 | grep '^refs/tags/pkfire@' \
+                 | sed 's|^refs/tags/||' \
+                 | sort -V)
           if [ -z "$tags" ]; then
             echo "no pkfire@* tags found — nothing to sync"
             exit 0
