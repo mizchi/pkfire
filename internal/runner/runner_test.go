@@ -57,6 +57,86 @@ func TestRunReportsFailure(t *testing.T) {
 	}
 }
 
+func TestRunInheritsHostEnvByDefault(t *testing.T) {
+	t.Setenv("PKFIRE_TEST_INHERIT", "yes")
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.Run(context.Background(), "show", &config.Task{
+		Cmd:        `printf "%s" "$PKFIRE_TEST_INHERIT"`,
+		Shell:      "bash",
+		InheritEnv: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := stdout.String(); got != "yes" {
+		t.Errorf("inherited env not visible: stdout = %q", got)
+	}
+}
+
+func TestRunHermeticDropsAmbientEnv(t *testing.T) {
+	t.Setenv("PKFIRE_TEST_HERMETIC", "leak")
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.Run(context.Background(), "show", &config.Task{
+		Cmd:        `printf "%s" "$PKFIRE_TEST_HERMETIC"`,
+		Shell:      "bash",
+		InheritEnv: false,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := stdout.String(); got != "" {
+		t.Errorf("hermetic mode leaked ambient env: stdout = %q", got)
+	}
+}
+
+func TestRunWithIOForwardsTailArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.RunWithIO(context.Background(), "run", &config.Task{
+		Cmd:         `printf "%s|%s|%s" "$#" "$1" "$2"`,
+		Shell:       "bash",
+		AcceptsArgs: true,
+	}, nil, &runner.Invocation{Args: []string{"alpha", "beta"}}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := stdout.String(); got != "2|alpha|beta" {
+		t.Errorf("tail args not forwarded: stdout = %q", got)
+	}
+}
+
+func TestRunWithIORejectsArgsWhenNotAccepted(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.RunWithIO(context.Background(), "run", &config.Task{
+		Cmd:   "true",
+		Shell: "bash",
+	}, nil, &runner.Invocation{Args: []string{"x"}}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error when task does not accept args")
+	}
+	if !strings.Contains(err.Error(), "does not accept positional args") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunWithIOInjectsParamsAsEnv(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.RunWithIO(context.Background(), "run", &config.Task{
+		Cmd:   `printf "%s" "$BUMP"`,
+		Shell: "bash",
+	}, nil, &runner.Invocation{Params: map[string]string{"BUMP": "minor"}}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := stdout.String(); got != "minor" {
+		t.Errorf("param env not visible: stdout = %q", got)
+	}
+}
+
 func TestRunAllStopsOnFirstError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})

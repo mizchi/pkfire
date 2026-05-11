@@ -31,6 +31,19 @@ type Task struct {
 	ReadyPort              int               `pkl:"readyPort"`
 	ReadyCmd               string            `pkl:"readyCmd"`
 	ReadyTimeoutSeconds    int               `pkl:"readyTimeoutSeconds"`
+	InheritEnv             bool              `pkl:"inheritEnv"`
+	AcceptsArgs            bool              `pkl:"acceptsArgs"`
+	Params                 []*Param          `pkl:"params"`
+}
+
+// Param mirrors `pkfire.Taskfile#Param`. A param's resolved value is
+// exposed to `cmd` as $NAME (uppercased) at run time.
+type Param struct {
+	Name        string   `pkl:"name"`
+	Type        string   `pkl:"type"`
+	Choices     []string `pkl:"choices"`
+	Default     *string  `pkl:"default"`
+	Description *string  `pkl:"description"`
 }
 
 // Defaults mirrors `pkfire.Taskfile#Defaults`.
@@ -58,6 +71,7 @@ func init() {
 	pkl.RegisterMapping("pkfire.Taskfile#Rendered", Taskfile{})
 	pkl.RegisterMapping("pkfire.Taskfile#Defaults", Defaults{})
 	pkl.RegisterMapping("pkfire.Taskfile#RenderedTask", Task{})
+	pkl.RegisterMapping("pkfire.Taskfile#RenderedParam", Param{})
 }
 
 // Load evaluates the Pkl module at `path` and decodes it into a Taskfile.

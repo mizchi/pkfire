@@ -25,6 +25,18 @@ import (
 	"github.com/mizchi/pkfire/internal/watcher"
 )
 
+// runFlagSpec captures the shape of `pkf run`'s built-in flags so we can
+// split the command line into [global flags] [task name] [task args]
+// without relying on stdlib `flag`'s default "stop at first positional"
+// behavior — needed because `--<param>=<value>` and `-- <args>` appear
+// AFTER the task name.
+var runGlobalValueFlags = map[string]bool{
+	"f": true, "file": true, "j": true, "jobs": true,
+}
+var runGlobalBoolFlags = map[string]bool{
+	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true,
+}
+
 // version is overridden at link time via `-ldflags "-X main.version=…"`.
 var version = "dev"
 
@@ -363,6 +375,14 @@ func writeMermaid(w io.Writer, tf *config.Taskfile, nodes []string, keep map[str
 }
 
 func cmdRun(args []string, stdout, stderr io.Writer) error {
+	// Split args so we can position-anchor on the task name: anything
+	// before it is a global flag, everything after is task-scoped
+	// (param flags + tail `-- a b c`).
+	globalArgs, target, postArgs, err := splitRunArgs(args)
+	if err != nil {
+		return err
+	}
+
 	fs := flag.NewFlagSet("pkf run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -372,14 +392,12 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	watch := fs.Bool("watch", false, "re-run on input changes")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(globalArgs); err != nil {
 		return err
 	}
-	rest := fs.Args()
-	if len(rest) != 1 {
-		return fmt.Errorf("run requires exactly one task name")
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("unexpected args before task name: %v", fs.Args())
 	}
-	target := rest[0]
 
 	abs, err := resolveFile(fs, *file)
 	if err != nil {
@@ -403,6 +421,11 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	inv, err := resolveInvocation(tf.Tasks[target], target, postArgs)
+	if err != nil {
+		return err
+	}
+
 	root := filepath.Dir(abs)
 	switch {
 	case *dryRun && *printHash:
@@ -412,7 +435,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	case *dryRun:
 		return printDryRun(stdout, tf, order)
 	case *printHash:
-		return printHashes(stdout, root, tf, order)
+		return printHashes(stdout, root, tf, order, target, inv)
 	}
 
 	var backend cache.Backend
@@ -434,17 +457,153 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		Parallelism: *jobs,
 	})
 	plan := &orchestrator.Plan{
-		Order:      order,
-		Tasks:      tf.Tasks,
-		Defaults:   tf.Defaults,
-		Root:       root,
-		ConfigHash: hash.HashBytes(tf.Canonical),
+		Order:            order,
+		Tasks:            tf.Tasks,
+		Defaults:         tf.Defaults,
+		Root:             root,
+		ConfigHash:       hash.HashBytes(tf.Canonical),
+		Target:           target,
+		TargetInvocation: inv,
 	}
 	if *watch {
 		return runWatch(ctx, abs, root, target, orch, plan, stderr)
 	}
 	_, err = orch.Execute(ctx, plan)
 	return err
+}
+
+// splitRunArgs walks args splitting at the first non-global-flag token —
+// that token is the task name. Returns (globalFlags, taskName, taskArgs).
+// taskArgs contains everything after the task name (param flags, "--",
+// tail args).
+//
+// We can't use stdlib `flag.Parse` for this because stdlib stops at the
+// first positional, which would prevent `pkf run task --watch` from
+// parsing `--watch` as a global. Hand-rolling lets us keep the
+// pre-0.4 flag order (`pkf run -f x.pkl mytask`) while also accepting
+// the new shape (`pkf run mytask --param=val -- tail`).
+func splitRunArgs(args []string) (globalArgs []string, taskName string, taskArgs []string, err error) {
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			taskName = a
+			globalArgs = args[:i]
+			taskArgs = args[i+1:]
+			return
+		}
+		// `--` before a task name is unusual; preserve it as a global
+		// token (the FlagSet will reject it cleanly).
+		bare := strings.TrimLeft(a, "-")
+		if eq := strings.Index(bare, "="); eq >= 0 {
+			bare = bare[:eq]
+			i++
+			continue
+		}
+		if runGlobalValueFlags[bare] {
+			i += 2
+			continue
+		}
+		if runGlobalBoolFlags[bare] {
+			i++
+			continue
+		}
+		// Unknown flag-shaped token before the task name. Let FlagSet
+		// report it.
+		i++
+	}
+	err = fmt.Errorf("run requires exactly one task name")
+	return
+}
+
+// resolveInvocation reads `postArgs` (everything after the task name on
+// `pkf run`'s command line) against the task's declared params and
+// `--` tail-args contract. Returns nil when the task declares neither
+// params nor acceptsArgs and the caller supplied nothing (so plans
+// without invocation overlays match pre-0.4 cache keys exactly).
+func resolveInvocation(task *config.Task, name string, postArgs []string) (*runner.Invocation, error) {
+	// Split at `--`: everything after is tail args.
+	var preTail, tail []string
+	tailSeen := false
+	for i, a := range postArgs {
+		if a == "--" {
+			preTail = postArgs[:i]
+			tail = postArgs[i+1:]
+			tailSeen = true
+			break
+		}
+	}
+	if !tailSeen {
+		preTail = postArgs
+	}
+
+	// Validate tail-args against acceptsArgs.
+	if len(tail) > 0 && !task.AcceptsArgs {
+		return nil, fmt.Errorf("task %q does not accept positional args (set acceptsArgs = true)", name)
+	}
+
+	// Walk preTail collecting --<name>=<value> / --<name> <value> against
+	// declared params; unknown flags are errors.
+	declared := make(map[string]*config.Param, len(task.Params))
+	for _, p := range task.Params {
+		declared[p.Name] = p
+	}
+	given := make(map[string]string)
+	i := 0
+	for i < len(preTail) {
+		tok := preTail[i]
+		if !strings.HasPrefix(tok, "--") {
+			return nil, fmt.Errorf("unexpected positional %q (did you mean to pass tail args after `--`?)", tok)
+		}
+		body := strings.TrimPrefix(tok, "--")
+		var key, val string
+		if eq := strings.Index(body, "="); eq >= 0 {
+			key, val = body[:eq], body[eq+1:]
+			i++
+		} else {
+			key = body
+			if i+1 >= len(preTail) {
+				return nil, fmt.Errorf("flag --%s needs a value", key)
+			}
+			val = preTail[i+1]
+			i += 2
+		}
+		p, ok := declared[key]
+		if !ok {
+			return nil, fmt.Errorf("task %q has no param %q", name, key)
+		}
+		if p.Type == "enum" {
+			match := false
+			for _, c := range p.Choices {
+				if c == val {
+					match = true
+					break
+				}
+			}
+			if !match {
+				return nil, fmt.Errorf("param --%s=%q is not one of: %s", key, val, strings.Join(p.Choices, ", "))
+			}
+		}
+		given[key] = val
+	}
+
+	// Apply defaults; error on missing required params.
+	resolved := make(map[string]string)
+	for _, p := range task.Params {
+		v, ok := given[p.Name]
+		if !ok {
+			if p.Default == nil {
+				return nil, fmt.Errorf("task %q requires --%s", name, p.Name)
+			}
+			v = *p.Default
+		}
+		resolved[strings.ToUpper(p.Name)] = v
+	}
+
+	if len(resolved) == 0 && len(tail) == 0 {
+		return nil, nil
+	}
+	return &runner.Invocation{Params: resolved, Args: tail}, nil
 }
 
 // runWatch loops: execute the plan, then wait for input changes (or Ctrl+C),
@@ -538,12 +697,16 @@ func buildGraph(tf *config.Taskfile) (*graph.Graph, error) {
 // printHashes computes and prints the action key of every task in `order`.
 // Cache state is not consulted; this is a diagnostic for understanding why
 // a task does or does not hit cache.
-func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []string) error {
+func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation) error {
 	configHash := hash.HashBytes(tf.Canonical)
 	for _, name := range order {
 		task := tf.Tasks[name]
 		taskRoot := orchestrator.TaskRoot(task, root)
-		key, err := orchestrator.ComputeKey(task, tf.Defaults, taskRoot, configHash)
+		var taskInv *runner.Invocation
+		if name == target {
+			taskInv = inv
+		}
+		key, err := orchestrator.ComputeKey(task, tf.Defaults, taskRoot, configHash, taskInv)
 		if err != nil {
 			return fmt.Errorf("compute key for %q: %w", name, err)
 		}
@@ -842,7 +1005,9 @@ func serviceKey(p *orchestrator.Plan, name string) ([32]byte, error) {
 		return [32]byte{}, fmt.Errorf("service %q not in plan", name)
 	}
 	taskRoot := orchestrator.TaskRoot(t, p.Root)
-	return orchestrator.ComputeKey(t, p.Defaults, taskRoot, p.ConfigHash)
+	// Services in `pkf up` never receive caller args/params (those
+	// are scoped to `pkf run`), so the invocation is always nil here.
+	return orchestrator.ComputeKey(t, p.Defaults, taskRoot, p.ConfigHash, nil)
 }
 
 // stopServices reaps every running entry in reverse start order. nil

@@ -1,0 +1,39 @@
+/// Recipe 10: variadic args via `acceptsArgs`.
+///
+/// The just analogue is `just run *ARGS`. Set `acceptsArgs = true` and
+/// the task accepts arbitrary positional args after `--`:
+///
+///     pkf run dev -- --watch src/main.ts
+///     pkf run test -- --grep "checkout flow"
+///
+/// Inside `cmd`, the args land on `$1`, `$2`, ..., and the joined form
+/// `"$@"` (always quote it). They are also part of the action key when
+/// `cache = true`, so two different invocations produce two cache
+/// entries; for command wrappers you typically want `cache = false`.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+/// Wrapper for an arbitrary node script. `pkf run script -- foo.ts a b`
+/// is equivalent to `node foo.ts a b`.
+local script: Task = new {
+  name = "script"
+  description = "Run an arbitrary node script with forwarded args"
+  cmd = "node \"$@\""
+  acceptsArgs = true
+  cache = false
+}
+
+/// Forward args to vitest — `pkf run test -- --grep cart` runs only
+/// matching tests. The base inputs still gate the cache key for runs
+/// without args.
+local test: Task = new {
+  name = "test"
+  description = "vitest (forward args via -- pass-through)"
+  cmd = "pnpm exec vitest run \"$@\""
+  inputs { "src/**/*.ts"; "test/**/*.ts" }
+  acceptsArgs = true
+  // Different args should produce different runs; turning cache off is
+  // the safe default for filter-driven workflows.
+  cache = false
+}
+
+tasks { script; test }

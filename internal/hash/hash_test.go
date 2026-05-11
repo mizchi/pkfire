@@ -66,6 +66,16 @@ func TestKeyChangesWhenAnyComponentChanges(t *testing.T) {
 	mutate("input-content", func(a *hash.Action) { a.Inputs[0].Hash = []byte{0xbb} })
 	mutate("input-path", func(a *hash.Action) { a.Inputs[0].Path = "b.go" })
 	mutate("config", func(a *hash.Action) { a.ConfigHash = []byte("c1") })
+	mutate("args-added", func(a *hash.Action) { a.Args = []string{"x"} })
+	mutate("params-added", func(a *hash.Action) { a.Params = map[string]string{"BUMP": "patch"} })
+}
+
+func TestArgOrderAffectsKey(t *testing.T) {
+	a := &hash.Action{Cmd: "x", Args: []string{"a", "b"}}
+	b := &hash.Action{Cmd: "x", Args: []string{"b", "a"}}
+	if a.Key() == b.Key() {
+		t.Fatal("arg order should affect key")
+	}
 }
 
 func TestKeyIgnoresEnvMapOrder(t *testing.T) {

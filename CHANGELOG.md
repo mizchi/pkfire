@@ -10,7 +10,56 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-11
+
 ### Added
+
+- **Default-on `inheritEnv`.** New `Task.inheritEnv: Boolean = true`.
+  By default `cmd` now sees pkfire's full ambient environment
+  (`os.Environ()`), matching `just`/`make`/`npm run` semantics — so
+  `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, locale, and dev-tool sockets
+  pass through without `env { ["SSH_AUTH_SOCK"] = read("env:...") }`
+  boilerplate. Set `inheritEnv = false` for hermetic tasks; that
+  mode preserves the pre-0.4 small allowlist (`PATH`, `HOME`,
+  `LANG`, ...). In both modes only the schema-declared `env { ... }`
+  contributes to the action key, never the host environment.
+- **Variadic tail args via `acceptsArgs`.** New
+  `Task.acceptsArgs: Boolean = false`. When true,
+  `pkf run <task> -- a b c` forwards `a b c` to `cmd` as `$1`,
+  `$2`, ... and `$@` (using `bash -c '<script>' pkf a b c`). Maps
+  to just's `*ARGS` shape. The args fold into the action key when
+  `cache = true`, so different invocations cache as different
+  entries.
+- **Typed named flags via `params { Param ... }`.** New
+  `Task.params: Listing<Param>` with the `Param` class
+  (`name`/`type: "string"|"enum"`/`choices`/`default`/`description`).
+  The caller passes `pkf run <task> --<name>=<value>`; pkf
+  validates enums and defaults *before* the cmd runs, then exposes
+  each resolved value to `cmd` as `$NAME` (uppercased). Missing
+  required params (no `default`) error out client-side. Resolved
+  values are part of the action key when `cache = true`, so
+  `--bump=patch` and `--bump=minor` cache separately. Recipe at
+  `skills/pkfire/assets/recipes/11-named-params.pkl`.
+- **Task names may now contain `/`.** The name regex is relaxed
+  from `^[a-zA-Z][a-zA-Z0-9_:.-]*$` to
+  `^[a-zA-Z][a-zA-Z0-9_:./-]*$`. Lets the directory tree drive task
+  identity (`check-translate/docs:DESIGN`,
+  `services/api/build`) when one task per subtree is the natural
+  decomposition. Cache layout is unaffected — entries are keyed by
+  the action-key digest, not the task name.
+
+### Changed
+
+- Schema bumped to 0.4.0. Adds `inheritEnv`, `acceptsArgs`,
+  `params` to `Task`; adds the `Param` class. All new fields have
+  sensible defaults so an existing 0.3.x Taskfile keeps evaluating
+  unchanged; but the runtime behavior shifts for tasks that
+  previously relied on the pre-0.4 hermetic-allowlist env: tasks
+  that now see `SSH_AUTH_SOCK` (etc.) get them via inheritance.
+  Set `inheritEnv = false` per-task to opt back into the old
+  behavior.
+
+### Previously-unreleased (now shipping in 0.4.0)
 
 - **Per-service granular restart in `pkf up --watch`.** Each service
   now has its own action key tracked across watch iterations. On a
@@ -107,5 +156,6 @@ Action version all move together — there is one tag per release
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.1.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.4.0...HEAD
+[0.4.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.4.0
 [0.1.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.1.0

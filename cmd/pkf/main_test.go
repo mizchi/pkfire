@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mizchi/pkfire/internal/config"
 )
 
 func requirePkl(t *testing.T) {
@@ -181,6 +183,136 @@ func TestWalkUpFallsBackWhenMissing(t *testing.T) {
 	if got != want {
 		t.Errorf("walkUp = %q, want %q (fallback path under start)", got, want)
 	}
+}
+
+func TestSplitRunArgsAcceptsTrailingFlags(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantGlobal []string
+		wantTask   string
+		wantTail   []string
+	}{
+		{"task only", []string{"build"}, nil, "build", nil},
+		{"global before task", []string{"-f", "x.pkl", "build"}, []string{"-f", "x.pkl"}, "build", nil},
+		{"flag after task", []string{"build", "--watch"}, nil, "build", []string{"--watch"}},
+		{"param after task", []string{"run", "--bump=patch"}, nil, "run", []string{"--bump=patch"}},
+		{"tail args", []string{"run", "--", "a", "b"}, nil, "run", []string{"--", "a", "b"}},
+		{"j with value before task", []string{"-j", "4", "build"}, []string{"-j", "4"}, "build", nil},
+		{"--file=x form", []string{"--file=x.pkl", "build"}, []string{"--file=x.pkl"}, "build", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gl, tn, tl, err := splitRunArgs(tc.args)
+			if err != nil {
+				t.Fatalf("splitRunArgs: %v", err)
+			}
+			if !equalStrSlice(gl, tc.wantGlobal) {
+				t.Errorf("globalArgs = %v, want %v", gl, tc.wantGlobal)
+			}
+			if tn != tc.wantTask {
+				t.Errorf("taskName = %q, want %q", tn, tc.wantTask)
+			}
+			if !equalStrSlice(tl, tc.wantTail) {
+				t.Errorf("taskArgs = %v, want %v", tl, tc.wantTail)
+			}
+		})
+	}
+}
+
+func TestSplitRunArgsRequiresTaskName(t *testing.T) {
+	if _, _, _, err := splitRunArgs([]string{"--watch"}); err == nil {
+		t.Fatal("expected error when no task name is present")
+	}
+}
+
+func TestResolveInvocationEnumParam(t *testing.T) {
+	def := "patch"
+	task := &config.Task{
+		Params: []*config.Param{
+			{Name: "bump", Type: "enum", Choices: []string{"patch", "minor", "major"}, Default: &def},
+		},
+	}
+	inv, err := resolveInvocation(task, "t", []string{"--bump=minor"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv == nil || inv.Params["BUMP"] != "minor" {
+		t.Fatalf("got %+v, want BUMP=minor", inv)
+	}
+}
+
+func TestResolveInvocationEnumRejectsBadValue(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "bump", Type: "enum", Choices: []string{"patch"}}},
+	}
+	if _, err := resolveInvocation(task, "t", []string{"--bump=bogus"}); err == nil {
+		t.Fatal("expected enum-validation error")
+	}
+}
+
+func TestResolveInvocationDefaultsAreApplied(t *testing.T) {
+	def := "world"
+	task := &config.Task{
+		Params: []*config.Param{{Name: "hi", Type: "string", Default: &def}},
+	}
+	inv, err := resolveInvocation(task, "t", nil)
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv == nil || inv.Params["HI"] != "world" {
+		t.Fatalf("default not applied: %+v", inv)
+	}
+}
+
+func TestResolveInvocationMissingRequiredParam(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "who", Type: "string"}},
+	}
+	if _, err := resolveInvocation(task, "t", nil); err == nil {
+		t.Fatal("expected missing-required error")
+	}
+}
+
+func TestResolveInvocationRejectsArgsWhenNotAccepted(t *testing.T) {
+	task := &config.Task{AcceptsArgs: false}
+	if _, err := resolveInvocation(task, "t", []string{"--", "extra"}); err == nil {
+		t.Fatal("expected error when acceptsArgs=false")
+	}
+}
+
+func TestResolveInvocationForwardsTailArgs(t *testing.T) {
+	task := &config.Task{AcceptsArgs: true}
+	inv, err := resolveInvocation(task, "t", []string{"--", "a", "b"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv == nil || len(inv.Args) != 2 || inv.Args[0] != "a" || inv.Args[1] != "b" {
+		t.Fatalf("tail args not preserved: %+v", inv)
+	}
+}
+
+func TestResolveInvocationReturnsNilWhenNoOverlay(t *testing.T) {
+	task := &config.Task{}
+	inv, err := resolveInvocation(task, "t", nil)
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv != nil {
+		t.Fatalf("expected nil invocation for empty task+args, got %+v", inv)
+	}
+}
+
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {

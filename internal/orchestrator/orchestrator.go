@@ -60,12 +60,20 @@ type Result struct {
 
 // Plan is everything Execute needs that is not the orchestrator's own
 // runner/cache. ConfigHash is typically `hash.HashBytes(taskfile.Canonical)`.
+//
+// Target/TargetInvocation describe the per-run command-line overlay for
+// the explicit target task (the one the user named on `pkf run`).
+// Non-target tasks always see a nil invocation: deps don't receive
+// caller args/params, so their action keys stay stable across
+// invocations.
 type Plan struct {
-	Order      []string
-	Tasks      map[string]*config.Task
-	Defaults   *config.Defaults
-	Root       string
-	ConfigHash []byte
+	Order            []string
+	Tasks            map[string]*config.Task
+	Defaults         *config.Defaults
+	Root             string
+	ConfigHash       []byte
+	Target           string
+	TargetInvocation *runner.Invocation
 }
 
 // Options tunes a single Execute invocation.
@@ -102,7 +110,12 @@ func New(c cache.Backend, r *runner.Runner, stdout, stderr io.Writer, opts Optio
 
 // ComputeKey assembles a `hash.Action` for `task` and returns its action key.
 // Exposed so `pkf run --print-hash` can reuse the same logic.
-func ComputeKey(task *config.Task, defaults *config.Defaults, root string, configHash []byte) ([32]byte, error) {
+//
+// `inv` is the per-invocation overlay (caller args + resolved params);
+// pass nil for non-target tasks. When non-nil and non-empty, its
+// contents are part of the digest so caller-supplied params/args
+// invalidate the cache for that single task.
+func ComputeKey(task *config.Task, defaults *config.Defaults, root string, configHash []byte, inv *runner.Invocation) ([32]byte, error) {
 	entries, err := hash.HashInputs(root, task.Inputs)
 	if err != nil {
 		return [32]byte{}, err
@@ -123,7 +136,21 @@ func ComputeKey(task *config.Task, defaults *config.Defaults, root string, confi
 		Inputs:     entries,
 		ConfigHash: configHash,
 	}
+	if inv != nil {
+		a.Args = inv.Args
+		a.Params = inv.Params
+	}
 	return a.Key(), nil
+}
+
+// invocationFor returns the per-task invocation overlay: the plan's
+// target invocation when `name` matches `plan.Target`, otherwise nil
+// (deps don't receive caller args/params).
+func invocationFor(p *Plan, name string) *runner.Invocation {
+	if p.Target != "" && p.Target == name {
+		return p.TargetInvocation
+	}
+	return nil
 }
 
 // Execute walks the plan, scheduling tasks once their declared deps complete.
@@ -239,7 +266,8 @@ func TaskRoot(task *config.Task, planRoot string) string {
 // and stderr into buffers that are flushed atomically under `ioMu`.
 func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config.Task, p *Plan, ioMu *sync.Mutex) (Result, error) {
 	taskRoot := TaskRoot(task, p.Root)
-	key, err := ComputeKey(task, p.Defaults, taskRoot, p.ConfigHash)
+	inv := invocationFor(p, name)
+	key, err := ComputeKey(task, p.Defaults, taskRoot, p.ConfigHash, inv)
 	if err != nil {
 		return Result{Name: name}, fmt.Errorf("compute key for %q: %w", name, err)
 	}
@@ -267,7 +295,7 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
-	runErr := o.runner.RunWithIO(ctx, name, task, p.Defaults, &stdoutBuf, &stderrBuf)
+	runErr := o.runner.RunWithIO(ctx, name, task, p.Defaults, inv, &stdoutBuf, &stderrBuf)
 
 	if serviceCleanup != nil {
 		serviceCleanup()
@@ -369,7 +397,7 @@ func (o *Orchestrator) startServiceTree(ctx context.Context, taskName string, p 
 			defer wg.Done()
 			defer sw.flush()
 			defer ew.flush()
-			_ = o.runner.RunWithIO(ctx, name, t, p.Defaults, sw, ew)
+			_ = o.runner.RunWithIO(ctx, name, t, p.Defaults, nil, sw, ew)
 		}(svcName, svcTask, stdoutW, stderrW)
 
 		// After spawning, gate dependent work on the probe passing.
@@ -429,7 +457,7 @@ func (o *Orchestrator) StartSingleService(ctx context.Context, name string, p *P
 		defer close(waitCh)
 		defer stdoutW.flush()
 		defer stderrW.flush()
-		_ = o.runner.RunWithIO(svcCtx, name, t, p.Defaults, stdoutW, stderrW)
+		_ = o.runner.RunWithIO(svcCtx, name, t, p.Defaults, nil, stdoutW, stderrW)
 	}()
 
 	if hasProbe(t) {

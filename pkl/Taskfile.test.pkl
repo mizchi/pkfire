@@ -83,6 +83,44 @@ facts {
     module.catch(() -> (new Schema.Task { name = "has space"; cmd = "x" }).name) != null
     module.catch(() -> (new Schema.Task { name = "1leading-digit"; cmd = "x" }).name) != null
   }
+
+  ["name allows forward slash"] {
+    (new Schema.Task { name = "check-translate/docs"; cmd = "x" }).name == "check-translate/docs"
+  }
+
+  ["inheritEnv defaults to true"] {
+    build.inheritEnv == true
+  }
+
+  ["inheritEnv can be turned off"] {
+    (new Schema.Task { name = "hermetic"; cmd = "x"; inheritEnv = false }).inheritEnv == false
+  }
+
+  ["acceptsArgs defaults to false"] {
+    build.acceptsArgs == false
+  }
+
+  ["acceptsArgs round-trips"] {
+    (new Schema.Task { name = "run"; cmd = "node \"$@\""; acceptsArgs = true }).acceptsArgs == true
+  }
+
+  ["params defaults to empty"] {
+    build.params.toList().isEmpty
+  }
+
+  ["enum param round-trips"] {
+    let (p = new Schema.Param { name = "bump"; type = "enum"; choices { "patch"; "minor"; "major" }; default = "patch" })
+      let (t = new Schema.Task { name = "bump-version"; cmd = "echo $BUMP"; params { p } })
+        t.params.toList().first.name == "bump"
+  }
+
+  ["param name with uppercase is rejected"] {
+    module.catch(() -> (new Schema.Param { name = "Bump"; type = "string" }).name) != null
+  }
+
+  ["param name with hyphen is rejected"] {
+    module.catch(() -> (new Schema.Param { name = "bump-target"; type = "string" }).name) != null
+  }
 }
 
 examples {

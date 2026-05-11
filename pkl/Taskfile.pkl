@@ -17,13 +17,48 @@
 @ModuleInfo { minPklVersion = "0.31.0" }
 open module pkfire.Taskfile
 
+/// A typed flag accepted by `pkf run <task> --<name>=<value>`.
+///
+/// At invocation time, pkf resolves a value for each declared param
+/// (CLI value or `default`), then exposes it to `cmd` as an env var
+/// whose name is the uppercased `name`. For example, a param `bump`
+/// shows up as `$BUMP` inside `cmd`.
+///
+/// Resolved values are part of the action key when `cache = true`, so a
+/// param-driven task caches per-value naturally.
+class Param {
+  /// Lower-case identifier. Becomes `$NAME` (uppercased) in `cmd`. Must
+  /// match `[a-z][a-zA-Z0-9_]*` so the uppercased form is a valid POSIX
+  /// shell variable name.
+  name: String(matches(Regex(#"^[a-z][a-zA-Z0-9_]*$"#)))
+
+  /// "string" accepts any value; "enum" restricts to `choices`.
+  type: "string"|"enum" = "string"
+
+  /// Allowed values when `type == "enum"`. Empty for `type == "string"`.
+  choices: Listing<String> = new {}
+
+  /// Value used when the caller omits this flag. If null and the caller
+  /// omits the flag, `pkf run` errors with the param's `description`.
+  default: String? = null
+
+  /// One-line help string shown by `pkf list -v`.
+  description: String? = null
+}
+
 /// A unit of work authored by the user.
 class Task {
   /// Identifier. Used as the Mapping key in the rendered output and as
-  /// the visible name in `pkf list` / `pkf graph`.
-  name: String(matches(Regex(#"^[a-zA-Z][a-zA-Z0-9_:.-]*$"#)))
+  /// the visible name in `pkf list` / `pkf graph`. `/` is allowed so a
+  /// pattern like `check-translate/docs:DESIGN` can mirror file-tree
+  /// structure when one task per directory is the natural decomposition.
+  name: String(matches(Regex(#"^[a-zA-Z][a-zA-Z0-9_:./-]*$"#)))
 
   /// Shell command to execute. Run via `<shell> -c <cmd>`.
+  ///
+  /// When `acceptsArgs = true`, positional args after `--` on the
+  /// pkf command line show up as `$1` ... `$@`. When `params` is
+  /// non-empty, each declared param is exposed as `$NAME` (uppercased).
   cmd: String(length > 0)
 
   /// Shell binary used to run `cmd`. Defaults to `bash`.
@@ -51,8 +86,11 @@ class Task {
   /// task fails at evaluation time (`Cannot find property`).
   deps: Listing<Task> = new {}
 
-  /// Environment variables exposed to `cmd`. Only these contribute to the
-  /// action key — the ambient environment is intentionally ignored.
+  /// Environment variables exposed to `cmd`. These overlay the inherited
+  /// host environment (when `inheritEnv = true`) and *only these*
+  /// contribute to the action key — host env values are intentionally
+  /// ignored so a `NODE_ENV` shift in your shell never silently busts
+  /// caches.
   env: Mapping<String, String> = new {}
 
   /// External tools whose version should be part of the action key
@@ -112,12 +150,49 @@ class Task {
   /// Seconds to wait for `readyPort` / `readyCmd` to first succeed
   /// after starting a service. If neither is set, this is ignored.
   readyTimeoutSeconds: Int(this >= 0) = 30
+
+  /// When true, `cmd` inherits the full ambient environment from `pkf`
+  /// (every var in `os.Environ()`). Set false for hermetic tasks: only
+  /// a small curated allowlist (PATH/HOME/SHELL/LANG/...) passes through.
+  ///
+  /// Default true matches just/make/npm-scripts semantics. The trade-off
+  /// is that `cmd` can read host env vars that aren't in `env`, but
+  /// since only `env` is hashed, this changes runtime behavior without
+  /// changing the action key — appropriate for SSH agent sockets,
+  /// editor preferences, and other "ergonomic" host state, *not* for
+  /// values that materially affect outputs (those belong in `env`).
+  inheritEnv: Boolean = true
+
+  /// When true, positional args after `--` on the pkf command line are
+  /// forwarded to `cmd` as `$1` ... `$@`. When false (default), any
+  /// extra positional after `pkf run <task>` is rejected — most tasks
+  /// shouldn't silently absorb args.
+  ///
+  /// The forwarded args are part of the action key when `cache = true`,
+  /// so `pkf run task -- foo` and `pkf run task -- bar` produce
+  /// distinct cache entries.
+  acceptsArgs: Boolean = false
+
+  /// Typed named flags accepted by `pkf run <task> --<name>=<value>`.
+  /// See `Param` for the per-param shape. Resolved values are exposed
+  /// to `cmd` as env vars (uppercased name) and folded into the action
+  /// key when `cache = true`.
+  params: Listing<Param> = new {}
 }
 
 /// Project-level defaults shared by all tasks unless overridden.
 class Defaults {
   shell: String = "bash"
   env: Mapping<String, String> = new {}
+}
+
+/// Wire format mirror of `Param` consumed by the Go runner.
+class RenderedParam {
+  name: String
+  type: String
+  choices: Listing<String>
+  default: String?
+  description: String?
 }
 
 /// Wire format consumed by the Go runner. `name` is lifted to the Mapping
@@ -140,6 +215,9 @@ class RenderedTask {
   readyPort: Int
   readyCmd: String
   readyTimeoutSeconds: Int
+  inheritEnv: Boolean
+  acceptsArgs: Boolean
+  params: Listing<RenderedParam>
 }
 
 /// Top-level shape of `output.value`. pkl-go's `EvaluateOutputValue` looks
@@ -190,6 +268,19 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       readyPort = t.readyPort
       readyCmd = t.readyCmd
       readyTimeoutSeconds = t.readyTimeoutSeconds
+      inheritEnv = t.inheritEnv
+      acceptsArgs = t.acceptsArgs
+      params = new Listing {
+        for (p in t.params) {
+          new RenderedParam {
+            name = p.name
+            type = p.type
+            choices = p.choices
+            default = p.default
+            description = p.description
+          }
+        }
+      }
     }
   }
 }

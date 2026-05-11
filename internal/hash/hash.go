@@ -29,6 +29,11 @@ type FileEntry struct {
 }
 
 // Action carries everything that contributes to a task's identity.
+//
+// Args and Params are the per-invocation overlay: empty for non-target
+// tasks (their action key is solely a function of declared inputs), and
+// populated for the explicit target so `pkf run task -- foo` and
+// `pkf run task -- bar` produce distinct cache entries.
 type Action struct {
 	Cmd        string
 	Shell      string
@@ -36,6 +41,8 @@ type Action struct {
 	Tools      map[string]string
 	Inputs     []FileEntry
 	ConfigHash []byte
+	Args       []string
+	Params     map[string]string
 }
 
 // Key returns the 32-byte BLAKE3 digest of `a`.
@@ -51,6 +58,10 @@ func (a *Action) Key() [32]byte {
 		fmt.Fprintf(h, "in:%s:%x\n", f.Path, f.Hash)
 	}
 	fmt.Fprintf(h, "config:%x\n", a.ConfigHash)
+	for i, v := range a.Args {
+		fmt.Fprintf(h, "arg:%d:%s\n", i, v)
+	}
+	writeMap(h, "param", a.Params)
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out

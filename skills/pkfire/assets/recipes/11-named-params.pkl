@@ -1,0 +1,69 @@
+/// Recipe 11: typed `--flag=value` params.
+///
+/// `params { ... }` lets a task declare named flags that the caller
+/// passes as `pkf run <task> --<name>=<value>`. Each param shows up
+/// inside `cmd` as `$NAME` (uppercased). For enums, pkf validates the
+/// value before invoking the shell, so a typo like `--bump=mahor`
+/// fails with a clear error instead of running the task.
+///
+/// Resolved values are folded into the action key when `cache = true`,
+/// so `--bump=patch` and `--bump=minor` cache as separate entries.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+/// `pkf run bump-version --bump=minor` writes a new version tag.
+/// Without `--bump`, the declared default ("patch") is used; values
+/// outside `choices` are rejected client-side.
+local bumpVersion: Task = new {
+  name = "bump-version"
+  description = "Tag a new version (npm version-style)"
+  cmd = "npm version $BUMP --no-git-tag-version"
+  cache = false
+  params {
+    new {
+      name = "bump"
+      type = "enum"
+      choices { "patch"; "minor"; "major" }
+      default = "patch"
+      description = "Semver component to bump"
+    }
+  }
+}
+
+/// `pkf run check-translate --target=docs/DESIGN` runs the
+/// translation-consistency check for a single doc tree. `target` is a
+/// required param (no default) so omitting it errors before the cmd
+/// runs.
+local checkTranslate: Task = new {
+  name = "check-translate"
+  description = "Verify ja.md and en.md are in sync under <target>"
+  cmd = "node scripts/check-translate.js $TARGET"
+  cache = false
+  params {
+    new {
+      name = "target"
+      type = "string"
+      description = "Doc subtree to check (e.g. docs/DESIGN)"
+    }
+  }
+}
+
+/// Combine params with tail args: a generator that accepts a
+/// `--lang=...` flag and forwards everything after `--` to the
+/// underlying tool.
+local generate: Task = new {
+  name = "generate"
+  description = "Run codegen for the given language"
+  cmd = "exec scripts/generate-$LANG.sh \"$@\""
+  acceptsArgs = true
+  cache = false
+  params {
+    new {
+      name = "lang"
+      type = "enum"
+      choices { "go"; "ts"; "py" }
+      default = "ts"
+    }
+  }
+}
+
+tasks { bumpVersion; checkTranslate; generate }

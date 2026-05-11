@@ -23,6 +23,9 @@ examples {
       readyPort = 0
       readyCmd = ""
       readyTimeoutSeconds = 30
+      inheritEnv = true
+      acceptsArgs = false
+      params {}
     }
   }
 }

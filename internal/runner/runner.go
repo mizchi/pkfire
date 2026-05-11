@@ -49,16 +49,33 @@ func New(opts Options) *Runner {
 	return &Runner{opts: opts}
 }
 
+// Invocation carries the run-time inputs that are not on the schema:
+// resolved typed params and positional tail args. Both are folded into
+// the action key when `task.Cache` is true so a param-driven task caches
+// per-value.
+type Invocation struct {
+	// Params maps the uppercased param name to its resolved value (CLI
+	// value or schema default). Passed to `cmd` as env vars.
+	Params map[string]string
+	// Args are positional args from `pkf run task -- a b c`. Forwarded
+	// to the shell so `cmd` sees `$1`, `$@`, etc.
+	Args []string
+}
+
 // Run executes a single task using the runner's default Stdout/Stderr.
 func (r *Runner) Run(ctx context.Context, name string, task *config.Task, defaults *config.Defaults) error {
-	return r.RunWithIO(ctx, name, task, defaults, r.opts.Stdout, r.opts.Stderr)
+	return r.RunWithIO(ctx, name, task, defaults, nil, r.opts.Stdout, r.opts.Stderr)
 }
 
 // RunWithIO is like Run but redirects the task's stdout/stderr to the given
 // writers (the diagnostic "[pkf] ... " prefix line goes to `stderr`).
 // Used by the parallel orchestrator to capture each task's output into a
 // buffer and flush it under a lock — that keeps log output from interleaving.
-func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, defaults *config.Defaults, stdout, stderr io.Writer) error {
+//
+// `inv` is the per-invocation context (resolved params + tail args). nil
+// is equivalent to an empty Invocation, used for non-target tasks where
+// arg/param passthrough doesn't apply.
+func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, defaults *config.Defaults, inv *Invocation, stdout, stderr io.Writer) error {
 	shell := task.Shell
 	if shell == "" {
 		if defaults != nil && defaults.Shell != "" {
@@ -68,10 +85,21 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 		}
 	}
 
-	cmd := exec.Command(shell, "-c", task.Cmd)
+	// `bash -c '<script>' arg0 arg1 arg2 ...` makes arg1, arg2, ... show
+	// up as `$1`, `$2`, ..., and `$@` in the script. We use "pkf" as the
+	// `$0` slot so error messages from the shell label the source
+	// usefully.
+	cmdArgs := []string{"-c", task.Cmd, "pkf"}
+	if inv != nil && len(inv.Args) > 0 {
+		if !task.AcceptsArgs {
+			return fmt.Errorf("task %q does not accept positional args (set acceptsArgs = true)", name)
+		}
+		cmdArgs = append(cmdArgs, inv.Args...)
+	}
+	cmd := exec.Command(shell, cmdArgs...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = mergeEnv(defaults, task)
+	cmd.Env = mergeEnv(defaults, task, inv)
 
 	// `task.Workdir` is interpreted relative to the runner's base Workdir
 	// (typically the directory holding Taskfile.pkl). This matches how
@@ -140,23 +168,42 @@ func (r *Runner) RunAll(ctx context.Context, order []string, tasks map[string]*c
 	return nil
 }
 
-// inheritedEnvKeys are passed through from the calling shell so common
-// tools (compilers on PATH, locale-sensitive utilities, temp dirs) can
-// run. They deliberately do *not* contribute to the action key — that is
-// declared explicitly via `task.tools` so action keys stay reproducible
-// across machines with different PATHs.
-var inheritedEnvKeys = []string{
+// hermeticEnvKeys is the small allowlist used when a task sets
+// `inheritEnv = false`. Just enough for compilers on PATH, locale-aware
+// utilities, and temp-dir resolution — but no SSH agent, no editor
+// state, no developer-specific tokens.
+var hermeticEnvKeys = []string{
 	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TMPDIR",
 	"LANG", "LC_ALL", "LC_CTYPE", "TZ",
 }
 
-// mergeEnv merges (inherited system env) ← defaults.Env ← task.Env into a
-// deterministic, sorted "KEY=VALUE" slice. Later entries override earlier.
-func mergeEnv(defaults *config.Defaults, task *config.Task) []string {
+// mergeEnv merges environment for `cmd`:
+//
+//   - When `task.InheritEnv` is true (the default), every var from
+//     `os.Environ()` is included so things like SSH_AUTH_SOCK,
+//     GPG_AGENT_INFO, and the user's locale shells through without
+//     ceremony.
+//   - When false, only the small `hermeticEnvKeys` allowlist passes
+//     through — the pre-0.4 behavior, kept for tasks that need
+//     reproducibility-by-isolation.
+//
+// In both cases `defaults.Env` overlays the inherited values, `task.Env`
+// overlays `defaults.Env`, and `inv.Params` (each uppercased) overlays
+// `task.Env`. *Only the schema-declared layers (defaults, task, params)
+// contribute to the action key* — host env is intentionally not hashed.
+func mergeEnv(defaults *config.Defaults, task *config.Task, inv *Invocation) []string {
 	merged := make(map[string]string)
-	for _, k := range inheritedEnvKeys {
-		if v, ok := os.LookupEnv(k); ok {
-			merged[k] = v
+	if task.InheritEnv {
+		for _, kv := range os.Environ() {
+			if i := stringIndex(kv, '='); i >= 0 {
+				merged[kv[:i]] = kv[i+1:]
+			}
+		}
+	} else {
+		for _, k := range hermeticEnvKeys {
+			if v, ok := os.LookupEnv(k); ok {
+				merged[k] = v
+			}
 		}
 	}
 	if defaults != nil {
@@ -167,10 +214,24 @@ func mergeEnv(defaults *config.Defaults, task *config.Task) []string {
 	for k, v := range task.Env {
 		merged[k] = v
 	}
+	if inv != nil {
+		for k, v := range inv.Params {
+			merged[k] = v
+		}
+	}
 	out := make([]string, 0, len(merged))
 	for k, v := range merged {
 		out = append(out, k+"="+v)
 	}
 	sort.Strings(out)
 	return out
+}
+
+func stringIndex(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }

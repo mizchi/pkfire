@@ -65,13 +65,24 @@ class Task {
   readyPort: Int = 0                              // TCP port to probe; doubles as a reuse detector
   readyCmd: String = ""                           // shell snippet that exits 0 when ready
   readyTimeoutSeconds: Int = 30                   // wait budget for the probe after spawning
+  inheritEnv: Boolean = true                      // false = hermetic (PATH/HOME/LANG/... only)
+  acceptsArgs: Boolean = false                    // forwards `pkf run task -- a b` as $@
+  params: Listing<Param> = new {}                 // typed --name=value flags (see below)
+}
+
+class Param {
+  name: String           // lower-case; exposed to cmd as $NAME (uppercased)
+  type: "string"|"enum"  // enum requires `choices`
+  choices: Listing<String>
+  default: String?       // null = required
+  description: String?
 }
 ```
 
 ## Authoring template (always start from this)
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   // file globs your build reads from
@@ -112,6 +123,8 @@ run, then caches the new package locally.
 | [`assets/recipes/07-hierarchical-amends.pkl`](./assets/recipes/07-hierarchical-amends.pkl) | Per-service Taskfiles that `amends` a project-root template |
 | [`assets/recipes/08-services.pkl`](./assets/recipes/08-services.pkl) | `pkf up`: multiple long-running services with shared lifecycle |
 | [`assets/recipes/09-test-against-services.pkl`](./assets/recipes/09-test-against-services.pkl) | `pkf run e2e` with `services { api }` — ephemeral stack for one-shot test |
+| [`assets/recipes/10-args-passthrough.pkl`](./assets/recipes/10-args-passthrough.pkl) | `acceptsArgs = true`: forward `pkf run task -- a b` to `cmd` as `$@` |
+| [`assets/recipes/11-named-params.pkl`](./assets/recipes/11-named-params.pkl) | Typed flags: `params { ... }` with enum validation, defaults, required params |
 
 ## Project layout
 
@@ -147,7 +160,7 @@ The root `Taskfile.pkl` `import`s each fragment and spreads its
 `tasks` Listing:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.3.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
 import "tasks/build.pkl" as bt
 import "tasks/test.pkl" as tt
 
@@ -353,6 +366,74 @@ postgres has finished crash-recovery), or `redis-cli ping`, or any
 exit-0-when-ready shell snippet. `readyPort` and `readyCmd`
 compose — set both and both must pass.
 
+## Runtime args (`acceptsArgs` and `params`)
+
+Tasks can take command-line input. Two shapes:
+
+- **`acceptsArgs = true`** — positional tail args after `--` land on
+  `$1`, `$2`, ... and `$@` (always quote: `"$@"`). The just analogue
+  is `just run *ARGS`.
+- **`params { Param ... }`** — typed named flags. The caller passes
+  `pkf run <task> --<name>=<value>`; inside `cmd` the value is
+  available as `$NAME` (uppercased). `type: "enum"` validates against
+  `choices` before the cmd runs; `default = "..."` makes the flag
+  optional; omitting `default` makes it required.
+
+```pkl
+local bumpVersion = new Task {
+  name = "bump-version"
+  cmd = "npm version $BUMP --no-git-tag-version"
+  cache = false
+  params {
+    new { name = "bump"; type = "enum"; choices { "patch"; "minor"; "major" }; default = "patch" }
+  }
+}
+
+local script = new Task {
+  name = "script"
+  cmd = "node \"$@\""
+  acceptsArgs = true
+  cache = false
+}
+```
+
+```sh
+pkf run bump-version --bump=minor      # validated, sets $BUMP
+pkf run script -- src/main.ts arg1     # $@ = "src/main.ts arg1"
+pkf run script --lang=ts -- src/main.ts arg1   # combined
+```
+
+Both forms participate in the action key when `cache = true`, so
+different invocations produce different cache entries — convenient
+for codegen-with-flags but typically you want `cache = false` for
+generic command wrappers (vitest filters, single-file scripts).
+
+The CLI rejects unknown flags and missing required params *before*
+the cmd runs, so a typo like `--bump=mahor` fails fast with a clear
+message.
+
+## Environment inheritance (`inheritEnv`)
+
+Default: `inheritEnv = true`. The cmd sees every var in pkfire's own
+environment (same semantics as `just`/`make`/`npm run`), so
+`SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, your locale, editor preferences,
+and developer tokens all pass through without ceremony.
+
+Switch to `inheritEnv = false` for hermetic tasks (release builds,
+reproducibility-sensitive CI steps). In that mode only a small
+allowlist passes through (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`,
+`TERM`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`) — the pre-0.4
+behavior.
+
+In *both* modes the action key only hashes the `env { ... }`
+declared in Pkl, never the host environment. So a `NODE_ENV` shift
+in your shell never silently invalidates cache; if you want a host
+var to affect caching, copy it into `env` explicitly:
+
+```pkl
+env { ["NODE_ENV"] = read("env:NODE_ENV") }
+```
+
 ## Common pitfalls
 
 - **`A non-local object property cannot have a type annotation`** —
@@ -403,7 +484,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mizchi/pkfire@pkfire@0.3.0
+      - uses: mizchi/pkfire@pkfire@0.4.0
       - run: pkf run ci
 ```
 
@@ -417,7 +498,7 @@ To share cache hits across CI runs and developer machines, point
 `pkf` at a remote cache via env:
 
 ```yaml
-      - uses: mizchi/pkfire@pkfire@0.3.0
+      - uses: mizchi/pkfire@pkfire@0.4.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -428,6 +509,6 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.3.0` to lock both the action.yml and the binary together. |
+| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.4.0` to lock both the action.yml and the binary together. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip Pkl install (e.g. when only `pkf` is needed). |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries land here, and the directory is appended to `GITHUB_PATH`. |
