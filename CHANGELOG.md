@@ -12,6 +12,23 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf completion <bash|zsh|fish>`.** Emit a shell-completion
+  script to stdout. Dynamic task-name completion for `run` /
+  `affected` / `clean` / `up` calls back into `pkf list` at
+  completion time, so it always reflects the current Taskfile.
+  Static subcommand lists for `hooks` / `cache` / `completion`
+  / `graph --format`. Install with:
+  ```sh
+  pkf completion bash > ~/.bash_completion.d/pkf
+  pkf completion zsh > "${fpath[1]}/_pkf"
+  pkf completion fish > ~/.config/fish/completions/pkf.fish
+  ```
+- **`pkf run --quiet`.** Suppress per-task log lines
+  (`[pkf] <task>: <cmd>` and `[pkf] <task>: hit/ran/...`).
+  Errors and the end-of-run summary still print. Useful for CI
+  logs and for invoking pkfire from another runner where the
+  outer log already labels each step. Also wired into
+  `pkf affected`.
 - **`pkf clean [task...]`.** Remove tasks' declared `outputs`
   (resolved relative to each task's `workdir`). With no
   positional arg, cleans every task that declares outputs.

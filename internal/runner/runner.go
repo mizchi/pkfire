@@ -27,6 +27,10 @@ type Options struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Workdir string // base directory for relative `task.Workdir`
+	// Quiet suppresses the diagnostic `[pkf] <task>: <cmd>` header
+	// the runner emits before invoking `cmd`. Failures and the task
+	// process's own stdout/stderr still pass through unmodified.
+	Quiet bool
 }
 
 // Runner is a stateless executor; it is parameterized by Options.
@@ -120,7 +124,9 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 	// reap bash but leave node holding ports). See sysattr_unix.go.
 	setProcessGroup(cmd)
 
-	fmt.Fprintf(stderr, "[pkf] %s: %s\n", name, task.Cmd)
+	if !r.opts.Quiet {
+		fmt.Fprintf(stderr, "[pkf] %s: %s\n", name, task.Cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("task %q failed to start: %w", name, err)
 	}

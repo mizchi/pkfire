@@ -509,6 +509,80 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestCompletionEmitsBashScript(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cmdCompletion([]string{"bash"}, &buf, &bytes.Buffer{}); err != nil {
+		t.Fatalf("cmdCompletion bash: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"_pkf()", "complete -F _pkf pkf", "pkf list"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bash completion missing %q", want)
+		}
+	}
+}
+
+func TestCompletionEmitsZshScript(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cmdCompletion([]string{"zsh"}, &buf, &bytes.Buffer{}); err != nil {
+		t.Fatalf("cmdCompletion zsh: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"#compdef pkf", "_pkf", "_describe"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("zsh completion missing %q", want)
+		}
+	}
+}
+
+func TestCompletionEmitsFishScript(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cmdCompletion([]string{"fish"}, &buf, &bytes.Buffer{}); err != nil {
+		t.Fatalf("cmdCompletion fish: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"complete -c pkf", "__pkf_tasks", "__fish_use_subcommand"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("fish completion missing %q", want)
+		}
+	}
+}
+
+func TestCompletionRejectsUnknownShell(t *testing.T) {
+	err := cmdCompletion([]string{"powershell"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unknown shell") {
+		t.Errorf("expected unknown-shell error, got %v", err)
+	}
+}
+
+func TestCompletionRequiresShellArg(t *testing.T) {
+	err := cmdCompletion(nil, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Errorf("expected usage error, got %v", err)
+	}
+}
+
+func TestRunQuietSuppressesPerTaskLogs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local foo = new Task { name = "foo"; cmd = "echo foo"; cache = false }
+tasks { foo }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "--quiet", "foo"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun: %v", err)
+	}
+	if strings.Contains(stderr.String(), "[pkf] foo: echo foo") {
+		t.Errorf("--quiet should suppress runner cmd-header lines:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "[pkf] foo: ran") {
+		t.Errorf("--quiet should suppress orchestrator outcome lines:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[pkf] done:") {
+		t.Errorf("end-of-run summary should still print:\n%s", stderr.String())
+	}
+}
+
 func TestExpandPatternsExpandsGlobs(t *testing.T) {
 	tasks := map[string]*config.Task{
 		"test:unit":        {},

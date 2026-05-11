@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -40,7 +41,7 @@ var runGlobalValueFlags = map[string]bool{
 	"f": true, "file": true, "j": true, "jobs": true,
 }
 var runGlobalBoolFlags = map[string]bool{
-	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true,
+	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true,
 }
 
 // version is overridden at link time via `-ldflags "-X main.version=…"`.
@@ -87,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdClean(args[1:], stdout, stderr)
 	case "cache":
 		return cmdCache(args[1:], stdout, stderr)
+	case "completion":
+		return cmdCompletion(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -116,6 +119,7 @@ commands:
                                         run only tasks whose inputs changed since <ref> (and their dependents)
   clean [-f FILE] [--dry-run] [task...] remove tasks' declared outputs (no arg = every task with outputs)
   cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
+  completion <bash|zsh|fish>            emit a shell-completion script to stdout
   version                               print pkf version
   help                                  show this message
 
@@ -500,6 +504,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results (re-baseline)")
 	watch := fs.Bool("watch", false, "re-run on input changes")
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
+	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(globalArgs); err != nil {
@@ -599,9 +604,10 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 			backend = local
 		}
 	}
-	r := runner.New(runner.Options{Workdir: root})
+	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet})
 	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{
 		Parallelism: *jobs,
+		Quiet:       *quiet,
 	})
 	plan := &orchestrator.Plan{
 		Order:            order,
@@ -1010,6 +1016,44 @@ var gitHookEvents = []string{
 // refuses to delete hooks without the marker so a hand-written hook
 // doesn't disappear on `pkf hooks uninstall`.
 const pkfHookMarker = "# managed by pkf hooks install"
+
+// Shell-completion scripts shipped with the binary. Sources live in
+// cmd/pkf/completion/ so the bash/zsh/fish snippets stay readable and
+// testable as plain files; go:embed inlines them at build time so
+// the binary is still a single artifact.
+//
+//go:embed completion/pkf.bash
+var completionBash string
+
+//go:embed completion/pkf.zsh
+var completionZsh string
+
+//go:embed completion/pkf.fish
+var completionFish string
+
+// cmdCompletion writes the requested shell's completion script to
+// stdout. Suggested installs are in the script header of each file.
+// Dynamic completions (task names for run/affected/clean/up) shell
+// out to `pkf list`, so the script stays static and always reflects
+// the current Taskfile.
+func cmdCompletion(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: pkf completion <bash|zsh|fish>")
+	}
+	switch args[0] {
+	case "bash":
+		_, err := io.WriteString(stdout, completionBash)
+		return err
+	case "zsh":
+		_, err := io.WriteString(stdout, completionZsh)
+		return err
+	case "fish":
+		_, err := io.WriteString(stdout, completionFish)
+		return err
+	default:
+		return fmt.Errorf("unknown shell %q (supported: bash, zsh, fish)", args[0])
+	}
+}
 
 // cmdClean removes the declared `outputs` of one or more tasks. The
 // cache is intentionally NOT touched — clean is "remove the artifacts
@@ -1436,6 +1480,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	noCache := fs.Bool("no-cache", false, "disable cache for this run")
 	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results")
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
+	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
@@ -1538,8 +1583,8 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 			backend = local
 		}
 	}
-	r := runner.New(runner.Options{Workdir: root})
-	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs})
+	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet})
+	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs, Quiet: *quiet})
 	plan := &orchestrator.Plan{
 		Order:      order,
 		Tasks:      tf.Tasks,

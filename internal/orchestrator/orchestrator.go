@@ -94,6 +94,11 @@ type Options struct {
 	// Parallelism is the maximum number of tasks running concurrently.
 	// 0 means runtime.NumCPU(); 1 forces serial execution.
 	Parallelism int
+	// Quiet suppresses per-task status lines (`[pkf] <task>: hit`
+	// / `[pkf] <task>: ran <key>` / `[pkf] <task>: skipped`).
+	// Errors and the end-of-run summary printed by the caller are
+	// still emitted.
+	Quiet bool
 }
 
 // Orchestrator holds the long-lived runner and (optionally) cache.
@@ -491,6 +496,9 @@ func (o *Orchestrator) StartSingleService(ctx context.Context, name string, p *P
 }
 
 func (o *Orchestrator) logLine(mu *sync.Mutex, format string, args ...any) {
+	if o.opts.Quiet {
+		return
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	fmt.Fprintf(o.stderr, format, args...)

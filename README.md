@@ -207,6 +207,10 @@ pkf cache stats                # local CAS: entries, size, oldest/newest
 pkf cache prune --older-than=7d  # drop stale entries (--dry-run to preview)
 pkf cache rm <action-key>      # remove a specific entry (≥2-char prefix accepted)
 pkf cache clear --yes          # nuke everything (scripting-safe with --yes)
+pkf run --quiet build          # suppress per-task log lines (errors + summary still print)
+pkf completion bash > ~/.bash_completion.d/pkf  # dynamic task-name completion
+pkf completion zsh > "${fpath[1]}/_pkf"
+pkf completion fish > ~/.config/fish/completions/pkf.fish
 ```
 
 Visualizing a Taskfile is a single pipeline:
