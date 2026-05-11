@@ -18,6 +18,13 @@ name: v-tags
 #   - push to main whose changes touch THIS file — self-bootstraps the
 #     first time the workflow lands, so existing pre-workflow releases
 #     (the 0.4.0 case) get their v-tags created with no manual step.
+#
+# Implementation uses git CLI directly rather than `gh api git/refs`
+# because the latter returns "Resource not accessible by integration"
+# (HTTP 403) from the github-actions[bot] token even with explicit
+# `Contents: write`. Root cause unclear (suspected GitHub App scope
+# quirk); git over HTTPS using the credential set up by actions/checkout
+# works fine, so we go that route.
 on:
   workflow_run:
     workflows: ["Release"]
@@ -33,71 +40,47 @@ permissions:
 
 jobs:
   sync:
-    # workflow_run fires regardless of conclusion; the other triggers
-    # always carry no conclusion. Skip when Release explicitly failed.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          # All tags so `git tag -l 'pkfire@*'` sees the full release history.
+          fetch-depth: 0
       - name: Sync v<ver> + v<major> from pkfire@* tags
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          git fetch --tags --force origin >/dev/null
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
 
-          tag_sha() {
-            local tag="$1" sha type
-            sha=$(gh api "repos/${REPO}/git/refs/tags/${tag}" --jq '.object.sha')
-            type=$(gh api "repos/${REPO}/git/refs/tags/${tag}" --jq '.object.type')
-            # Annotated tags need one dereference to get the commit SHA.
-            if [ "$type" = "tag" ]; then
-              sha=$(gh api "repos/${REPO}/git/tags/${sha}" --jq '.object.sha')
-            fi
-            echo "$sha"
-          }
-
-          push_ref() {
-            local ref="$1" sha="$2" current
-            if current=$(gh api "repos/${REPO}/git/refs/tags/${ref}" --jq '.object.sha' 2>/dev/null); then
-              if [ "$current" = "$sha" ]; then
-                echo "  ${ref} already → ${sha:0:12} (skip)"
-                return
-              fi
-              gh api -X PATCH "repos/${REPO}/git/refs/tags/${ref}" \
-                -f sha="$sha" -F force=true >/dev/null
-              echo "  updated ${ref} → ${sha:0:12} (was ${current:0:12})"
-            else
-              gh api -X POST "repos/${REPO}/git/refs" \
-                -f ref="refs/tags/${ref}" -f sha="$sha" >/dev/null
-              echo "  created ${ref} → ${sha:0:12}"
-            fi
-          }
-
-          # Use /git/refs/tags (generic list) + client-side filter
-          # rather than /git/matching-refs/tags/pkfire@ — the trailing
-          # `@` in the path 403s in this repo's actions context even
-          # with `Contents: write`. The generic endpoint works.
-          tags=$(gh api --paginate "repos/${REPO}/git/refs/tags" \
-                 --jq '.[].ref' \
-                 | grep '^refs/tags/pkfire@' \
-                 | sed 's|^refs/tags/||' \
-                 | sort -V)
-          if [ -z "$tags" ]; then
+          mapfile -t tags < <(git tag -l 'pkfire@*' | sort -V)
+          if [ ${#tags[@]} -eq 0 ]; then
             echo "no pkfire@* tags found — nothing to sync"
             exit 0
           fi
 
-          # Walk in version-ascending order; the LAST commit assigned
-          # per major wins for the floating v<major> alias.
           declare -A major_sha
-          for t in $tags; do
+          refspecs=()
+
+          for t in "${tags[@]}"; do
             v="${t#pkfire@}"
             major="${v%%.*}"
-            sha=$(tag_sha "$t")
-            push_ref "v${v}" "$sha"
+            sha=$(git rev-list -n1 "$t")
+            git tag -f "v${v}" "$sha"
+            echo "  v${v} → ${sha:0:12}  (from ${t})"
             major_sha["$major"]="$sha"
+            # `+` force-updates remote ref; safe because v<ver> aliases
+            # the immutable pkfire@<ver> tag at the same commit, and
+            # v<major> by design points at the newest version's commit.
+            refspecs+=("+refs/tags/v${v}:refs/tags/v${v}")
           done
 
           for major in "${!major_sha[@]}"; do
-            push_ref "v${major}" "${major_sha[$major]}"
+            git tag -f "v${major}" "${major_sha[$major]}"
+            echo "  v${major} → ${major_sha[$major]:0:12}  (floating)"
+            refspecs+=("+refs/tags/v${major}:refs/tags/v${major}")
           done
+
+          echo "pushing ${#refspecs[@]} ref(s)"
+          git push origin "${refspecs[@]}"
