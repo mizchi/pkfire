@@ -188,6 +188,101 @@ pkf graph | dot -Tsvg -o tasks.svg
 pkf graph --format mermaid > tasks.mmd
 ```
 
+## Environment, args, and the action key
+
+This section is the part that *trips up automated agents* — the rules
+look obvious once stated but they look the wrong way around if you
+guess. Read once, refer back as needed.
+
+### Layer order (later wins)
+
+Every `cmd` runs against an env merged from four layers:
+
+```
+1. host env (os.Environ())             ← inherited from the shell that ran pkf
+2. defaults.Env                        ← Taskfile-wide common values
+3. task.Env                            ← per-task overrides
+4. resolved params (uppercased name)   ← `--bump=patch` → $BUMP
+```
+
+Plus, when `acceptsArgs = true`, anything after `--` on the command
+line is forwarded as `$1`, `$2`, ..., `"$@"`.
+
+### Two contracts that are NOT the same
+
+| | Visible to `cmd`? | Part of the action key? |
+| --- | :---: | :---: |
+| host env (when `inheritEnv = true`, the default) | ✓ | ✗ |
+| host env (when `inheritEnv = false`, allowlist only: `PATH HOME LANG ...`) | partial | ✗ |
+| `defaults.Env` | ✓ | ✓ |
+| `task.Env` | ✓ | ✓ |
+| resolved `params` values (`$NAME`) | ✓ | ✓ (when `cache = true`) |
+| tail args from `-- a b c` (`$@`) | ✓ | ✓ (when `cache = true`) |
+| `task.Tools` | as env hints only | ✓ |
+
+The mismatch on the "host env" row is deliberate. `cmd` should be
+able to use `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, your `LANG`, your
+editor — without those silently busting cache the next time you
+ssh-add a different key. Only schema-declared layers participate in
+the action key.
+
+### When to use what
+
+- **You want `cmd` to see a host env var.** Default state. Do
+  nothing — `inheritEnv = true` already passes everything through.
+- **You want a host env var to *also* affect cache.** Read it into
+  `task.Env` explicitly:
+  ```pkl
+  env { ["NODE_ENV"] = read("env:NODE_ENV") }
+  ```
+  Now `cmd` sees `$NODE_ENV`, AND a change to it invalidates the
+  cache entry. The host env still flows through for everything
+  else; this only promotes one value into the hashed layer.
+- **You want hermetic builds** (release pipelines, reproducibility-
+  sensitive CI). Set `inheritEnv = false` per task. `cmd` then sees
+  only the tiny allowlist plus whatever you put in `env { ... }`,
+  and the action key fully describes the env.
+- **You want runtime input that changes per invocation** (a port, a
+  bump kind, a watch flag). Declare `params { ... }`:
+  ```pkl
+  params {
+    new { name = "bump"; type = "enum"; choices { "patch"; "minor"; "major" }; default = "patch" }
+    new { name = "port"; type = "int";  default = "3000" }
+    new { name = "watch"; type = "bool"; default = "false" }
+  }
+  ```
+  Callers pass `pkf run task --bump=minor --port=8080 --watch`;
+  `cmd` reads `$BUMP`, `$PORT`, `$WATCH`. Different values cache as
+  different entries — usually what you want.
+- **You want variadic positional args** (the `just *ARGS` shape).
+  Set `acceptsArgs = true` and write `cmd = "node \"$@\""`. Callers
+  pass `pkf run task -- a b c`. The args fold into the action key,
+  so command wrappers typically also set `cache = false`.
+
+### Things that confuse agents
+
+- **`read("env:X")` is NOT how you read host env at runtime.** It is
+  Pkl-evaluation-time interpolation: the *value at the time pkf
+  evaluated the Taskfile* gets baked into the rendered task. That
+  is exactly what you want when you want the value to affect the
+  action key, but if you only need `cmd` to see the var, plain
+  inheritance is enough — don't write `read("env:...")` for
+  ergonomics-only env like `SSH_AUTH_SOCK`.
+- **`$VAR` inside `cmd` is shell expansion, not Pkl interpolation.**
+  Write `cmd = "echo $HOME"` — pkfire passes the literal string to
+  bash, bash expands `$HOME` from the merged env. Pkl's `\(...)`
+  interpolation runs at schema evaluation time and bakes a
+  constant into the rendered task — useful occasionally but rarely
+  what you want for env vars.
+- **`acceptsArgs = false` is the default for a reason.** A task
+  that silently absorbs whatever comes after its name is a typo
+  vector. Opt in only for command wrappers (`script`, `test
+  --grep=...`, etc.).
+- **`bool` params do not consume the next token.** `--watch
+  --port=80` parses as `WATCH=true PORT=80`. Use `--watch=false`
+  for explicit negation. (`int`, `string`, `enum` *do* take the
+  next token when written without `=`.)
+
 ## Pointing at the schema
 
 The `Taskfile.pkl` schema lives in this repo. From a downstream project
@@ -269,6 +364,7 @@ cache.
 | 9 | `pkf up`: long-running services (`service = true`) with process-group cleanup and watch-driven restart | ✅ |
 | 10 | `services { ... }` on a body task: `pkf run e2e` brings up live servers, runs the test, releases everything | ✅ |
 | 11 | Readiness probes (`readyPort` / `readyCmd`): reuse already-running services and gate dependents on real readiness | ✅ |
+| 12 | Env inheritance default + variadic tail args (`acceptsArgs`) + typed named params (`params` w/ string/enum/int/bool) + `/` in task names | ✅ |
 
 ## Development
 
