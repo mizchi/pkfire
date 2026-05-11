@@ -12,6 +12,14 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Repo-root `Taskfile.pkl` for project maintenance.** Dogfoods
+  pkfire on its own development flow. Tasks: `vet`, `test:go`,
+  `test:race`, `test:pkl`, `fmt`, `check-version`, `bump --to=<ver>`,
+  `tag`, and `preflight` (the pre-commit aggregate of vet + go-test
+  + pkl-test + check-version). Build/test of the `pkf` binary itself
+  stays in `examples/dogfood/Taskfile.pkl` (that's the CI release
+  gate). The root Taskfile uses a relative `amends` to
+  `pkl/Taskfile.pkl` so it always tracks the in-tree schema.
 - **`pkf run --refresh`.** Skip the cache *lookup* but still *store*
   the result. Distinct from `--no-cache` (which disables both). Use
   when an undeclared dependency changed (a global tool version, an

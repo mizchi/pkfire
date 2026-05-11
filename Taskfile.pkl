@@ -1,0 +1,148 @@
+/// Project-maintenance tasks for pkfire itself. The kinds of things
+/// you'd reach for a justfile or Makefile for in other repos —
+/// version bumps, the consistency check, formatter, pre-commit gate.
+///
+/// Build/test of the `pkf` binary lives in
+/// `examples/dogfood/Taskfile.pkl` (cross-compile matrix + checksum
+/// + integration smoke), which is what `.github/workflows/test.yml`
+/// drives. Keep that file as the *release* gate; this file is the
+/// *developer* gate.
+///
+/// Common entry points:
+///   pkf run preflight              vet + tests + version consistency
+///   pkf run bump --to=0.5.0        sweep pkfire@<old> → pkfire@0.5.0
+///   pkf run tag                    create the pkfire@<ver> tag locally
+///   pkf run fmt                    pkl format -w on every Pkl file
+///
+/// Relative `amends` so this file always tracks the in-tree schema
+/// (including unreleased changes). External examples use the
+/// published package URI; here we want to dogfood HEAD.
+amends "pkl/Taskfile.pkl"
+
+local sources: Listing<String> = new {
+  "cmd/**/*.go"
+  "internal/**/*.go"
+  "go.mod"
+  "go.sum"
+}
+
+local vet: Task = new {
+  name = "vet"
+  description = "go vet ./..."
+  cmd = "go vet ./..."
+  inputs = sources
+}
+
+local testGo: Task = new {
+  name = "test:go"
+  description = "Go unit tests (no -race for speed; use test:race when you want it)"
+  cmd = "go test ./..."
+  inputs {
+    ...sources
+    "examples/**/*.pkl"
+    "pkl/**/*.pkl"
+  }
+}
+
+local testRace: Task = new {
+  name = "test:race"
+  description = "Go unit tests with the race detector"
+  cmd = "go test -race ./..."
+  inputs {
+    ...sources
+    "examples/**/*.pkl"
+    "pkl/**/*.pkl"
+  }
+}
+
+local testPkl: Task = new {
+  name = "test:pkl"
+  description = "Pkl schema tests"
+  cmd = "pkl test pkl/Taskfile.test.pkl"
+  inputs {
+    "pkl/Taskfile.pkl"
+    "pkl/Taskfile.test.pkl"
+    "pkl/Taskfile.test.pkl-expected.pcf"
+  }
+}
+
+local fmt: Task = new {
+  name = "fmt"
+  description = "pkl format -w on every Pkl file in the repo (idempotent)"
+  // `pkl format` accepts file paths or directories and recurses on dirs.
+  // Listing the three roots explicitly avoids re-formatting in-flight
+  // build artifacts under `pkl/.out/` and the cache.
+  cmd = "pkl format -w pkl examples skills"
+  cache = false
+}
+
+local checkVersion: Task = new {
+  name = "check-version"
+  description = "Verify every `pkfire@<ver>` reference matches pkl/PklProject"
+  cmd = "scripts/check-version-consistency.sh"
+  cache = false
+}
+
+/// `pkf run bump --to=0.5.0` sweeps every `pkfire@<old>` reference
+/// across the tree (README + skills + examples) and bumps the
+/// declared `pkl/PklProject` version. Wrap of `scripts/bump-version.sh`
+/// — kept as a shell script so it's also runnable without pkf
+/// installed (e.g. in `gh workflow run` contexts).
+local bump: Task = new {
+  name = "bump"
+  description = "Bump pkfire schema version + sweep all pkfire@<old> references"
+  cmd = "scripts/bump-version.sh \"$TO\""
+  cache = false
+  params {
+    new {
+      name = "to"
+      type = "string"
+      description = "target version, e.g. 0.5.0 (required)"
+    }
+  }
+}
+
+/// Local-only: creates `pkfire@<ver-from-PklProject>` at HEAD but
+/// does NOT push. Push manually after reviewing — that step
+/// triggers the Release workflow + v-tags workflow and is hard to
+/// undo without `gh release delete` ceremony.
+local tag: Task = new {
+  name = "tag"
+  description = "Create the pkfire@<ver> tag locally (no push)"
+  cache = false
+  cmd = """
+    set -euo pipefail
+    ver=$(pkl eval -f json -x package.version pkl/PklProject | tr -d '"')
+    tagname="pkfire@$ver"
+    if git rev-parse "$tagname" >/dev/null 2>&1; then
+      echo "tag $tagname already exists locally" >&2
+      exit 1
+    fi
+    git tag "$tagname"
+    echo "created tag: $tagname"
+    echo "  push with: git push origin $tagname"
+    """
+}
+
+/// Pre-commit gate. `pkf run preflight` is what you run before
+/// pushing a feature branch / opening a PR. Skips the race
+/// detector + the cross-compile matrix (those are CI's job).
+local preflight: Task = new {
+  name = "preflight"
+  description = "Pre-commit gate: vet + go-test + pkl-test + version consistency"
+  cmd = "echo preflight ok"
+  cache = false
+  deps { vet; testGo; testPkl; checkVersion }
+}
+
+tasks {
+  vet
+  testGo
+  testRace
+  testPkl
+  fmt
+  checkVersion
+  bump
+  tag
+  preflight
+}

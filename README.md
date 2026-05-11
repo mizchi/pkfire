@@ -391,30 +391,33 @@ Open a PR to add yours.
 
 ## Development
 
+pkfire dogfoods itself: the repo's own `Taskfile.pkl` declares the
+maintenance tasks, and the cross-compile / integration matrix lives
+in `examples/dogfood/Taskfile.pkl`. Both work with the `pkf` binary
+you'd install for any other project.
+
 ```sh
-pkl test --project-dir pkl                    # schema-level tests
-pkl project package pkl                       # build the publishable .out/pkfire@<ver>/ artifacts
-go test -race ./...                           # Go tests
 go install ./cmd/pkf
-pkf run -f examples/dogfood/Taskfile.pkl ci   # dogfood
+
+pkf list                                      # see all maintenance tasks
+pkf run preflight                             # vet + go-test + pkl-test + version consistency
+pkf run test:race                             # go test -race ./...
+pkf run fmt                                   # pkl format -w on pkl/, examples/, skills/
+pkf run -f examples/dogfood/Taskfile.pkl ci   # full release gate (cross-compile + integration)
 ```
 
 To cut a Pkl package release:
 
 ```sh
-# 1. bump every `pkfire@<old>` reference (PklProject + examples + recipes
-#    + skills + README) in one shot
-scripts/bump-version.sh <new-version>
-# 2. commit, tag, push
+pkf run bump --to=<new-version>               # sweep every pkfire@<old> reference
 git commit -am "release: pkfire@<new-version>"
-git tag    "pkfire@<new-version>"
-git push origin main "pkfire@<new-version>"
-# 3. .github/workflows/pkl-publish.yml gates on the test suite, then
-#    builds and uploads the Pkl package + cross-compiled binaries.
+pkf run tag                                   # creates pkfire@<new-version> locally
+git push origin main "pkfire@<new-version>"   # triggers Release + v-tags workflows
 ```
 
-Both pre-commit and CI run `scripts/check-version-consistency.sh` so a
-forgotten reference becomes a red build, not a stale URI in the wild.
+Both pre-commit and CI run `pkf run check-version` (wrapping
+`scripts/check-version-consistency.sh`) so a forgotten reference
+becomes a red build, not a stale URI in the wild.
 
 ## License
 
