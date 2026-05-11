@@ -424,6 +424,9 @@ pkf run bump --to=<new-version>
 git commit -am "release: pkfire@<new-version>"
 
 # 2. Tag locally and push. Release + v-tags workflows fire.
+# The Release workflow extracts the body for the GitHub release page
+# from CHANGELOG.md's `## [<new-version>]` section automatically —
+# update that section BEFORE this step so the published notes match.
 pkf run tag
 git push origin main "pkfire@<new-version>"
 

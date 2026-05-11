@@ -159,7 +159,18 @@ local preflight: Task = new {
   // preflight just like a failing test would.
   cmd = "pkl format --diff-name-only pkl examples skills"
   cache = false
-  deps { vet; testGo; testPkl; testExamples; checkVersion }
+  deps { vet; testGo; testPkl; testExamples; checkVersion; testReleaseNotes }
+}
+
+/// Verify the release-notes extractor stays correct. Catches
+/// regressions like "edited CHANGELOG markup pattern" or "awk
+/// quoting drift" before the Release workflow runs the same script
+/// against an actual tag push.
+local testReleaseNotes: Task = new {
+  name = "test:release-notes"
+  description = "Self-test for scripts/release-notes.sh"
+  cmd = "scripts/release-notes_test.sh"
+  cache = false
 }
 
 /// Git pre-commit hook target. `pkf hooks install` writes
@@ -181,6 +192,7 @@ tasks {
   testRace
   testPkl
   testExamples
+  testReleaseNotes
   checkVersion
   bump
   tag

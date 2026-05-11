@@ -77,16 +77,32 @@ jobs:
           done
           ls -la dist/
 
+      - name: Resolve release notes from CHANGELOG.md
+        id: notes
+        run: |
+          version="${{ steps.tag.outputs.version }}"
+          notes_file="${{ runner.temp }}/release-notes.md"
+          if scripts/release-notes.sh "$version" > "$notes_file" && [ -s "$notes_file" ]; then
+            echo "::notice::release notes extracted from CHANGELOG.md for $version"
+          else
+            printf 'Release pkfire@%s — Pkl package + pkf binaries for linux/darwin × amd64/arm64.\n' "$version" > "$notes_file"
+            echo "::warning::CHANGELOG.md has no `## [$version]` section; falling back to default body"
+          fi
+          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           dir="pkl/.out/$tag"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --title "$tag" \
-              --notes "Release $tag — Pkl package + pkf binaries for linux/darwin × amd64/arm64."
+          notes="${{ steps.notes.outputs.file }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # Idempotent re-run: always refresh the body so an
+            # edited CHANGELOG.md propagates to the release page.
+            gh release edit "$tag" --notes-file "$notes"
+          else
+            gh release create "$tag" --title "$tag" --notes-file "$notes"
           fi
           gh release upload "$tag" --clobber \
             "$dir/$tag" \

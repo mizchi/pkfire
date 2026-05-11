@@ -10,6 +10,18 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- **Auto-generated GitHub Release notes from CHANGELOG.md.**
+  The Release workflow now runs `scripts/release-notes.sh
+  <version>` and feeds the section between `## [<version>]` and
+  the next `## [...]` into `gh release create --notes-file`.
+  Re-running the workflow on an existing tag (`workflow_dispatch`)
+  also `gh release edit --notes-file` — so a CHANGELOG edit can
+  be republished without recreating the release. Falls back to a
+  terse default body when the section is missing. Self-tested by
+  `pkf run test:release-notes` (wired into `preflight`).
+
 ## [0.5.0] - 2026-05-11
 
 Pkl schema is unchanged from 0.4.0 — bumping in lockstep with the
