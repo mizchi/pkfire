@@ -647,7 +647,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mizchi/pkfire@v0.4.0      # or @v0 to track latest 0.x
       - run: pkf run ci
 ```
