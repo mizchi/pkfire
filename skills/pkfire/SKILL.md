@@ -29,9 +29,25 @@ the tasks whose **action key** changed, and restores the cached
 outputs of every other task from a CAS.
 
 **Action key** = BLAKE3 over (`cmd`, `shell`, sorted env, sorted tools,
-sorted input file digests, the Pkl module's canonical form). Two
-invocations with the same key are guaranteed to produce the same
-outputs (assuming honest `inputs` declarations).
+sorted input file digests, the Pkl module's canonical form, **plus**
+any resolved CLI params and tail args when the task is the invocation
+target). Two invocations with the same key are guaranteed to produce
+the same outputs (assuming honest `inputs` declarations).
+
+Above the pure run-it-once DAG, pkfire grows three orthogonal layers:
+
+- **`service: true` + `pkf up`** — long-running processes
+  (databases, dev servers) with process-group cleanup, readiness
+  probes, and reuse-or-spawn semantics.
+- **`acceptsArgs` + `params { ... }`** — typed CLI input
+  (`pkf run task --bump=minor -- file1 file2`) folded into the
+  action key so different invocations cache as different entries.
+- **`pkf hooks install` + `pkf affected`** — git-aware
+  orchestration: convention-based hook installation and
+  changed-files-driven plan computation.
+
+Each layer is opt-in via a schema field or a CLI subcommand; the
+base "one cached task per change" model is unchanged.
 
 ## The two non-obvious rules
 
@@ -596,7 +612,7 @@ hitting `pkg.pkl-lang.org` on every CI run:
     path: ~/.pkl/cache
     key: pkl-cache-${{ hashFiles('**/PklProject.deps.json') }}
     restore-keys: pkl-cache-
-- uses: mizchi/pkfire@v0.4.0
+- uses: mizchi/pkfire@v0.5.0
 - run: pkl project resolve
 ```
 
@@ -708,16 +724,98 @@ feature-rich path.
   a no-deps Go project), surprising when you misspelled a real file.
   Use `pkf run --print-hash <task>` to see what actually contributed.
 
-## CLI tools
+## Selective execution
+
+Real workflows rarely "run every task". A few patterns cover the
+common selection questions:
 
 ```sh
+pkf run                        # no args → the task named `default` (errors clearly when absent)
+pkf run a b c                  # multi-target: topological union of all subgraphs
+pkf run --refresh build        # skip cache lookup but re-store result (re-baseline)
+pkf run --no-cache test        # skip lookup AND store for this run
+```
+
+**Monorepo CI: `pkf affected --since=<ref>`.** Runs only the tasks
+whose declared `inputs` glob matches a file in the asymmetric diff
+`<since>...HEAD`, plus their transitive *dependents* in the deps
+DAG. The unaffected deps that come along in the plan hit cache, so
+the actual work is minimal.
+
+```sh
+pkf affected --since=origin/main           # everything affected by the PR
+pkf affected --since=origin/main test:unit # filter to specific targets (exact names)
+pkf affected --since=HEAD~1 --dry-run      # preview without running
+```
+
+Default `--since` chain: `origin/main` → `origin/master` → `HEAD~1`.
+Tasks with empty `inputs` are never affected by file changes (they
+explicitly declared no file dependencies). Tasks with `cache = false`
+are still subject to the same affected-set test — they don't get
+auto-pulled in just because they're always-run.
+
+## CLI tools
+
+### Inspection (read-only)
+
+```sh
+pkf list                       # one task per line + description
 pkf list -v                    # cmd preview + deps + cache status
-pkf run --dry-run <task>       # plan only, no execution, no cache touch
-pkf run --print-hash <task>    # action keys for the subgraph
-pkf run --watch <task>         # re-run on input change
+pkf list --json                # machine-readable; for editor / CI tooling
 pkf graph                      # Graphviz DOT
 pkf graph --format mermaid     # GitHub-renderable
+pkf graph --target build       # only the subgraph rooted at `build`
+pkf doctor                     # diagnose pkl / cache / remote / Taskfile setup
 ```
+
+### Execution preview
+
+```sh
+pkf run --dry-run build        # table: per-task hit/will-run/uncached + action key + cmd
+pkf run --print-hash build     # raw action keys for the subgraph
+pkf run --no-cache --dry-run build   # "what would --refresh re-run?" introspection
+```
+
+The `--dry-run` table classifies each task as `hit` (cache will
+short-circuit), `will run` (cacheable but no entry), `uncached`
+(`cache = false`), or `service` (skipped by `pkf run` — preview
+only). With `--no-cache` / `--refresh`, the lookup is inert so
+every cacheable task shows `will run`. Remote cache is NOT
+consulted during dry-run to keep it fast.
+
+### Execution
+
+```sh
+pkf run build                  # run + cache as usual
+pkf run --watch build          # re-run on input change (Ctrl+C to stop)
+pkf run -j 8 build             # cap parallelism (default: NumCPU)
+pkf run --timing build         # add per-task duration breakdown at the end
+pkf up dev                     # supervise every `service: true` task in the subgraph
+pkf up --watch dev             # plus restart-on-change
+```
+
+After every non-watch run, pkfire prints a single summary line:
+
+```
+[pkf] done: 6 tasks · 3 hit · 3 ran · 2 uncached (11.3s wall, 12.0s CPU)
+```
+
+`--timing` follows with a table sorted by duration descending —
+pinpoints the slow task without a profiler.
+
+### Maintenance / hooks
+
+```sh
+pkf format                     # pkl format -w (defaults to Taskfile's dir)
+pkf format --check pkl examples skills  # exit 11 on unformatted (CI-friendly)
+pkf hooks install              # write .git/hooks/<event> shims for hook-named tasks
+pkf hooks list                 # show which events are wired
+pkf hooks uninstall            # remove only pkfire-managed shims
+pkf init                       # write a starter Taskfile.pkl
+```
+
+`pkf hooks install` is silent on no-op, so it's safe in `.envrc`
+— see the [Git hooks](#git-hooks-pkf-hooks-install) section.
 
 ## Remote cache (optional)
 
@@ -739,7 +837,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: mizchi/pkfire@v0.4.0      # or @v0 to track latest 0.x
+      - uses: mizchi/pkfire@v0.5.0      # or @v0 to track latest 0.x
       - run: pkf run ci
 ```
 
@@ -755,13 +853,13 @@ workflow file*, with no jobs run and a generic "workflow file
 issue" error. Pkl release tags happen to be `pkfire@<ver>` (because
 the package URI requires it), so the Release workflow also pushes
 `v<ver>` + a floating `v<major>` tag at the same commit — use
-those for `uses:`. Or SHA-pin: `uses: mizchi/pkfire@<sha> # v0.4.0`.
+those for `uses:`. Or SHA-pin: `uses: mizchi/pkfire@<sha> # v0.5.0`.
 
 To share cache hits across CI runs and developer machines, point
 `pkf` at a remote cache via env:
 
 ```yaml
-      - uses: mizchi/pkfire@v0.4.0
+      - uses: mizchi/pkfire@v0.5.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -772,6 +870,6 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Accepts `v0.4.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.5.0`. Pinning via `uses: mizchi/pkfire@v0.4.0` is the recommended form. |
+| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Accepts `v0.5.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.5.0`. Pinning via `uses: mizchi/pkfire@v0.5.0` is the recommended form. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip Pkl install (e.g. when only `pkf` is needed). |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries land here, and the directory is appended to `GITHUB_PATH`. |
