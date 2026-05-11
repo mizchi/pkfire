@@ -75,8 +75,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdUp(args[1:], stdout, stderr)
 	case "doctor":
 		return cmdDoctor(args[1:], stdout, stderr)
-	case "fmt":
-		return cmdFmt(args[1:], stdout, stderr)
+	case "format":
+		return cmdFormat(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -99,7 +99,7 @@ commands:
   graph [-f FILE] [--format FMT] [--target TASK]
                                         emit DAG (formats: dot, mermaid)
   doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
-  fmt [-f FILE] [--check] [PATH...]     pkl format -w (no PATH = the Taskfile's directory)
+  format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   version                               print pkf version
   help                                  show this message
 
@@ -850,14 +850,16 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 	return nil
 }
 
-// cmdFmt is a thin alias for `pkl format`. With no positional args,
-// formats the directory containing the discovered Taskfile.pkl — same
-// walk-up behavior every other subcommand uses, so `pkf fmt` from a
-// nested directory still does the right thing. `--check` flips to
-// `pkl format --diff-name-only`, which exits 11 on violations and
-// prints the path of each unformatted file (CI-friendly).
-func cmdFmt(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("pkf fmt", flag.ContinueOnError)
+// cmdFormat is a thin alias for `pkl format` — same spelling as the
+// underlying CLI to keep the surface intuitive. With no positional
+// args, formats the directory containing the discovered Taskfile.pkl
+// — same walk-up behavior every other subcommand uses, so
+// `pkf format` from a nested directory still does the right thing.
+// `--check` flips to `pkl format --diff-name-only`, which exits 11
+// on violations and prints the path of each unformatted file
+// (CI-friendly).
+func cmdFormat(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf format", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
 	check := fs.Bool("check", false, "report unformatted files without writing (exit 11 if any)")

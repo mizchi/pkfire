@@ -193,8 +193,8 @@ pkf graph                      # emit Graphviz DOT for the full DAG
 pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
 pkf graph --target test        # only the subgraph rooted at `test`
 pkf doctor                     # diagnose pkl/cache/remote/taskfile setup
-pkf fmt                        # pkl format -w on the Taskfile's directory
-pkf fmt --check pkl examples   # exit 11 (CI-friendly) if anything is unformatted
+pkf format                     # pkl format -w on the Taskfile's directory
+pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
 ```
 
 Visualizing a Taskfile is a single pipeline:
