@@ -2,7 +2,7 @@
 ///
 /// This example deliberately avoids dev dependencies so a fresh checkout
 /// runs the full pipeline with nothing more than `node` on PATH.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.1.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.js"

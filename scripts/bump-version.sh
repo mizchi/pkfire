@@ -18,16 +18,20 @@ echo "bumping pkfire@${old} → pkfire@${new}"
 
 perl -i -pe "s/version = \"${old}\"/version = \"${new}\"/" pkl/PklProject
 
+# Enumerate examples directly: `git ls-files 'examples/basic/**/*.pkl'`
+# does NOT match top-level `examples/basic/Taskfile.pkl` (git pathspec
+# `**` matches one or more dirs, not zero). Each example has exactly one
+# Taskfile.pkl, so listing them explicitly is both robust and short.
 # shellcheck disable=SC2046
 perl -i -pe "s/pkfire\@${old}/pkfire\@${new}/g" $(
   git ls-files \
     'README.md' \
     'skills/**/*.md' \
     'skills/**/*.pkl' \
-    'examples/basic/**/*.pkl' \
-    'examples/node/**/*.pkl' \
-    'examples/rust/**/*.pkl' \
-    'examples/monorepo/**/*.pkl'
+    'examples/basic/Taskfile.pkl' \
+    'examples/node/Taskfile.pkl' \
+    'examples/rust/Taskfile.pkl' \
+    'examples/monorepo/Taskfile.pkl'
 )
 
 scripts/check-version-consistency.sh

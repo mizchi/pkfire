@@ -15,14 +15,18 @@ set -euo pipefail
 declared=$(pkl eval -f json -x package.version pkl/PklProject | tr -d '"')
 echo "declared schema version: pkfire@$declared"
 
+# Enumerate examples directly: git pathspec `**` only matches one or
+# more dirs, so `examples/basic/**/*.pkl` would silently skip
+# `examples/basic/Taskfile.pkl` (the actual file). Each example has
+# exactly one Taskfile.pkl.
 files=$(git ls-files \
   'README.md' \
   'skills/**/*.md' \
   'skills/**/*.pkl' \
-  'examples/basic/**/*.pkl' \
-  'examples/node/**/*.pkl' \
-  'examples/rust/**/*.pkl' \
-  'examples/monorepo/**/*.pkl')
+  'examples/basic/Taskfile.pkl' \
+  'examples/node/Taskfile.pkl' \
+  'examples/rust/Taskfile.pkl' \
+  'examples/monorepo/Taskfile.pkl')
 
 bad=0
 total=0
