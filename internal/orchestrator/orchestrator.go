@@ -66,6 +66,14 @@ type Result struct {
 // Non-target tasks always see a nil invocation: deps don't receive
 // caller args/params, so their action keys stay stable across
 // invocations.
+//
+// Refresh, when true, skips the cache *lookup* path but still writes
+// results back to the cache. The difference from "no cache backend
+// configured" is that a refresh run leaves the cache populated for
+// subsequent normal runs — use it when an undeclared dependency
+// changed (a global tool version, an environment shift outside
+// `env { ... }`) and you want to re-baseline rather than execute
+// uncached forever.
 type Plan struct {
 	Order            []string
 	Tasks            map[string]*config.Task
@@ -74,6 +82,7 @@ type Plan struct {
 	ConfigHash       []byte
 	Target           string
 	TargetInvocation *runner.Invocation
+	Refresh          bool
 }
 
 // Options tunes a single Execute invocation.
@@ -273,7 +282,7 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 	}
 	short := hash.FormatKey(key)[:12]
 
-	if task.Cache && o.cache != nil && o.cache.Has(key) {
+	if task.Cache && o.cache != nil && !p.Refresh && o.cache.Has(key) {
 		if err := o.cache.Restore(key, taskRoot); err != nil {
 			return Result{Name: name, Key: key}, fmt.Errorf("cache restore for %q: %w", name, err)
 		}

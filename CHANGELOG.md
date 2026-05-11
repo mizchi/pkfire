@@ -12,6 +12,29 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --refresh`.** Skip the cache *lookup* but still *store*
+  the result. Distinct from `--no-cache` (which disables both). Use
+  when an undeclared dependency changed (a global tool version, an
+  environment shift outside `env { ... }`) and you want to
+  re-baseline the cache instead of running uncached forever.
+  Mutually exclusive with `--no-cache`.
+- **`pkf doctor`.** Read-only diagnostic command. Reports the
+  `pkl` CLI version vs `minPklVersion`, cache dir + total size,
+  remote-cache reachability (when `PKFIRE_REMOTE_CACHE` is set),
+  and the resolved Taskfile + its `amends` line. Exits non-zero
+  iff any check FAILed.
+- **`pkf list --json`.** Machine-readable output:
+  `{"tasks":[{name,description,cmd,shell,deps,inputs,outputs,workdir,
+  cache,service,services,acceptsArgs,inheritEnv,params:[...]}]}`.
+  For CI / editor tooling that wants to enumerate tasks without
+  parsing the human-readable list.
+- **Action input `cache-pkl: false` (opt-in `~/.pkl/cache`
+  caching).** When `true`, the action runs an `actions/cache@v4`
+  step keyed on `hashFiles('**/PklProject.deps.json',
+  '**/Taskfile.pkl')` (override via `pkl-cache-key`). Off by
+  default — projects that don't import remote Pkl packages
+  don't pay the cache restore/save cost.
+
 - **Action-friendly tags (`v<ver>` + floating `v<major>`).** A new
   `v-tags.yml` workflow keeps `v0.4.0` (per-release) and `v0`
   (floating major) tags in sync with the canonical

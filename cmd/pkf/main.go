@@ -4,11 +4,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -35,7 +38,7 @@ var runGlobalValueFlags = map[string]bool{
 	"f": true, "file": true, "j": true, "jobs": true,
 }
 var runGlobalBoolFlags = map[string]bool{
-	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true,
+	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true,
 }
 
 // version is overridden at link time via `-ldflags "-X main.version=…"`.
@@ -70,6 +73,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdRun(args[1:], stdout, stderr)
 	case "up":
 		return cmdUp(args[1:], stdout, stderr)
+	case "doctor":
+		return cmdDoctor(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -84,13 +89,14 @@ usage:
 
 commands:
   init [-f FILE] [--force]              write a starter Taskfile.pkl
-  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache] <task>
+  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache|--refresh] <task>
                                         run a task and its transitive deps
   up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
                                         Ctrl+C releases the whole process tree
-  list [-f FILE] [-v]                   list declared tasks (-v: cmd/deps)
+  list [-f FILE] [-v] [--json]          list declared tasks (-v: cmd/deps; --json: machine-readable)
   graph [-f FILE] [--format FMT] [--target TASK]
                                         emit DAG (formats: dot, mermaid)
+  doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
   version                               print pkf version
   help                                  show this message
 
@@ -101,6 +107,8 @@ flags:
       --dry-run          print the execution plan and exit (no exec, no cache)
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
+      --refresh          skip cache lookup but still store results (re-baseline)
+      --json             (list only) machine-readable output
   -v, --verbose          (list only) include cmd preview and deps
 
 cache directory:
@@ -226,11 +234,15 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	file := newFileFlag(fs)
 	verbose := fs.Bool("v", false, "show cmd preview and deps")
 	fs.BoolVar(verbose, "verbose", false, "show cmd preview and deps")
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("list takes no positional args, got %v", fs.Args())
+	}
+	if *asJSON && *verbose {
+		return fmt.Errorf("--json subsumes -v (use one or the other)")
 	}
 	abs, err := resolveFile(fs, *file)
 	if err != nil {
@@ -245,6 +257,9 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	if *asJSON {
+		return printListJSON(stdout, tf, names)
+	}
 	if !*verbose {
 		for _, n := range names {
 			t := tf.Tasks[n]
@@ -274,6 +289,82 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// listParamJSON mirrors config.Param for the --json output. Kept as
+// its own type so we don't leak Pkl-internal field tags (`pkl:"..."`)
+// into the JSON contract.
+type listParamJSON struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Choices     []string `json:"choices,omitempty"`
+	Default     *string  `json:"default,omitempty"`
+	Description string   `json:"description,omitempty"`
+}
+
+type listTaskJSON struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Cmd         string          `json:"cmd"`
+	Shell       string          `json:"shell,omitempty"`
+	Deps        []string        `json:"deps,omitempty"`
+	Inputs      []string        `json:"inputs,omitempty"`
+	Outputs     []string        `json:"outputs,omitempty"`
+	Workdir     string          `json:"workdir,omitempty"`
+	Cache       bool            `json:"cache"`
+	Service     bool            `json:"service"`
+	Services    []string        `json:"services,omitempty"`
+	AcceptsArgs bool            `json:"acceptsArgs"`
+	InheritEnv  bool            `json:"inheritEnv"`
+	Params      []listParamJSON `json:"params,omitempty"`
+}
+
+type listJSON struct {
+	Tasks []listTaskJSON `json:"tasks"`
+}
+
+func printListJSON(stdout io.Writer, tf *config.Taskfile, names []string) error {
+	out := listJSON{Tasks: make([]listTaskJSON, 0, len(names))}
+	for _, n := range names {
+		t := tf.Tasks[n]
+		entry := listTaskJSON{
+			Name:        n,
+			Cmd:         t.Cmd,
+			Shell:       t.Shell,
+			Deps:        t.Deps,
+			Inputs:      t.Inputs,
+			Outputs:     t.Outputs,
+			Cache:       t.Cache,
+			Service:     t.Service,
+			Services:    t.Services,
+			AcceptsArgs: t.AcceptsArgs,
+			InheritEnv:  t.InheritEnv,
+		}
+		if t.Description != nil {
+			entry.Description = *t.Description
+		}
+		if t.Workdir != nil {
+			entry.Workdir = *t.Workdir
+		}
+		for _, p := range t.Params {
+			entry.Params = append(entry.Params, listParamJSON{
+				Name:    p.Name,
+				Type:    p.Type,
+				Choices: p.Choices,
+				Default: p.Default,
+				Description: func() string {
+					if p.Description != nil {
+						return *p.Description
+					}
+					return ""
+				}(),
+			})
+		}
+		out.Tasks = append(out.Tasks, entry)
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 func cmdGraph(args []string, stdout, _ io.Writer) error {
@@ -389,7 +480,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	file := newFileFlag(fs)
 	printHash := fs.Bool("print-hash", false, "print action keys and exit")
 	dryRun := fs.Bool("dry-run", false, "print the execution plan and exit")
-	noCache := fs.Bool("no-cache", false, "disable cache for this run")
+	noCache := fs.Bool("no-cache", false, "disable cache lookup AND store for this run")
+	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results (re-baseline)")
 	watch := fs.Bool("watch", false, "re-run on input changes")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
@@ -431,6 +523,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	switch {
 	case *dryRun && *printHash:
 		return fmt.Errorf("--dry-run and --print-hash are mutually exclusive")
+	case *noCache && *refresh:
+		return fmt.Errorf("--no-cache and --refresh are mutually exclusive (--refresh stores; --no-cache does not)")
 	case *watch && (*dryRun || *printHash):
 		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash")
 	case *dryRun:
@@ -465,6 +559,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		ConfigHash:       hash.HashBytes(tf.Canonical),
 		Target:           target,
 		TargetInvocation: inv,
+		Refresh:          *refresh,
 	}
 	if *watch {
 		return runWatch(ctx, abs, root, target, orch, plan, stderr)
@@ -750,6 +845,187 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
 	}
 	return nil
+}
+
+// cmdDoctor runs a battery of environmental checks and reports
+// OK/WARN/FAIL per row. Designed for "I just installed pkf, what's
+// missing?" and "my CI run is failing weirdly, is something
+// half-configured?" — every check is read-only, every line is one
+// line, and the exit code is non-zero iff any FAIL fired.
+func cmdDoctor(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("doctor takes no positional args, got %v", fs.Args())
+	}
+
+	var anyFail bool
+	report := func(level, label, msg string) {
+		fmt.Fprintf(stdout, "  %-4s  %-10s  %s\n", level, label, msg)
+		if level == "FAIL" {
+			anyFail = true
+		}
+	}
+
+	fmt.Fprintf(stdout, "pkf doctor (pkf %s)\n", version)
+
+	// 1. pkl CLI
+	if pklPath, err := exec.LookPath("pkl"); err == nil {
+		if ver, err := pklVersion(pklPath); err == nil {
+			report("OK", "pkl", fmt.Sprintf("%s at %s", ver, pklPath))
+		} else {
+			report("WARN", "pkl", fmt.Sprintf("found at %s but `--version` failed: %v", pklPath, err))
+		}
+	} else {
+		report("FAIL", "pkl", "not in PATH — install from https://pkl-lang.org/main/current/pkl-cli/")
+	}
+
+	// 2. cache directory
+	cacheDir, err := cache.DefaultDir()
+	if err != nil {
+		report("WARN", "cache", fmt.Sprintf("could not resolve dir: %v", err))
+	} else if info, err := os.Stat(cacheDir); err != nil {
+		if os.IsNotExist(err) {
+			report("OK", "cache", fmt.Sprintf("%s (empty — will be created on first run)", cacheDir))
+		} else {
+			report("WARN", "cache", fmt.Sprintf("%s: %v", cacheDir, err))
+		}
+	} else if !info.IsDir() {
+		report("FAIL", "cache", fmt.Sprintf("%s exists but is not a directory", cacheDir))
+	} else {
+		size, count := cacheStats(cacheDir)
+		report("OK", "cache", fmt.Sprintf("%s (%s across %d entries)", cacheDir, humanBytes(size), count))
+	}
+
+	// 3. remote cache (only if configured)
+	if remote := os.Getenv("PKFIRE_REMOTE_CACHE"); remote != "" {
+		// HEAD a CAS path with a zero digest — expect 404 / 401 / 200, but
+		// not a connection error. Any HTTP response means the endpoint
+		// is alive and the URL shape is correct.
+		probeURL := strings.TrimRight(remote, "/") + "/v1/cas/" + strings.Repeat("0", 64)
+		req, _ := http.NewRequest("HEAD", probeURL, nil)
+		if tok := os.Getenv("PKFIRE_REMOTE_TOKEN"); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		client := &http.Client{Timeout: 5 * time.Second}
+		if resp, err := client.Do(req); err != nil {
+			report("FAIL", "remote", fmt.Sprintf("%s unreachable: %v", remote, err))
+		} else {
+			resp.Body.Close()
+			switch resp.StatusCode {
+			case 401, 403:
+				report("FAIL", "remote", fmt.Sprintf("%s returned %d — check PKFIRE_REMOTE_TOKEN", remote, resp.StatusCode))
+			case 404, 200:
+				report("OK", "remote", fmt.Sprintf("%s reachable (status %d)", remote, resp.StatusCode))
+			default:
+				report("WARN", "remote", fmt.Sprintf("%s responded %d (expected 200/404)", remote, resp.StatusCode))
+			}
+		}
+	} else {
+		report("OK", "remote", "PKFIRE_REMOTE_CACHE not set (local-only)")
+	}
+
+	// 4. Taskfile (best-effort — doctor should be runnable outside any project)
+	abs, ferr := resolveFile(fs, *file)
+	if ferr == nil {
+		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+			if tf, err := config.Load(context.Background(), abs); err != nil {
+				report("FAIL", "taskfile", fmt.Sprintf("%s failed to load: %v", abs, err))
+			} else {
+				amends := scanAmends(abs)
+				if amends == "" {
+					amends = "(unknown)"
+				}
+				report("OK", "taskfile", fmt.Sprintf("%s (%d tasks; amends %s)", abs, len(tf.Tasks), amends))
+			}
+		} else {
+			report("WARN", "taskfile", fmt.Sprintf("no Taskfile.pkl found near %s", abs))
+		}
+	} else {
+		report("WARN", "taskfile", fmt.Sprintf("could not resolve file path: %v", ferr))
+	}
+
+	fmt.Fprintln(stdout)
+	if anyFail {
+		fmt.Fprintln(stderr, "doctor: one or more checks FAILed — see above")
+		return errors.New("doctor reported failures")
+	}
+	return nil
+}
+
+// pklVersion runs `pkl --version` and returns the trimmed first token of
+// the first line (`Pkl 0.31.1` → `0.31.1`). Cheap probe; the CLI prints
+// the same shape across releases.
+func pklVersion(path string) (string, error) {
+	out, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return line, nil
+	}
+	return parts[1], nil
+}
+
+// cacheStats walks `dir` and returns the total file size plus a
+// rough "entry count" (number of regular files at the cas/ leaf). Used
+// only for the doctor display, so accuracy matters less than speed.
+func cacheStats(dir string) (size int64, count int) {
+	filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if !info.IsDir() {
+			size += info.Size()
+			count++
+		}
+		return nil
+	})
+	return
+}
+
+// humanBytes renders a byte count as a short human string (KB/MB/GB).
+// Uses 1024 bases because the doctor output already aims at developer
+// eyeballs, not marketers.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// scanAmends greps the first `amends "..."` line of a Pkl file. We
+// deliberately don't re-evaluate the module here — doctor must stay
+// fast even when the schema URL is unreachable.
+func scanAmends(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "amends ") {
+			if start := strings.Index(line, "\""); start >= 0 {
+				if end := strings.Index(line[start+1:], "\""); end >= 0 {
+					return line[start+1 : start+1+end]
+				}
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 // cmdUp starts every `service: true` task in the target's subgraph. Non-

@@ -96,6 +96,54 @@ func TestExecuteCachesOutput(t *testing.T) {
 	}
 }
 
+func TestExecuteRefreshBypassesLookupButStores(t *testing.T) {
+	o, root, _, stderr := newOrch(t)
+
+	mk := func(cmd string) *orchestrator.Plan {
+		return basePlan(root, "build", &config.Task{
+			Cmd:     cmd,
+			Shell:   "bash",
+			Outputs: []string{"bin"},
+			Cache:   true,
+		})
+	}
+
+	// First run: populate cache.
+	if _, err := o.Execute(context.Background(), mk("mkdir -p bin && printf v1 > bin/app")); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	stderr.Reset()
+
+	// Refresh run with identical plan: must execute (not hit) even though
+	// the cache has the same action key.
+	p := mk("mkdir -p bin && printf v1 > bin/app")
+	p.Refresh = true
+	if err := os.RemoveAll(filepath.Join(root, "bin")); err != nil {
+		t.Fatal(err)
+	}
+	results, err := o.Execute(context.Background(), p)
+	if err != nil {
+		t.Fatalf("refresh run: %v", err)
+	}
+	if results[0].Outcome != orchestrator.OutcomeRan {
+		t.Errorf("refresh should re-execute, got %v", results[0].Outcome)
+	}
+
+	// Third run, non-refresh, identical plan: should hit cache (refresh
+	// stored a fresh entry, so the next normal run finds it).
+	stderr.Reset()
+	if err := os.RemoveAll(filepath.Join(root, "bin")); err != nil {
+		t.Fatal(err)
+	}
+	results, err = o.Execute(context.Background(), mk("mkdir -p bin && printf v1 > bin/app"))
+	if err != nil {
+		t.Fatalf("post-refresh run: %v", err)
+	}
+	if results[0].Outcome != orchestrator.OutcomeHit {
+		t.Errorf("post-refresh run should hit cache, got %v", results[0].Outcome)
+	}
+}
+
 func TestExecuteSkipsCacheWhenDisabled(t *testing.T) {
 	o, root, _, stderr := newOrch(t)
 	plan := basePlan(root, "phony", &config.Task{

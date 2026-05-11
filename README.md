@@ -109,6 +109,8 @@ Inputs:
 | `version` | the action ref, falling back to the latest release | Accepts `v0.4.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.4.0`. Pinning via `uses: mizchi/pkfire@v0.4.0` is the recommended form. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
+| `cache-pkl` | `false` | Set to `true` to cache `~/.pkl/cache` between runs. Useful for projects that consume remote Pkl packages (`amends` / `import` of `package://pkg.pkl-lang.org/...`). |
+| `pkl-cache-key` | `pkl-<hashFiles>` of `PklProject.deps.json` + `Taskfile.pkl` | Override only if the default key collides across unrelated jobs in the same repo. |
 
 ### Nix (no Go toolchain required)
 
@@ -177,17 +179,20 @@ cd /repo/root && pkf run ci               # uses /repo/root/Taskfile.pkl
 ```sh
 pkf list                       # show declared tasks
 pkf list -v                    # add cmd preview and deps
+pkf list --json                # machine-readable (for editor / CI tooling)
 pkf run test                   # builds first, then tests; second run hits cache
 pkf run -j 8 test              # cap parallelism at 8
 pkf run --watch test           # re-run on input changes (Ctrl+C to stop)
 pkf run --dry-run test         # print the execution plan, do not execute
 pkf run --print-hash test      # print action keys, do not execute
-pkf run --no-cache test        # bypass cache for this run
+pkf run --no-cache test        # bypass cache lookup AND store for this run
+pkf run --refresh test         # bypass cache lookup but DO re-store (re-baseline)
 pkf up dev                     # start every service:true task in dev's subgraph
 pkf up --watch dev             # same, plus restart-on-change
 pkf graph                      # emit Graphviz DOT for the full DAG
 pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
 pkf graph --target test        # only the subgraph rooted at `test`
+pkf doctor                     # diagnose pkl/cache/remote/taskfile setup
 ```
 
 Visualizing a Taskfile is a single pipeline:

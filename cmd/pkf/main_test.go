@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -411,6 +412,64 @@ func equalStrSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestListJSONEmitsStructuredOutput(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", basicTaskfile(t), "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList --json: %v", err)
+	}
+	var got listJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if len(got.Tasks) == 0 {
+		t.Fatal("expected at least one task in output")
+	}
+	names := map[string]bool{}
+	for _, e := range got.Tasks {
+		names[e.Name] = true
+	}
+	for _, want := range []string{"build", "test"} {
+		if !names[want] {
+			t.Errorf("expected task %q in json output, got %+v", want, names)
+		}
+	}
+}
+
+func TestListJSONAndVerboseAreMutuallyExclusive(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	err := cmdList([]string{"-f", basicTaskfile(t), "--json", "-v"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "subsumes") {
+		t.Fatalf("expected --json + -v to error, got %v", err)
+	}
+}
+
+func TestDoctorReportsTaskfileMetadata(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDoctor([]string{"-f", basicTaskfile(t)}, &stdout, &stderr); err != nil {
+		// doctor may exit non-zero if remote cache is misconfigured or pkl is missing,
+		// but for the basic Taskfile + pkl-on-PATH case it should succeed.
+		t.Fatalf("cmdDoctor: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"pkf doctor", "pkl", "cache", "taskfile"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	err := cmdRun([]string{"-f", basicTaskfile(t), "--no-cache", "--refresh", "test"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected --no-cache + --refresh to error, got %v", err)
+	}
 }
 
 func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {

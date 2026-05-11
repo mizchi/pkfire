@@ -22,6 +22,22 @@ inputs:
     description: Directory where binaries are placed. Added to GITHUB_PATH.
     required: false
     default: ${{ runner.temp }}/pkfire-bin
+  cache-pkl:
+    description: |
+      When `true`, cache `~/.pkl/cache` between runs via
+      `actions/cache@v4`. Default `false` because the cache helps
+      most for projects that hit `pkg.pkl-lang.org` repeatedly (Pkl
+      package consumers) but is dead weight for one-shot setups.
+    required: false
+    default: "false"
+  pkl-cache-key:
+    description: |
+      Override the cache key used when `cache-pkl: true`. Default is
+      `pkl-<hashFiles('**/PklProject.deps.json', '**/Taskfile.pkl')>`
+      which covers both library authors (PklProject.deps.json) and
+      Taskfile-only consumers (Taskfile.pkl `amends` pin).
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -115,3 +131,13 @@ runs:
         if [ "${{ inputs.pkl-version }}" != "none" ]; then
           pkl --version
         fi
+
+    # Opt-in. Restoring on a key miss is fine — the worst case is
+    # `pkl project resolve` re-downloads from `pkg.pkl-lang.org`.
+    - name: Cache ~/.pkl/cache
+      if: inputs.cache-pkl == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.pkl/cache
+        key: ${{ inputs.pkl-cache-key != '' && inputs.pkl-cache-key || format('pkl-{0}', hashFiles('**/PklProject.deps.json', '**/Taskfile.pkl')) }}
+        restore-keys: pkl-
