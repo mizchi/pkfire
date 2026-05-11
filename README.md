@@ -346,6 +346,15 @@ pitfalls, plus five copy-paste recipes under
 build/test, cross-compile matrix, monorepo, dev/watch, and remote
 cache.
 
+## Used by
+
+Real-world consumers building on top of the schema or the action.
+Open a PR to add yours.
+
+| Project | What it provides |
+| --- | --- |
+| [kawaz/pkf-tasks](https://github.com/kawaz/pkf-tasks) | Shared Pkl task modules published as a Pkl package: `vcs/auto.pkl` (jj/git runtime dispatch via abstract module + extends), `docs/translations.pkl` (translation-pair integrity), `lint/pkl.pkl` (`pkl format -w`). Worked example of the library-author patterns documented in [`skills/pkfire/SKILL.md`](./skills/pkfire/SKILL.md). |
+
 ## Examples
 
 | Path | What it shows |

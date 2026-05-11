@@ -1,0 +1,128 @@
+/// Recipe 12: skeleton for a reusable task library on top of pkfire.
+///
+/// Use this when you want to publish your own Pkl package of tasks
+/// that other projects can `import` and spread into their `tasks {
+/// ... }` (the kawaz/pkf-tasks pattern). Three files cover the
+/// minimum: an abstract module (`iface.pkl`), one concrete
+/// implementation per backend, and an `auto.pkl` that picks the
+/// right impl at runtime.
+///
+/// This recipe is intentionally shown as a **single file with
+/// commented section markers** so it's copy-pasteable. In a real
+/// library you split into separate .pkl files; see kawaz/pkf-tasks
+/// for the layout.
+///
+/// ============================================================
+/// FILE 1 of 3 — iface.pkl (abstract module, the contract)
+/// ============================================================
+///
+///     @ModuleInfo { minPklVersion = "0.31.0" }
+///     abstract module com.example.mylib.iface
+///     import "@pkfire/Taskfile.pkl"
+///
+///     abstract format: Taskfile.Task
+///     abstract lint:   Taskfile.Task
+///
+///     /// Aggregate so consumers can do `tasks { ...mylib.allTasks }`
+///     allTasks: Listing<Taskfile.Task> = new { format; lint }
+///
+/// ============================================================
+/// FILE 2 of 3 — impl-a.pkl (one concrete implementation)
+/// ============================================================
+///
+///     @ModuleInfo { minPklVersion = "0.31.0" }
+///     module com.example.mylib.implA
+///     extends "iface.pkl"
+///     import "@pkfire/Taskfile.pkl"
+///
+///     format = new Taskfile.Task {
+///       name = "mylib:format"
+///       cmd  = "tool-a format ."
+///       cache = false
+///     }
+///     lint = new Taskfile.Task {
+///       name = "mylib:lint"
+///       cmd  = "tool-a lint ."
+///       cache = false
+///     }
+///
+/// ============================================================
+/// FILE 3 of 3 — auto.pkl (runtime dispatch)
+/// ============================================================
+///
+///     @ModuleInfo { minPklVersion = "0.31.0" }
+///     module com.example.mylib.auto
+///     extends "iface.pkl"
+///     import "impl-a.pkl" as a
+///     import "impl-b.pkl" as b
+///
+///     /// Pkl cannot read the consumer's CWD at evaluation time, so
+///     /// the choice is encoded into the cmd string and resolved by
+///     /// the shell when the task actually runs. Use each tool's
+///     /// own ancestor-walk (`tool-a --version`, not `[ -f .tool-a ]`)
+///     /// so a sub-directory of the workspace still works.
+///     local function autoCmd(aCmd: String, bCmd: String): String = """
+///       if command -v tool-a >/dev/null 2>&1; then
+///         \(indent(aCmd))
+///       elif command -v tool-b >/dev/null 2>&1; then
+///         \(indent(bCmd))
+///       else
+///         echo "mylib: neither tool-a nor tool-b found in PATH" >&2
+///         exit 1
+///       fi
+///       """
+///
+///     local function indent(s: String): String =
+///       s.split("\n").map((line) -> if (line == "") "" else "  \(line)").join("\n")
+///
+///     /// Object-amends: take impl-a as the base, override only the
+///     /// cmd. params/env/cache/shell are inherited.
+///     format = (a.format) { cmd = autoCmd(a.format.cmd, b.format.cmd) }
+///     lint   = (a.lint)   { cmd = autoCmd(a.lint.cmd,   b.lint.cmd)   }
+///
+/// ============================================================
+/// CONSUMER side (their Taskfile.pkl)
+/// ============================================================
+///
+///     amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+///     import  "package://pkg.pkl-lang.org/github.com/<you>/mylib/mylib@0.1.0#/auto.pkl" as mylib
+///
+///     tasks { ...mylib.allTasks }
+///
+/// ============================================================
+/// PklProject (your library's PklProject)
+/// ============================================================
+///
+///     amends "pkl:Project"
+///     package {
+///       name = "mylib"
+///       baseUri = "package://pkg.pkl-lang.org/github.com/<you>/mylib/\(name)"
+///       version = "0.1.0"
+///       packageZipUrl = "https://github.com/<you>/mylib/releases/download/\(name)@\(version)/\(name)@\(version).zip"
+///     }
+///     dependencies {
+///       ["pkfire"] {
+///         uri = "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0"
+///       }
+///     }
+///
+/// ============================================================
+/// Release tag scheme
+/// ============================================================
+///
+/// Tag releases as `<name>@<version>` (e.g. `mylib@0.1.0`) — Pkl's
+/// `packageZipUrl` expects that exact shape. Mirror pkfire's
+/// approach: also push `v<version>` and floating `v<major>` tags
+/// from CI so consumers can `uses: <you>/mylib@v0.1.0` from a
+/// GitHub Action without hitting the GHA parser's
+/// `<repo>@<ref-with-@>` bug.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local stub: Task = new {
+  name = "stub"
+  description = "This recipe is documentation — see the comment block above."
+  cmd = "echo see the file comments for the library-author template"
+  cache = false
+}
+
+tasks { stub }
