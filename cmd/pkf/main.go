@@ -535,7 +535,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	case *watch && (*dryRun || *printHash):
 		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash")
 	case *dryRun:
-		return printDryRun(stdout, tf, order)
+		return printDryRun(stdout, root, tf, order, target, inv, *noCache || *refresh)
 	case *printHash:
 		return printHashes(stdout, root, tf, order, target, inv)
 	}
@@ -1681,26 +1681,151 @@ func stopServices(running []*runningService) {
 	}
 }
 
-// printDryRun walks the plan in topological order and prints each task's
-// cmd, deps, and cache disposition without running anything or touching
-// the cache directory.
-func printDryRun(stdout io.Writer, tf *config.Taskfile, order []string) error {
-	for i, name := range order {
-		t := tf.Tasks[name]
-		fmt.Fprintf(stdout, "%d. %s\n", i+1, name)
-		if t.Description != nil {
-			fmt.Fprintf(stdout, "   desc: %s\n", *t.Description)
-		}
-		fmt.Fprintf(stdout, "   cmd:  %s\n", t.Cmd)
-		if len(t.Deps) > 0 {
-			fmt.Fprintf(stdout, "   deps: %s\n", strings.Join(t.Deps, ", "))
-		}
-		if !t.Cache {
-			fmt.Fprintf(stdout, "   cache: disabled\n")
-		}
-		if t.Workdir != nil && *t.Workdir != "" {
-			fmt.Fprintf(stdout, "   workdir: %s\n", *t.Workdir)
+// printDryRun walks the plan in topological order and reports what
+// would happen at run time without touching files or processes:
+//
+//   - hit       — cache lookup succeeds, restore-from-CAS path
+//   - will run  — cache miss or task.Cache = true but never run before
+//   - uncached  — task.Cache = false (always runs, never stored)
+//   - service   — task.Service = true (rejected by `pkf run`; preview only)
+//
+// When --no-cache or --refresh is set, the cache-lookup path is
+// inert so every cacheable task shows as "will run". `inv` carries
+// the per-invocation overlay (params / tail args) for the target
+// task so its action key matches what Execute would compute.
+func printDryRun(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation, skipCacheLookup bool) error {
+	configHash := hash.HashBytes(tf.Canonical)
+
+	// Try to open the local cache for hit/miss prediction. A missing
+	// cache directory is fine — we just predict everything as "will
+	// run". Remote cache is intentionally not consulted here: it would
+	// turn a quick dry-run into a network round-trip per task.
+	var local *cache.Cache
+	if !skipCacheLookup {
+		if dir, err := cache.DefaultDir(); err == nil {
+			local = cache.New(dir)
 		}
 	}
+
+	type row struct {
+		status   string
+		shortKey string
+		name     string
+		cmd      string
+		note     string
+	}
+	rows := make([]row, 0, len(order))
+	hits, runs, uncached, services := 0, 0, 0, 0
+
+	for _, name := range order {
+		t := tf.Tasks[name]
+		var taskInv *runner.Invocation
+		if name == target {
+			taskInv = inv
+		}
+
+		r := row{name: name, cmd: oneLine(t.Cmd)}
+
+		switch {
+		case t.Service:
+			r.status = "service"
+			r.note = "pkf up only"
+			services++
+		case !t.Cache:
+			r.status = "uncached"
+			uncached++
+		default:
+			taskRoot := orchestrator.TaskRoot(t, root)
+			key, err := orchestrator.ComputeKey(t, tf.Defaults, taskRoot, configHash, taskInv)
+			if err != nil {
+				return fmt.Errorf("compute key for %q: %w", name, err)
+			}
+			r.shortKey = hash.FormatKey(key)[:12]
+			if local != nil && local.Has(key) {
+				r.status = "hit"
+				hits++
+			} else {
+				r.status = "will run"
+				runs++
+			}
+		}
+		if taskInv != nil && (len(taskInv.Args) > 0 || len(taskInv.Params) > 0) {
+			r.note = oneLine(invocationSummary(taskInv))
+		}
+		rows = append(rows, r)
+	}
+
+	// Width pass for alignment.
+	statusW, keyW, nameW := len("status"), 12, len("task")
+	for _, r := range rows {
+		if len(r.status) > statusW {
+			statusW = len(r.status)
+		}
+		if len(r.name) > nameW {
+			nameW = len(r.name)
+		}
+	}
+	fmt.Fprintf(stdout, "plan for %q (%d task%s):\n\n", target, len(order), plural(len(order)))
+	fmt.Fprintf(stdout, "  %-*s  %-*s  %-*s  %s\n", statusW, "status", keyW, "action key", nameW, "task", "cmd")
+	fmt.Fprintf(stdout, "  %s  %s  %s  %s\n",
+		strings.Repeat("-", statusW),
+		strings.Repeat("-", keyW),
+		strings.Repeat("-", nameW),
+		strings.Repeat("-", 40))
+	for _, r := range rows {
+		fmt.Fprintf(stdout, "  %-*s  %-*s  %-*s  %s\n",
+			statusW, r.status, keyW, r.shortKey, nameW, r.name, r.cmd)
+		if r.note != "" {
+			fmt.Fprintf(stdout, "  %-*s  %-*s  %-*s  ↳ %s\n",
+				statusW, "", keyW, "", nameW, "", r.note)
+		}
+	}
+	fmt.Fprintf(stdout, "\nsummary: %d hit · %d will run · %d uncached", hits, runs, uncached)
+	if services > 0 {
+		fmt.Fprintf(stdout, " · %d service%s", services, plural(services))
+	}
+	fmt.Fprintln(stdout)
+	if skipCacheLookup {
+		fmt.Fprintln(stdout, "note: --no-cache / --refresh active — every cacheable task forced to `will run`")
+	}
 	return nil
+}
+
+// oneLine collapses a multi-line cmd to a single readable line with
+// a length cap, so the dry-run table stays one row per task.
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i] + " …"
+	}
+	const max = 60
+	if len(s) > max {
+		s = s[:max-1] + "…"
+	}
+	return s
+}
+
+// invocationSummary renders the per-invocation overlay (tail args +
+// resolved params) in a single line for the dry-run note column.
+func invocationSummary(inv *runner.Invocation) string {
+	var parts []string
+	keys := make([]string, 0, len(inv.Params))
+	for k := range inv.Params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", k, inv.Params[k]))
+	}
+	if len(inv.Args) > 0 {
+		parts = append(parts, "-- "+strings.Join(inv.Args, " "))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }

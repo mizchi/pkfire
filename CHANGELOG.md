@@ -12,6 +12,18 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --dry-run` previews cache state per task.** The
+  output is a compact table with one row per task and a status
+  column: `hit` (cache lookup will succeed → restore from CAS),
+  `will run` (cacheable but no entry yet), `uncached`
+  (`cache = false`), `service` (skipped by `pkf run` — preview
+  only). Includes the 12-char action key prefix per row, a
+  summary line, and a per-invocation overlay note (resolved
+  params + tail args) when applicable. With `--no-cache` or
+  `--refresh`, the lookup is treated as inert and every
+  cacheable task shows `will run` — answers "what would
+  `--refresh` actually re-run?". Remote cache is not consulted
+  during dry-run to keep it fast.
 - **Recipe 14: secretlint as a pkfire pre-push hook.** A
   copy-paste path for repos whose ONLY git hook concern is
   secrets-scanning: `pnpm add -D secretlint` + a 7-line

@@ -654,9 +654,36 @@ func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {
 		t.Fatalf("cmdRun --dry-run: %v", err)
 	}
 	out := stdout.String()
-	for _, want := range []string{"1. build", "2. test", "cmd:  go build", "cmd:  go test"} {
+	for _, want := range []string{
+		`plan for "test"`,           // header
+		"build", "test",             // both tasks in the subgraph
+		"go build", "go test",       // truncated cmd previews
+		"status", "action key",      // table header
+		"summary:", "will run",      // bottom summary line
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunDryRunNoCacheForcesAllWillRun(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", basicTaskfile(t), "--dry-run", "--no-cache", "test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun --dry-run --no-cache: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "--no-cache / --refresh active") {
+		t.Errorf("missing --no-cache note:\n%s", out)
+	}
+	// "hit" appears in the summary line ("0 hit · …") regardless;
+	// what we care about is no task ROW with hit status. Rows are
+	// indented with two spaces and start with the status column.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "  hit ") {
+			t.Errorf("--no-cache dry-run reported a hit row, expected none:\n%s", out)
+			break
 		}
 	}
 }

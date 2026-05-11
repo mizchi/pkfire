@@ -183,7 +183,7 @@ pkf list --json                # machine-readable (for editor / CI tooling)
 pkf run test                   # builds first, then tests; second run hits cache
 pkf run -j 8 test              # cap parallelism at 8
 pkf run --watch test           # re-run on input changes (Ctrl+C to stop)
-pkf run --dry-run test         # print the execution plan, do not execute
+pkf run --dry-run test         # preview: per-task hit/will-run/uncached status + cmd
 pkf run --print-hash test      # print action keys, do not execute
 pkf run --no-cache test        # bypass cache lookup AND store for this run
 pkf run --refresh test         # bypass cache lookup but DO re-store (re-baseline)
