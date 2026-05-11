@@ -121,6 +121,18 @@ facts {
   ["param name with hyphen is rejected"] {
     module.catch(() -> (new Schema.Param { name = "bump-target"; type = "string" }).name) != null
   }
+
+  ["int param round-trips"] {
+    (new Schema.Param { name = "count"; type = "int"; default = "1" }).type == "int"
+  }
+
+  ["bool param round-trips"] {
+    (new Schema.Param { name = "watch"; type = "bool"; default = "false" }).type == "bool"
+  }
+
+  ["unknown param type is rejected"] {
+    module.catch(() -> (new Schema.Param { name = "x"; type = "float" }).type) != null
+  }
 }
 
 examples {

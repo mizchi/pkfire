@@ -292,6 +292,104 @@ func TestResolveInvocationForwardsTailArgs(t *testing.T) {
 	}
 }
 
+func TestResolveInvocationIntParamValid(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "count", Type: "int"}},
+	}
+	inv, err := resolveInvocation(task, "t", []string{"--count=42"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv == nil || inv.Params["COUNT"] != "42" {
+		t.Fatalf("got %+v, want COUNT=42", inv)
+	}
+}
+
+func TestResolveInvocationIntRejectsNonNumeric(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "count", Type: "int"}},
+	}
+	if _, err := resolveInvocation(task, "t", []string{"--count=abc"}); err == nil {
+		t.Fatal("expected int-validation error")
+	}
+}
+
+func TestResolveInvocationIntAcceptsNegative(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "off", Type: "int"}},
+	}
+	inv, err := resolveInvocation(task, "t", []string{"--off=-7"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv.Params["OFF"] != "-7" {
+		t.Fatalf("got %+v, want OFF=-7", inv)
+	}
+}
+
+func TestResolveInvocationBoolLoneFlagIsTrue(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "watch", Type: "bool"}},
+	}
+	inv, err := resolveInvocation(task, "t", []string{"--watch"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv == nil || inv.Params["WATCH"] != "true" {
+		t.Fatalf("got %+v, want WATCH=true", inv)
+	}
+}
+
+func TestResolveInvocationBoolExplicitFalse(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "watch", Type: "bool"}},
+	}
+	inv, err := resolveInvocation(task, "t", []string{"--watch=false"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv.Params["WATCH"] != "false" {
+		t.Fatalf("got %+v, want WATCH=false", inv)
+	}
+}
+
+func TestResolveInvocationBoolRejectsBadValue(t *testing.T) {
+	task := &config.Task{
+		Params: []*config.Param{{Name: "watch", Type: "bool"}},
+	}
+	if _, err := resolveInvocation(task, "t", []string{"--watch=yes"}); err == nil {
+		t.Fatal("expected bool-validation error")
+	}
+}
+
+func TestResolveInvocationBoolDoesNotConsumeNextToken(t *testing.T) {
+	def := "world"
+	task := &config.Task{
+		Params: []*config.Param{
+			{Name: "watch", Type: "bool"},
+			{Name: "hi", Type: "string", Default: &def},
+		},
+	}
+	// `--watch --hi=foo`: --watch is value-less, --hi takes "foo".
+	inv, err := resolveInvocation(task, "t", []string{"--watch", "--hi=foo"})
+	if err != nil {
+		t.Fatalf("resolveInvocation: %v", err)
+	}
+	if inv.Params["WATCH"] != "true" || inv.Params["HI"] != "foo" {
+		t.Fatalf("got %+v, want WATCH=true HI=foo", inv)
+	}
+}
+
+func TestResolveInvocationValidatesIntDefault(t *testing.T) {
+	bad := "abc"
+	task := &config.Task{
+		Params: []*config.Param{{Name: "count", Type: "int", Default: &bad}},
+	}
+	if _, err := resolveInvocation(task, "t", nil); err == nil {
+		t.Fatal("expected error when int default fails to parse")
+	}
+}
+
 func TestResolveInvocationReturnsNilWhenNoOverlay(t *testing.T) {
 	task := &config.Task{}
 	inv, err := resolveInvocation(task, "t", nil)

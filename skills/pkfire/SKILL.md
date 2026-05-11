@@ -71,10 +71,10 @@ class Task {
 }
 
 class Param {
-  name: String           // lower-case; exposed to cmd as $NAME (uppercased)
-  type: "string"|"enum"  // enum requires `choices`
-  choices: Listing<String>
-  default: String?       // null = required
+  name: String                     // lower-case; exposed to cmd as $NAME (uppercased)
+  type: "string"|"enum"|"int"|"bool"
+  choices: Listing<String>         // enum only
+  default: String?                 // null = required; "10" for int, "true"/"false" for bool
   description: String?
 }
 ```
@@ -375,9 +375,15 @@ Tasks can take command-line input. Two shapes:
   is `just run *ARGS`.
 - **`params { Param ... }`** — typed named flags. The caller passes
   `pkf run <task> --<name>=<value>`; inside `cmd` the value is
-  available as `$NAME` (uppercased). `type: "enum"` validates against
-  `choices` before the cmd runs; `default = "..."` makes the flag
-  optional; omitting `default` makes it required.
+  available as `$NAME` (uppercased). Four types:
+  - `"string"`: any value.
+  - `"enum"`: must match one of `choices`.
+  - `"int"`: parsable as a signed decimal integer.
+  - `"bool"`: `--flag` alone = true, `--flag=true|false` explicit.
+    Bool params never consume the next token as a value, so
+    `--watch --port=80` is unambiguous.
+  `default = "..."` makes the flag optional (the string itself is
+  validated against `type`); omitting `default` makes it required.
 
 ```pkl
 local bumpVersion = new Task {

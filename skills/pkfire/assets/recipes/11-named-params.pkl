@@ -66,4 +66,26 @@ local generate: Task = new {
   }
 }
 
-tasks { bumpVersion; checkTranslate; generate }
+/// Typed numeric + boolean flags. `--port=8080 --watch` is the
+/// idiomatic shape; `--watch` alone is true, `--watch=false` is the
+/// only way to flip it back off. Defaults are validated at run time,
+/// so `default = "abc"` on a `type = "int"` param fails fast.
+local devServer: Task = new {
+  name = "dev-server"
+  description = "Start the dev server on a configurable port"
+  cmd = """
+    if [ "$WATCH" = "true" ]; then
+      exec node server.js --port $PORT --watch
+    else
+      exec node server.js --port $PORT
+    fi
+    """
+  service = true
+  readyPort = 3000
+  params {
+    new { name = "port"; type = "int"; default = "3000"; description = "TCP port to bind" }
+    new { name = "watch"; type = "bool"; default = "false"; description = "Restart on source change" }
+  }
+}
+
+tasks { bumpVersion; checkTranslate; generate; devServer }

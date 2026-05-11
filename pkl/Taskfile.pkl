@@ -32,14 +32,21 @@ class Param {
   /// shell variable name.
   name: String(matches(Regex(#"^[a-z][a-zA-Z0-9_]*$"#)))
 
-  /// "string" accepts any value; "enum" restricts to `choices`.
-  type: "string"|"enum" = "string"
+  /// Value shape:
+  ///   - `"string"`: any value.
+  ///   - `"enum"`: must match one of `choices` (validated client-side).
+  ///   - `"int"`: parsable as a signed decimal integer.
+  ///   - `"bool"`: `--flag` alone = true, `--flag=true|false` explicit.
+  type: "string"|"enum"|"int"|"bool" = "string"
 
-  /// Allowed values when `type == "enum"`. Empty for `type == "string"`.
+  /// Allowed values when `type == "enum"`. Empty for other types.
   choices: Listing<String> = new {}
 
-  /// Value used when the caller omits this flag. If null and the caller
-  /// omits the flag, `pkf run` errors with the param's `description`.
+  /// Value used when the caller omits this flag. Always a String —
+  /// for `type == "int"` write `default = "10"`, for `type == "bool"`
+  /// write `default = "true"`. pkf validates that the default itself
+  /// parses, so a typo here errors at `pkf list` time, not at run time.
+  /// If null and the caller omits the flag, `pkf run` errors.
   default: String? = null
 
   /// One-line help string shown by `pkf list -v`.

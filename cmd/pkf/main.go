@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -544,6 +545,11 @@ func resolveInvocation(task *config.Task, name string, postArgs []string) (*runn
 
 	// Walk preTail collecting --<name>=<value> / --<name> <value> against
 	// declared params; unknown flags are errors.
+	//
+	// Bool params take a value-less form: `--flag` alone means true. To
+	// keep parsing predictable, bool params never consume the next
+	// token as a value — use `--flag=false` (with `=`) for explicit
+	// false.
 	declared := make(map[string]*config.Param, len(task.Params))
 	for _, p := range task.Params {
 		declared[p.Name] = p
@@ -557,37 +563,39 @@ func resolveInvocation(task *config.Task, name string, postArgs []string) (*runn
 		}
 		body := strings.TrimPrefix(tok, "--")
 		var key, val string
+		hasEq := false
 		if eq := strings.Index(body, "="); eq >= 0 {
 			key, val = body[:eq], body[eq+1:]
+			hasEq = true
 			i++
 		} else {
 			key = body
-			if i+1 >= len(preTail) {
-				return nil, fmt.Errorf("flag --%s needs a value", key)
-			}
-			val = preTail[i+1]
-			i += 2
 		}
 		p, ok := declared[key]
 		if !ok {
 			return nil, fmt.Errorf("task %q has no param %q", name, key)
 		}
-		if p.Type == "enum" {
-			match := false
-			for _, c := range p.Choices {
-				if c == val {
-					match = true
-					break
+		if !hasEq {
+			if p.Type == "bool" {
+				val = "true"
+				i++
+			} else {
+				if i+1 >= len(preTail) {
+					return nil, fmt.Errorf("flag --%s needs a value", key)
 				}
+				val = preTail[i+1]
+				i += 2
 			}
-			if !match {
-				return nil, fmt.Errorf("param --%s=%q is not one of: %s", key, val, strings.Join(p.Choices, ", "))
-			}
+		}
+		if err := validateParamValue(p, val); err != nil {
+			return nil, err
 		}
 		given[key] = val
 	}
 
-	// Apply defaults; error on missing required params.
+	// Apply defaults; error on missing required params. Defaults are
+	// validated too, so a typo like `default = "tru"` on a bool param
+	// errors before the task ever runs.
 	resolved := make(map[string]string)
 	for _, p := range task.Params {
 		v, ok := given[p.Name]
@@ -596,6 +604,9 @@ func resolveInvocation(task *config.Task, name string, postArgs []string) (*runn
 				return nil, fmt.Errorf("task %q requires --%s", name, p.Name)
 			}
 			v = *p.Default
+			if err := validateParamValue(p, v); err != nil {
+				return nil, fmt.Errorf("default for --%s: %w", p.Name, err)
+			}
 		}
 		resolved[strings.ToUpper(p.Name)] = v
 	}
@@ -604,6 +615,32 @@ func resolveInvocation(task *config.Task, name string, postArgs []string) (*runn
 		return nil, nil
 	}
 	return &runner.Invocation{Params: resolved, Args: tail}, nil
+}
+
+// validateParamValue checks that `val` matches the param's declared
+// type. Returns nil for "string" (anything goes).
+func validateParamValue(p *config.Param, val string) error {
+	switch p.Type {
+	case "enum":
+		for _, c := range p.Choices {
+			if c == val {
+				return nil
+			}
+		}
+		return fmt.Errorf("param --%s=%q is not one of: %s", p.Name, val, strings.Join(p.Choices, ", "))
+	case "int":
+		if _, err := strconv.ParseInt(val, 10, 64); err != nil {
+			return fmt.Errorf("param --%s=%q is not a valid integer", p.Name, val)
+		}
+		return nil
+	case "bool":
+		if val != "true" && val != "false" {
+			return fmt.Errorf("param --%s=%q is not a valid boolean (want true or false)", p.Name, val)
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 // runWatch loops: execute the plan, then wait for input changes (or Ctrl+C),

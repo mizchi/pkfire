@@ -32,13 +32,18 @@ Action version all move together — there is one tag per release
   entries.
 - **Typed named flags via `params { Param ... }`.** New
   `Task.params: Listing<Param>` with the `Param` class
-  (`name`/`type: "string"|"enum"`/`choices`/`default`/`description`).
+  (`name`/`type: "string"|"enum"|"int"|"bool"`/`choices`/`default`/`description`).
   The caller passes `pkf run <task> --<name>=<value>`; pkf
-  validates enums and defaults *before* the cmd runs, then exposes
-  each resolved value to `cmd` as `$NAME` (uppercased). Missing
-  required params (no `default`) error out client-side. Resolved
-  values are part of the action key when `cache = true`, so
-  `--bump=patch` and `--bump=minor` cache separately. Recipe at
+  validates the value's *type* (enum membership, integer
+  parsability, "true"/"false" for bool) *before* the cmd runs, then
+  exposes each resolved value to `cmd` as `$NAME` (uppercased).
+  Bool params take the value-less form `--flag` (= true) so they
+  don't consume the next token; explicit false is `--flag=false`.
+  Defaults are themselves type-checked, so a typo like
+  `default = "abc"` on an int param fails fast. Missing required
+  params (no `default`) error client-side. Resolved values fold
+  into the action key when `cache = true`, so `--bump=patch` and
+  `--bump=minor` cache separately. Recipe at
   `skills/pkfire/assets/recipes/11-named-params.pkl`.
 - **Task names may now contain `/`.** The name regex is relaxed
   from `^[a-zA-Z][a-zA-Z0-9_:.-]*$` to
