@@ -10,6 +10,18 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-11
+
+Pkl schema is unchanged from 0.4.0 — bumping in lockstep with the
+binary/action per project convention. The amends URI change is
+mechanical; no Taskfile rewrites needed.
+
+The headline of 0.5.0 is the new **task-runner UX layer**: a
+monorepo-aware `pkf affected` for CI, multi-target / default-task
+ergonomics, cache-state preview in dry-run, end-of-run timing
+summary, plus opt-in git-hook installation. Everything below
+sits on top of the unchanged 0.4 schema.
+
 ### Added
 
 - **`pkf affected --since=<ref>`.** Monorepo-CI killer: runs only
@@ -50,24 +62,6 @@ Action version all move together — there is one tag per release
   cacheable task shows `will run` — answers "what would
   `--refresh` actually re-run?". Remote cache is not consulted
   during dry-run to keep it fast.
-- **Recipe 14: secretlint as a pkfire pre-push hook.** A
-  copy-paste path for repos whose ONLY git hook concern is
-  secrets-scanning: `pnpm add -D secretlint` + a 7-line
-  `.secretlintrc.json` + this recipe + `pkf hooks install` = done,
-  no prek / `.pre-commit-config.yaml`. Wires to pre-push (not
-  pre-commit) so secretlint runs once per push instead of every
-  micro-commit; scopes to the outgoing diff via `git diff
-  '@{push}..HEAD'` (falling back to `@{u}` then to all tracked
-  files for first-push-of-new-branch). Documents the composition
-  with prek for projects that already use it.
-- **`.envrc`-safe idempotent `pkf hooks install`.** Silent
-  (zero stdout/stderr) when every shim is already present and
-  bit-identical to what pkfire would write — safe to drop into
-  `.envrc` for auto-install on `cd`. Writes go through tempfile
-  + rename so concurrent reloads can't tear the shim. The
-  "no installable hooks" hint only fires when the Taskfile
-  declares NO hook-named task at all (likely a typo), not on
-  every no-op reload.
 - **`pkf hooks install` / `uninstall` / `list`.** Convention-based
   git hook manager: any task whose `name` matches a git client-side
   hook event (`pre-commit`, `pre-push`, `commit-msg`, ... full list
@@ -77,19 +71,21 @@ Action version all move together — there is one tag per release
   per-hook args). The shim is marked so uninstall removes only
   pkfire-managed hooks and won't clobber hand-written ones (use
   `--force` to overwrite). Designed to compose with — not replace —
-  dedicated managers like [hk](https://hk.jdx.dev/) and lefthook:
-  use them when you need staged-file scoping or check/fix duality,
-  use `pkf hooks` when a `pkf run pre-commit` is enough. Recipe 13
-  covers the patterns.
-
-## [0.5.0] - 2026-05-11
-
-Pkl schema is unchanged from 0.4.0 — bumping in lockstep with the
-binary/action per project convention. The amends URI change is
-mechanical; no Taskfile rewrites needed.
-
-### Added
-
+  dedicated managers like [hk](https://hk.jdx.dev/) and lefthook.
+- **`.envrc`-safe idempotent `pkf hooks install`.** Silent
+  (zero stdout/stderr) when every shim is already present and
+  bit-identical to what pkfire would write — safe to drop into
+  `.envrc` for auto-install on `cd`. Writes go through tempfile
+  + rename so concurrent reloads can't tear the shim.
+- **Recipe 14: secretlint as a pkfire pre-push hook.** A
+  copy-paste path for repos whose ONLY git hook concern is
+  secrets-scanning: `pnpm add -D secretlint` + a 7-line
+  `.secretlintrc.json` + this recipe + `pkf hooks install` = done,
+  no prek / `.pre-commit-config.yaml`. Wires to pre-push (not
+  pre-commit) so secretlint runs once per push instead of every
+  micro-commit; scopes to the outgoing diff via `git diff
+  '@{push}..HEAD'`. Composes with prek for projects that
+  already use it.
 - **GitHub Action friendly `v<ver>` + floating `v<major>` tags.**
   Release workflow now pushes `v0.5.0` and (refreshes) `v0` so
   consumers can write `uses: mizchi/pkfire@v0.5.0` (or `@v0`)
