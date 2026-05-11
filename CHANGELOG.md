@@ -12,6 +12,48 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf <plugin> <args>` plugin dispatch.** When `args[0]` isn't a
+  built-in subcommand, pkfire looks for `pkf-<args[0]>` on PATH
+  and execs it with the remaining args. Plugin inherits the
+  user's terminal (stdin/stdout/stderr); `PKF_PLUGIN_NAME` env
+  carries the invoked subcommand. Git-style extension point —
+  write `pkf-release` once, call `pkf release`. No registration.
+- **`pkf run --remote-only` (also `pkf affected`).** Skips the
+  local CAS entirely; reads + writes go straight to the remote
+  cache configured via `PKFIRE_REMOTE_CACHE`. Useful for "did
+  my last build actually push to remote?" smoke tests in CI.
+  Requires the env var; errors clearly if it's not set.
+- **`pkf graph --target X --depth=N`.** Limits BFS depth from
+  the target so the rendered graph stays a localized
+  neighborhood instead of the full transitive subgraph. Pair
+  with `--format mermaid` for inline-renderable comment
+  artifacts.
+- **`pkf migrate --to=<ver>`.** Rewrites a Taskfile.pkl's
+  `amends "...pkfire@<old>"` URI to a new version, then
+  re-evaluates the file to verify the new schema actually
+  loads. If `pkl eval` fails post-migration, the file is
+  reverted to the original. `--dry-run` shows the diff
+  without writing. `--skip-verify` bypasses the eval check
+  (e.g. when pkl isn't on PATH).
+- **`pkf pkl-cache warm`.** Pre-evaluates one or more Pkl
+  files (default: the discovered Taskfile.pkl) so
+  `~/.pkl/cache` is populated. CI prefetch step — runs once
+  before parallel jobs so each later `pkl eval` / `pkf run`
+  hits a populated cache instead of racing on the same
+  fetch.
+- **`pkf affected --watch`.** Watch loop that re-evaluates the
+  affected set on every file change. The set itself can shift
+  (a new edit pulls in different tasks), so each iteration
+  re-runs `git diff`, recomputes the affected closure, builds
+  a fresh plan, and executes. Watch targets cover every
+  task's expanded inputs (broader than a single subgraph) so
+  changes anywhere in the repo are noticed.
+- **`gitChangedFiles` now unions committed + staged + working-
+  tree edits.** Previously `pkf affected --since=<ref>` only
+  saw committed-to-HEAD changes; uncommitted edits during local
+  iteration didn't trigger affected tasks. The union covers
+  all three diff modes, dedupes via map. CI-only flows where
+  the working tree is clean still work the same.
 - **`pkf run --profile=<name>` (also `pkf affected`).** Run-wide
   profile tag injected as `$PKF_PROFILE` so `cmd` can branch
   (`if [ "$PKF_PROFILE" = "ci" ]; then ...; fi`). Folded into

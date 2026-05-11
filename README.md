@@ -215,6 +215,12 @@ pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
 pkf explain build              # dump every input to the action key (cache-miss debug)
 pkf run --profile=ci build     # tag the run; $PKF_PROFILE + cache splits per profile
 pkf run --on-fail=shell build  # drop into $SHELL in the failed task's workdir on error
+pkf run --remote-only build    # skip local cache, only consult remote (verify remote populated)
+pkf affected --watch           # re-evaluate affected set on every file change
+pkf graph --target build --depth=1   # show only direct deps (one hop)
+pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
+pkf pkl-cache warm             # pre-populate ~/.pkl/cache (CI prefetch step)
+pkf <plugin> <args>            # exec `pkf-<plugin>` on PATH (git-style fallthrough)
 ```
 
 Inside `cmd`, three env vars are always injected so tasks can

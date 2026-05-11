@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,7 +42,7 @@ var runGlobalValueFlags = map[string]bool{
 	"f": true, "file": true, "j": true, "jobs": true, "profile": true, "on-fail": true,
 }
 var runGlobalBoolFlags = map[string]bool{
-	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true,
+	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true, "remote-only": true,
 }
 
 // version is overridden at link time via `-ldflags "-X main.version=…"`.
@@ -92,7 +93,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdCompletion(args[1:], stdout, stderr)
 	case "explain":
 		return cmdExplain(args[1:], stdout, stderr)
+	case "migrate":
+		return cmdMigrate(args[1:], stdout, stderr)
+	case "pkl-cache":
+		return cmdPklCache(args[1:], stdout, stderr)
 	default:
+		// Git-style plugin dispatch: if `pkf-<sub>` is on PATH,
+		// exec it with the remaining args. Lets users extend pkf
+		// without recompiling — `pkf release` → `pkf-release ...`.
+		// Plugins inherit the terminal so they can be interactive
+		// without ceremony.
+		if path, err := exec.LookPath("pkf-" + args[0]); err == nil {
+			cmd := exec.Command(path, args[1:]...)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Env = append(os.Environ(), "PKF_PLUGIN_NAME="+args[0])
+			return cmd.Run()
+		}
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -123,6 +141,9 @@ commands:
   cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
   completion <bash|zsh|fish>            emit a shell-completion script to stdout
   explain <task>                        dump every input to the task's action key (for cache-miss debugging)
+  migrate --to=<ver> [-f FILE] [--dry-run]
+                                        rewrite Taskfile.pkl's amends URI; verify via pkl eval
+  pkl-cache warm [-f FILE] [PATH...]    pre-evaluate Pkl files so ~/.pkl/cache is populated before parallel jobs
   version                               print pkf version
   help                                  show this message
 
@@ -399,11 +420,15 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 	file := newFileFlag(fs)
 	format := fs.String("format", "dot", "output format: dot or mermaid")
 	target := fs.String("target", "", "render only the subgraph rooted at this task")
+	depth := fs.Int("depth", 0, "limit dep traversal to N hops from --target (0 = unlimited)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("graph takes no positional args, got %v", fs.Args())
+	}
+	if *depth != 0 && *target == "" {
+		return fmt.Errorf("--depth requires --target (depth is measured from the target)")
 	}
 	abs, err := resolveFile(fs, *file)
 	if err != nil {
@@ -423,9 +448,13 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 		if !g.Has(*target) {
 			return fmt.Errorf("unknown task: %q", *target)
 		}
-		nodes, err = g.Subgraph(*target)
-		if err != nil {
-			return err
+		if *depth > 0 {
+			nodes = bfsLimited(tf, *target, *depth)
+		} else {
+			nodes, err = g.Subgraph(*target)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		nodes = g.Names()
@@ -443,6 +472,44 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 	default:
 		return fmt.Errorf("unknown format %q (want: dot, mermaid)", *format)
 	}
+}
+
+// bfsLimited returns every task reachable from `target` along `deps`
+// edges within `maxDepth` hops, inclusive of the target. depth 1 =
+// target + its direct deps; depth 2 = + grand-deps; etc. Used by
+// `pkf graph --target X --depth=N` to render a localized neighborhood
+// without the full transitive subgraph.
+func bfsLimited(tf *config.Taskfile, target string, maxDepth int) []string {
+	type frame struct {
+		name  string
+		depth int
+	}
+	visited := map[string]int{target: 0}
+	queue := []frame{{target, 0}}
+	for len(queue) > 0 {
+		f := queue[0]
+		queue = queue[1:]
+		if f.depth >= maxDepth {
+			continue
+		}
+		task, ok := tf.Tasks[f.name]
+		if !ok {
+			continue
+		}
+		for _, dep := range task.Deps {
+			if _, seen := visited[dep]; seen {
+				continue
+			}
+			visited[dep] = f.depth + 1
+			queue = append(queue, frame{dep, f.depth + 1})
+		}
+	}
+	out := make([]string, 0, len(visited))
+	for n := range visited {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func writeDOT(w io.Writer, tf *config.Taskfile, nodes []string, keep map[string]bool) error {
@@ -511,6 +578,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
 	profile := fs.String("profile", "", "profile name passed as $PKF_PROFILE and folded into action keys")
 	onFail := fs.String("on-fail", "", "action on task failure: 'shell' drops into $SHELL in the failed task's workdir")
+	remoteOnly := fs.Bool("remote-only", false, "consult only the remote cache (verify remote populated; requires PKFIRE_REMOTE_CACHE)")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(globalArgs); err != nil {
@@ -598,16 +666,34 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 
 	var backend cache.Backend
 	if !*noCache {
-		dir, err := cache.DefaultDir()
-		if err != nil {
-			return fmt.Errorf("resolve cache dir: %w", err)
-		}
-		local := cache.New(dir)
-		if remoteURL := os.Getenv("PKFIRE_REMOTE_CACHE"); remoteURL != "" {
+		remoteURL := os.Getenv("PKFIRE_REMOTE_CACHE")
+		if *remoteOnly {
+			if remoteURL == "" {
+				return fmt.Errorf("--remote-only requires PKFIRE_REMOTE_CACHE")
+			}
+			dir, err := cache.DefaultDir()
+			if err != nil {
+				return fmt.Errorf("resolve cache dir: %w", err)
+			}
 			remote := cache.NewRemote(remoteURL, os.Getenv("PKFIRE_REMOTE_TOKEN"))
-			backend = cache.NewLayered(local, remote)
+			// Skip the local CAS for reads — useful for "did the
+			// remote actually accept my upload?" smoke tests in CI.
+			// The local Cache instance is still needed as a staging
+			// area for tar extraction (the wire format IS the local
+			// format), but Has/Store paths bypass it.
+			backend = cache.NewRemoteOnly(cache.New(dir), remote)
 		} else {
-			backend = local
+			dir, err := cache.DefaultDir()
+			if err != nil {
+				return fmt.Errorf("resolve cache dir: %w", err)
+			}
+			local := cache.New(dir)
+			if remoteURL != "" {
+				remote := cache.NewRemote(remoteURL, os.Getenv("PKFIRE_REMOTE_TOKEN"))
+				backend = cache.NewLayered(local, remote)
+			} else {
+				backend = local
+			}
 		}
 	}
 	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet, Profile: *profile})
@@ -1079,6 +1165,136 @@ var gitHookEvents = []string{
 // refuses to delete hooks without the marker so a hand-written hook
 // doesn't disappear on `pkf hooks uninstall`.
 const pkfHookMarker = "# managed by pkf hooks install"
+
+// cmdMigrate rewrites a Taskfile.pkl's `amends "pkfire@<old>"` URI
+// to a new version. Verifies the result with `pkl eval` before
+// committing the change to disk, so a typo in --to (or a removed
+// schema field that the existing Taskfile relies on) doesn't leave
+// the file in a non-evaluating state.
+//
+// Doesn't touch examples or other files that pin specific versions
+// for historical reasons. Use scripts/bump-version.sh for tree-wide
+// sweeps.
+func cmdMigrate(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf migrate", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	to := fs.String("to", "", "target schema version, e.g. 0.5.0 (required)")
+	dryRun := fs.Bool("dry-run", false, "print the new amends line without writing")
+	skipVerify := fs.Bool("skip-verify", false, "don't re-evaluate after the rewrite")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *to == "" {
+		return fmt.Errorf("--to=<version> is required (e.g. --to=0.5.0)")
+	}
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return err
+	}
+
+	// Match `pkfire@X.Y.Z` (the only place the schema version
+	// surfaces in an `amends` URI) — semver with optional pre-release.
+	versionRe := regexp.MustCompile(`pkfire@\d+\.\d+\.\d+`)
+	if !versionRe.Match(data) {
+		return fmt.Errorf("no pkfire@<version> reference found in %s — is it amending the published schema?", abs)
+	}
+	newBody := versionRe.ReplaceAllString(string(data), "pkfire@"+*to)
+	if newBody == string(data) {
+		fmt.Fprintf(stdout, "%s already pins pkfire@%s — nothing to migrate\n", abs, *to)
+		return nil
+	}
+	if *dryRun {
+		fmt.Fprintf(stdout, "would migrate %s\n", abs)
+		// Show only the changed line(s) for readability.
+		for i, line := range strings.Split(string(data), "\n") {
+			newLine := strings.Split(newBody, "\n")[i]
+			if line != newLine {
+				fmt.Fprintf(stdout, "  -%s\n  +%s\n", line, newLine)
+			}
+		}
+		return nil
+	}
+
+	if err := os.WriteFile(abs, []byte(newBody), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", abs, err)
+	}
+	fmt.Fprintf(stdout, "migrated %s → pkfire@%s\n", abs, *to)
+
+	if *skipVerify {
+		return nil
+	}
+	if _, err := exec.LookPath("pkl"); err != nil {
+		fmt.Fprintf(stderr, "[pkf] migrate: pkl not on PATH; skipping post-migration eval check\n")
+		return nil
+	}
+	cmd := exec.Command("pkl", "eval", abs)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		// Revert so the user's file isn't left broken.
+		_ = os.WriteFile(abs, data, 0o644)
+		return fmt.Errorf("post-migration `pkl eval` failed (file reverted): %w", err)
+	}
+	fmt.Fprintf(stdout, "verified: %s evaluates against pkfire@%s\n", abs, *to)
+	return nil
+}
+
+// cmdPklCache warms the local Pkl package cache (~/.pkl/cache) for
+// every Pkl file under the cwd (or specified paths). A CI step can
+// run this once before parallel jobs, so each later `pkl eval` /
+// `pkf run` hits a populated cache instead of racing on the same
+// fetch. Idempotent.
+func cmdPklCache(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		args = []string{"warm"}
+	}
+	switch args[0] {
+	case "warm":
+		return pklCacheWarm(stdout, stderr, args[1:])
+	default:
+		return fmt.Errorf("unknown pkl-cache subcommand %q (want: warm)", args[0])
+	}
+}
+
+func pklCacheWarm(stdout, stderr io.Writer, args []string) error {
+	fs := flag.NewFlagSet("pkf pkl-cache warm", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if _, err := exec.LookPath("pkl"); err != nil {
+		return fmt.Errorf("pkl CLI not on PATH; install from https://pkl-lang.org")
+	}
+	// If positional paths given, warm those. Otherwise resolve the
+	// Taskfile and warm just it — the single most common case.
+	paths := fs.Args()
+	if len(paths) == 0 {
+		abs, err := resolveFile(fs, *file)
+		if err != nil {
+			return err
+		}
+		paths = []string{abs}
+	}
+	warmed := 0
+	for _, p := range paths {
+		fmt.Fprintf(stdout, "warming %s...\n", p)
+		cmd := exec.Command("pkl", "eval", p)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pkl eval %s: %w", p, err)
+		}
+		warmed++
+	}
+	fmt.Fprintf(stdout, "warmed %d file(s); ~/.pkl/cache is now populated\n", warmed)
+	return nil
+}
 
 // cmdExplain prints every input that feeds a task's action key —
 // cmd, shell, sorted env, sorted tools, every expanded input file
@@ -1679,6 +1895,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
 	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
 	profile := fs.String("profile", "", "profile name passed as $PKF_PROFILE and folded into action keys")
+	watch := fs.Bool("watch", false, "re-evaluate affected set + re-run on input change (Ctrl+C to stop)")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
@@ -1792,11 +2009,114 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 		Refresh:    *refresh,
 		Profile:    *profile,
 	}
+	if *watch {
+		return runAffectedWatch(ctx, abs, root, sinceRef, fs.Args(), tf, orch, plan, *timing, stderr)
+	}
 	start := time.Now()
 	results, err := orch.Execute(ctx, plan)
 	wall := time.Since(start)
 	printRunSummary(stderr, results, wall, *timing)
 	return err
+}
+
+// runAffectedWatch is the `pkf affected --watch` loop. Differs from
+// `pkf run --watch` in one critical way: the affected set itself
+// shifts as files change (an edit to `src/api/foo.go` adds api-
+// related tasks to the plan; reverting it removes them). So every
+// iteration recomputes the changed-file set + the affected plan
+// before invoking orch.Execute.
+//
+// Watcher target list is the *union of every task's inputs* — far
+// broader than a single run's subgraph — because we don't know
+// which tasks will be affected until we see what changed.
+func runAffectedWatch(parentCtx context.Context, taskfilePath, root, sinceRef string, filter []string, tf *config.Taskfile, orch *orchestrator.Orchestrator, basePlan *orchestrator.Plan, timing bool, stderr io.Writer) error {
+	ctx, cancel := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// Initial watch set: union of every task's expanded inputs +
+	// Taskfile.pkl itself. Recomputed each iteration since the
+	// affected plan can grow.
+	universalPlan := &orchestrator.Plan{
+		Order:    nil,
+		Tasks:    tf.Tasks,
+		Defaults: tf.Defaults,
+		Root:     root,
+	}
+	for n := range tf.Tasks {
+		universalPlan.Order = append(universalPlan.Order, n)
+	}
+	paths := watchTargets(root, taskfilePath, universalPlan)
+	w, err := watcher.New(paths, 200*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("init watcher: %w", err)
+	}
+	defer w.Close()
+	go w.Run(ctx)
+
+	fmt.Fprintf(stderr, "[pkf] affected --watch: watching %d path(s) — diffing against %s (Ctrl+C to stop)\n", len(paths), sinceRef)
+
+	for {
+		changed, err := gitChangedFiles(root, sinceRef)
+		if err != nil {
+			fmt.Fprintf(stderr, "[pkf] affected: git diff failed: %v\n", err)
+		} else if len(changed) == 0 {
+			fmt.Fprintln(stderr, "[pkf] affected: no changed files vs", sinceRef)
+		} else {
+			direct := tasksMatchingChanges(tf, root, changed)
+			affectedSet := expandToDependents(tf, direct)
+			if len(filter) > 0 {
+				expanded := filter
+				if e := expandPatterns(filter, tf.Tasks); e != nil {
+					expanded = e
+				}
+				keep := make(map[string]bool, len(expanded))
+				for _, n := range expanded {
+					keep[n] = true
+				}
+				for name := range affectedSet {
+					if !keep[name] {
+						delete(affectedSet, name)
+					}
+				}
+			}
+			if len(affectedSet) == 0 {
+				fmt.Fprintln(stderr, "[pkf] affected: changes don't intersect any task — idle")
+			} else {
+				roots := make([]string, 0, len(affectedSet))
+				for n := range affectedSet {
+					roots = append(roots, n)
+				}
+				sort.Strings(roots)
+				g, gErr := buildGraph(tf)
+				if gErr != nil {
+					fmt.Fprintf(stderr, "[pkf] affected: rebuild graph: %v\n", gErr)
+				} else {
+					order, sErr := unionSubgraph(g, roots)
+					if sErr != nil {
+						fmt.Fprintf(stderr, "[pkf] affected: subgraph: %v\n", sErr)
+					} else {
+						basePlan.Order = order
+						runCtx, runCancel := context.WithCancel(ctx)
+						start := time.Now()
+						results, runErr := orch.Execute(runCtx, basePlan)
+						runCancel()
+						printRunSummary(stderr, results, time.Since(start), timing)
+						if runErr != nil && !errors.Is(runErr, context.Canceled) {
+							fmt.Fprintf(stderr, "[pkf] run failed: %v\n", runErr)
+						}
+					}
+				}
+			}
+		}
+		drain(w.Events())
+		fmt.Fprintln(stderr, "[pkf] idle — waiting for changes")
+		select {
+		case <-w.Events():
+			fmt.Fprintln(stderr, "[pkf] change detected — recomputing affected set")
+		case <-ctx.Done():
+			return nil
+		}
+	}
 }
 
 // defaultAffectedRef picks a sensible default for `--since` when the
@@ -1814,24 +2134,59 @@ func defaultAffectedRef(repoRoot string) string {
 	return "HEAD~1"
 }
 
-// gitChangedFiles returns the file set in the asymmetric diff range
-// `<since>...HEAD` — commits in HEAD not in <since>, restricted to
-// added/copied/modified/renamed files (a deleted file can't appear in
-// any task's inputs by definition). Path strings are relative to the
-// repo root.
+// gitChangedFiles returns every file path affected since `<since>`:
+//
+//   - `<since>...HEAD` — committed changes not yet on the base ref.
+//   - `<since>` vs working tree (no commit range) — including
+//     uncommitted edits.
+//   - `--cached` — staged-but-not-committed edits, to catch the
+//     post-`git add` / pre-`git commit` window.
+//
+// Union of the three covers "every file that materially differs from
+// <since>", which is what `pkf affected` actually wants: a local
+// edit session should re-trigger `--watch` mode immediately, not
+// only after `git commit`. The three sets overlap heavily but
+// unioning by map dedupes for us.
+//
+// Restricted to added/copied/modified/renamed (deleted files
+// can't be inputs of any task by definition).
 func gitChangedFiles(repoRoot, since string) ([]string, error) {
-	args := []string{"-C", repoRoot, "diff", "--name-only", "--diff-filter=ACMR", since + "...HEAD"}
-	out, err := exec.Command("git", args...).Output()
-	if err != nil {
-		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	queries := [][]string{
+		// Committed changes vs base ref.
+		{"-C", repoRoot, "diff", "--name-only", "--diff-filter=ACMR", since + "...HEAD"},
+		// Staged but not yet committed.
+		{"-C", repoRoot, "diff", "--name-only", "--diff-filter=ACMR", "--cached", since},
+		// Working-tree edits (vs HEAD; close enough — they're per-PR
+		// scratch changes, not on a long branch).
+		{"-C", repoRoot, "diff", "--name-only", "--diff-filter=ACMR"},
 	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
+	seen := make(map[string]struct{})
+	for _, q := range queries {
+		out, err := exec.Command("git", q...).Output()
+		if err != nil {
+			// Individual queries can legitimately fail (e.g. `--cached
+			// <ref>` errors if <ref> isn't an ancestor on a brand-new
+			// branch). Tolerate per-query failures; if ALL queries
+			// fail we'd return an empty set + nil, but the original
+			// asymmetric-diff failure mode (bad <since>) is already
+			// covered by the first query's error reporting.
+			if len(q) > 0 && strings.Contains(strings.Join(q, " "), since+"...HEAD") {
+				return nil, fmt.Errorf("git %s: %w", strings.Join(q, " "), err)
+			}
 			continue
 		}
-		files = append(files, line)
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line == "" {
+				continue
+			}
+			seen[line] = struct{}{}
+		}
 	}
+	files := make([]string, 0, len(seen))
+	for f := range seen {
+		files = append(files, f)
+	}
+	sort.Strings(files)
 	return files, nil
 }
 

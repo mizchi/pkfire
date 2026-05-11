@@ -509,6 +509,79 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestBfsLimitedDepthSemantics(t *testing.T) {
+	tf := &config.Taskfile{
+		Tasks: map[string]*config.Task{
+			"a": {Deps: []string{"b"}},
+			"b": {Deps: []string{"c"}},
+			"c": {Deps: []string{"d"}},
+			"d": {},
+		},
+	}
+	cases := []struct {
+		depth int
+		want  map[string]bool
+	}{
+		{1, map[string]bool{"a": true, "b": true}},
+		{2, map[string]bool{"a": true, "b": true, "c": true}},
+		{99, map[string]bool{"a": true, "b": true, "c": true, "d": true}},
+	}
+	for _, tc := range cases {
+		got := bfsLimited(tf, "a", tc.depth)
+		gotSet := map[string]bool{}
+		for _, n := range got {
+			gotSet[n] = true
+		}
+		if len(gotSet) != len(tc.want) {
+			t.Errorf("depth=%d: got %v, want %v", tc.depth, got, tc.want)
+			continue
+		}
+		for n := range tc.want {
+			if !gotSet[n] {
+				t.Errorf("depth=%d: missing %q in %v", tc.depth, n, got)
+			}
+		}
+	}
+}
+
+func TestCmdMigrateDryRunShowsDiff(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local x = new Task { name = "x"; cmd = "echo x"; cache = false }
+tasks { x }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdMigrate([]string{"-f", taskfile, "--to=0.9.0", "--dry-run"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("cmdMigrate dry-run: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "pkfire@0.9.0") {
+		t.Errorf("dry-run should mention target version:\n%s", out)
+	}
+	// File should be unchanged after dry-run.
+	data, _ := os.ReadFile(taskfile)
+	if strings.Contains(string(data), "pkfire@0.9.0") {
+		t.Errorf("dry-run should NOT write the file")
+	}
+}
+
+func TestCmdMigrateIdempotentNoop(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local x = new Task { name = "x"; cmd = "echo x"; cache = false }
+tasks { x }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdMigrate([]string{"-f", taskfile, "--to=0.4.0", "--skip-verify"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdMigrate: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "already pins") && !strings.Contains(out, "migrated") {
+		t.Errorf("unexpected output:\n%s", out)
+	}
+}
+
 func TestProfileChangesActionKey(t *testing.T) {
 	requirePkl(t)
 	taskfile := taskfileWithTasks(t, `

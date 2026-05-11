@@ -9,9 +9,16 @@ import (
 // local first; on a local miss the remote is consulted, and a remote hit
 // is written back to local before being restored. Writes always store
 // locally and (best-effort) push to the remote.
+//
+// When RemoteOnly is true the local CAS is bypassed entirely — Has
+// only checks the remote, Restore streams straight from it (without
+// warming the local cache), and Store pushes to the remote with no
+// local write. Used by `pkf run --remote-only` to verify a remote
+// cache really contains the entries we expect.
 type Layered struct {
-	Local  *Cache
-	Remote *Remote
+	Local      *Cache
+	Remote     *Remote
+	RemoteOnly bool
 }
 
 // NewLayered returns a Layered backend. `remote` may be nil, in which case
@@ -20,9 +27,17 @@ func NewLayered(local *Cache, remote *Remote) *Layered {
 	return &Layered{Local: local, Remote: remote}
 }
 
+// NewRemoteOnly wraps `remote` as a Backend that skips the local CAS for
+// reads and writes. `staging` is still required for tar extraction —
+// remote responses are streamed through a local Cache instance, but
+// the staging Has/Store paths aren't consulted.
+func NewRemoteOnly(staging *Cache, remote *Remote) *Layered {
+	return &Layered{Local: staging, Remote: remote, RemoteOnly: true}
+}
+
 // Has returns true when either the local CAS or the remote has the entry.
 func (l *Layered) Has(key [32]byte) bool {
-	if l.Local.Has(key) {
+	if !l.RemoteOnly && l.Local.Has(key) {
 		return true
 	}
 	if l.Remote != nil {
@@ -34,7 +49,7 @@ func (l *Layered) Has(key [32]byte) bool {
 // Restore tries local first; on a miss it streams the remote archive into
 // the local CAS (warming it for the next run) and then restores from local.
 func (l *Layered) Restore(key [32]byte, root string) error {
-	if l.Local.Has(key) {
+	if !l.RemoteOnly && l.Local.Has(key) {
 		return l.Local.Restore(key, root)
 	}
 	if l.Remote == nil {
@@ -45,6 +60,11 @@ func (l *Layered) Restore(key [32]byte, root string) error {
 		return fmt.Errorf("remote fetch: %w", err)
 	}
 	defer body.Close()
+	// We still need the local CAS to extract the tarball — the wire
+	// format is the local format. RemoteOnly callers pass a staging
+	// Cache; the warm here is the side effect they explicitly opted in
+	// to (the alternative is to add a separate "stream-and-extract"
+	// helper, which duplicates cache/cache.go).
 	if err := l.Local.WriteRawArchive(key, body); err != nil {
 		return fmt.Errorf("warm local from remote: %w", err)
 	}
