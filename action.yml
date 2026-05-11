@@ -7,10 +7,11 @@ branding:
 inputs:
   version:
     description: |
-      pkfire release tag to install (e.g. `pkfire@0.1.0`). When empty, the
-      action tries the action ref first (so pinning the action via
-      `mizchi/pkfire@pkfire@0.1.0` Just Works) and falls back to the latest
-      published release.
+      pkfire release to install. Accepts the underlying release tag
+      `pkfire@0.4.0`, the action-friendly form `v0.4.0`, a bare semver
+      `0.4.0`, or the floating major `v0`. When empty, the action reads
+      its own ref (so pinning via `mizchi/pkfire@v0.4.0` or `@v0` just
+      works) and falls back to the latest published release.
     required: false
     default: ""
   pkl-version:
@@ -30,21 +31,40 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        version="${{ inputs.version }}"
-        if [ -z "$version" ]; then
-          ref="${{ github.action_ref }}"
-          case "$ref" in
-            pkfire@*) version="$ref" ;;
-            "" | main | master) version="" ;;
-            *) version="$ref" ;;
+        # GHA can't parse `uses: <repo>@pkfire@<ver>` (the second `@` in
+        # the ref kills workflow file parsing — see kawaz/pkf-tasks's
+        # DR-0004). So the action ref is `v<ver>` or `v<major>`; we
+        # normalize either form into the underlying release tag
+        # `pkfire@<ver>` that the release assets live under.
+        normalize() {
+          local raw="$1"
+          case "$raw" in
+            "" | main | master) echo ""; return ;;
+            pkfire@*)           echo "$raw"; return ;;
+            v[0-9]*.[0-9]*.[0-9]*) echo "pkfire@${raw#v}"; return ;;
+            [0-9]*.[0-9]*.[0-9]*)  echo "pkfire@$raw"; return ;;
+            v[0-9]*)
+              # Floating major: pick the latest release whose tag
+              # matches pkfire@<major>.*
+              local major="${raw#v}"
+              curl -fsSL https://api.github.com/repos/mizchi/pkfire/releases \
+                | sed -n 's/.*"tag_name": *"\(pkfire@'"$major"'\.[^"]*\)".*/\1/p' \
+                | head -n1
+              return ;;
+            *) echo ""; return ;;
           esac
+        }
+
+        version="$(normalize "${{ inputs.version }}")"
+        if [ -z "$version" ]; then
+          version="$(normalize "${{ github.action_ref }}")"
         fi
         if [ -z "$version" ]; then
           version=$(curl -fsSL https://api.github.com/repos/mizchi/pkfire/releases/latest \
             | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
         fi
         if [ -z "$version" ]; then
-          echo "::error::could not resolve a pkfire release tag"
+          echo "::error::could not resolve a pkfire release tag (input/ref/latest all came up empty)"
           exit 1
         fi
 

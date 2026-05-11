@@ -97,3 +97,28 @@ jobs:
             dist/pkf-linux-arm64.tar.gz dist/pkf-linux-arm64.tar.gz.sha256 \
             dist/pkf-darwin-amd64.tar.gz dist/pkf-darwin-amd64.tar.gz.sha256 \
             dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256
+
+      # GitHub Actions cannot parse `uses: <repo>@pkfire@<ver>` — the
+      # nested `@` breaks the workflow file at parse time (see
+      # kawaz/pkf-tasks DR-0004). Push a parallel `v<ver>` tag that
+      # `uses:` *can* resolve, plus a floating `v<major>` so consumers
+      # can opt into auto-bumps within a major. Both point at the
+      # same commit the release was built from.
+      - name: Push action-friendly tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.tag.outputs.version }}"
+          major="${version%%.*}"
+          sha="${{ github.sha }}"
+          for ref in "v${version}" "v${major}"; do
+            if gh api "repos/${{ github.repository }}/git/refs/tags/${ref}" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/${ref}" \
+                -f sha="${sha}" -F force=true >/dev/null
+            else
+              gh api -X POST "repos/${{ github.repository }}/git/refs" \
+                -f ref="refs/tags/${ref}" -f sha="${sha}" >/dev/null
+            fi
+            echo "  pushed ${ref} → ${sha}"
+          done

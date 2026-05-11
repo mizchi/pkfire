@@ -10,6 +10,18 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- **Action-friendly tags (`v<ver>` + floating `v<major>`).** The
+  Release workflow now pushes `v0.4.0` and `v0` at the same commit
+  it built the release from. Use those from `uses:` instead of the
+  underlying `pkfire@<ver>` tag — GitHub Actions cannot parse
+  `uses: <repo>@<ref>` when the ref contains `@`, so writing
+  `uses: mizchi/pkfire@pkfire@0.4.0` silently breaks the entire
+  workflow file. The action's version-resolution now normalizes
+  `v0.4.0`, `0.4.0`, `v0`, and `pkfire@0.4.0` to the same
+  underlying release. Context: kawaz/pkf-tasks DR-0004.
+
 ## [0.4.0] - 2026-05-11
 
 ### Added

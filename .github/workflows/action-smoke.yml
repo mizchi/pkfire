@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "pkfire release tag to test (e.g. pkfire@0.3.0). Empty = latest."
+        description: "Version to test. Accepts v0.4.0 / 0.4.0 / v0 / pkfire@0.4.0. Empty = latest."
         required: false
         default: ""
 

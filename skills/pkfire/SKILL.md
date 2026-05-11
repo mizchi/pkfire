@@ -490,7 +490,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mizchi/pkfire@pkfire@0.4.0
+      - uses: mizchi/pkfire@v0.4.0      # or @v0 to track latest 0.x
       - run: pkf run ci
 ```
 
@@ -500,11 +500,19 @@ the matching `pkf` binary plus the Pkl CLI on the runner
 runs, the rest of the workflow uses `pkf` directly — no extra
 tooling steps.
 
+**Do not write `uses: mizchi/pkfire@pkfire@0.4.0`.** GHA's parser
+treats the `@` in the ref as a syntax break and fails the *whole
+workflow file*, with no jobs run and a generic "workflow file
+issue" error. Pkl release tags happen to be `pkfire@<ver>` (because
+the package URI requires it), so the Release workflow also pushes
+`v<ver>` + a floating `v<major>` tag at the same commit — use
+those for `uses:`. Or SHA-pin: `uses: mizchi/pkfire@<sha> # v0.4.0`.
+
 To share cache hits across CI runs and developer machines, point
 `pkf` at a remote cache via env:
 
 ```yaml
-      - uses: mizchi/pkfire@pkfire@0.4.0
+      - uses: mizchi/pkfire@v0.4.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -515,6 +523,6 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Pin via `mizchi/pkfire@pkfire@0.4.0` to lock both the action.yml and the binary together. |
+| `version` | inferred from `${{ github.action_ref }}`, falls back to latest release | Accepts `v0.4.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.4.0`. Pinning via `uses: mizchi/pkfire@v0.4.0` is the recommended form. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip Pkl install (e.g. when only `pkf` is needed). |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries land here, and the directory is appended to `GITHUB_PATH`. |
