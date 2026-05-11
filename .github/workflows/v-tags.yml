@@ -1,0 +1,96 @@
+name: v-tags
+
+# Keep action-friendly `v<ver>` + floating `v<major>` tags in sync
+# with the canonical `pkfire@<ver>` release tags. Necessary because
+# GitHub Actions cannot parse `uses: <repo>@<ref>` when the ref
+# contains `@`, so workflow consumers need an `@`-free pinning shape
+# (see kawaz/pkf-tasks DR-0004).
+#
+# The job idempotently walks every `pkfire@*` tag, creates/updates
+# the matching `v<ver>`, then bumps `v<major>` to the newest version
+# inside each major. Safe to run any number of times.
+#
+# Triggers:
+#   - workflow_run after a successful Release publish — picks up the
+#     new tag immediately, gated on the release having actually shipped.
+#   - workflow_dispatch — manual recovery if the workflow_run is missed
+#     (e.g. the release was created out of band).
+#   - push to main whose changes touch THIS file — self-bootstraps the
+#     first time the workflow lands, so existing pre-workflow releases
+#     (the 0.4.0 case) get their v-tags created with no manual step.
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v-tags.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    # workflow_run fires regardless of conclusion; the other triggers
+    # always carry no conclusion. Skip when Release explicitly failed.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync v<ver> + v<major> from pkfire@* tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          tag_sha() {
+            local tag="$1" sha type
+            sha=$(gh api "repos/${REPO}/git/refs/tags/${tag}" --jq '.object.sha')
+            type=$(gh api "repos/${REPO}/git/refs/tags/${tag}" --jq '.object.type')
+            # Annotated tags need one dereference to get the commit SHA.
+            if [ "$type" = "tag" ]; then
+              sha=$(gh api "repos/${REPO}/git/tags/${sha}" --jq '.object.sha')
+            fi
+            echo "$sha"
+          }
+
+          push_ref() {
+            local ref="$1" sha="$2" current
+            if current=$(gh api "repos/${REPO}/git/refs/tags/${ref}" --jq '.object.sha' 2>/dev/null); then
+              if [ "$current" = "$sha" ]; then
+                echo "  ${ref} already → ${sha:0:12} (skip)"
+                return
+              fi
+              gh api -X PATCH "repos/${REPO}/git/refs/tags/${ref}" \
+                -f sha="$sha" -F force=true >/dev/null
+              echo "  updated ${ref} → ${sha:0:12} (was ${current:0:12})"
+            else
+              gh api -X POST "repos/${REPO}/git/refs" \
+                -f ref="refs/tags/${ref}" -f sha="$sha" >/dev/null
+              echo "  created ${ref} → ${sha:0:12}"
+            fi
+          }
+
+          tags=$(gh api "repos/${REPO}/git/matching-refs/tags/pkfire@" \
+                 --jq '.[].ref' | sed 's|^refs/tags/||' | sort -V)
+          if [ -z "$tags" ]; then
+            echo "no pkfire@* tags found — nothing to sync"
+            exit 0
+          fi
+
+          # Walk in version-ascending order; the LAST commit assigned
+          # per major wins for the floating v<major> alias.
+          declare -A major_sha
+          for t in $tags; do
+            v="${t#pkfire@}"
+            major="${v%%.*}"
+            sha=$(tag_sha "$t")
+            push_ref "v${v}" "$sha"
+            major_sha["$major"]="$sha"
+          done
+
+          for major in "${!major_sha[@]}"; do
+            push_ref "v${major}" "${major_sha[$major]}"
+          done
