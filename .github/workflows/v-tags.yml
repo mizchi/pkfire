@@ -19,12 +19,27 @@ name: v-tags
 #     first time the workflow lands, so existing pre-workflow releases
 #     (the 0.4.0 case) get their v-tags created with no manual step.
 #
-# Implementation uses git CLI directly rather than `gh api git/refs`
-# because the latter returns "Resource not accessible by integration"
-# (HTTP 403) from the github-actions[bot] token even with explicit
-# `Contents: write`. Root cause unclear (suspected GitHub App scope
-# quirk); git over HTTPS using the credential set up by actions/checkout
-# works fine, so we go that route.
+# Implementation notes:
+#
+# 1. Uses git CLI directly rather than `gh api git/refs` — the latter
+#    returns 403 ("Resource not accessible by integration") from the
+#    github-actions[bot] token even with explicit Contents:write.
+#    Root cause unclear; git over HTTPS via actions/checkout's
+#    credential works fine.
+#
+# 2. Syncs ONLY the latest pkfire@<ver> tag (not a full backfill).
+#    GitHub's pre-receive hook rejects pushes that "create or update
+#    workflow files" without the `workflows` permission — and
+#    GITHUB_TOKEN can never have that scope. Old pkfire@<ver> commits
+#    have older .github/workflows/ contents than current main, so a
+#    bot push of v<old-ver> trips this hook. For the LATEST release
+#    the tagged commit equals (or is reachable on) main, so workflow
+#    files match and the hook passes.
+#
+#    Practical effect: v-tags for releases prior to this workflow
+#    landing are NOT auto-backfilled. v0.4.0 and v0 were created
+#    manually with a PAT before this workflow existed. From the
+#    next release onward, auto-sync works.
 on:
   workflow_run:
     workflows: ["Release"]
@@ -47,40 +62,52 @@ jobs:
         with:
           # All tags so `git tag -l 'pkfire@*'` sees the full release history.
           fetch-depth: 0
-      - name: Sync v<ver> + v<major> from pkfire@* tags
+      - name: Sync v<ver> + v<major> for the latest pkfire@* tag
         run: |
           set -euo pipefail
           git fetch --tags --force origin >/dev/null
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
 
-          mapfile -t tags < <(git tag -l 'pkfire@*' | sort -V)
-          if [ ${#tags[@]} -eq 0 ]; then
+          # Pick the highest-version pkfire@* tag. `sort -V` handles
+          # semver (so 0.10.0 > 0.4.0).
+          latest=$(git tag -l 'pkfire@*' | sort -V | tail -1)
+          if [ -z "$latest" ]; then
             echo "no pkfire@* tags found — nothing to sync"
             exit 0
           fi
+          v="${latest#pkfire@}"
+          major="${v%%.*}"
+          sha=$(git rev-list -n1 "$latest")
+          echo "latest release: ${latest} → ${sha:0:12}"
 
-          declare -A major_sha
+          # Skip pushes that are no-ops to keep the log clean.
+          # `git ls-remote origin <ref>` exits 0 either way; the field
+          # we care about is the printed SHA (empty when ref absent).
+          remote_sha_of() {
+            git ls-remote origin "refs/tags/$1" 2>/dev/null | awk '{print $1}'
+          }
+
           refspecs=()
-
-          for t in "${tags[@]}"; do
-            v="${t#pkfire@}"
-            major="${v%%.*}"
-            sha=$(git rev-list -n1 "$t")
-            git tag -f "v${v}" "$sha"
-            echo "  v${v} → ${sha:0:12}  (from ${t})"
-            major_sha["$major"]="$sha"
-            # `+` force-updates remote ref; safe because v<ver> aliases
-            # the immutable pkfire@<ver> tag at the same commit, and
-            # v<major> by design points at the newest version's commit.
-            refspecs+=("+refs/tags/v${v}:refs/tags/v${v}")
+          for ref in "v${v}" "v${major}"; do
+            current=$(remote_sha_of "$ref")
+            if [ "$current" = "$sha" ]; then
+              echo "  ${ref} already at ${sha:0:12} (skip)"
+              continue
+            fi
+            git tag -f "$ref" "$sha"
+            if [ -z "$current" ]; then
+              echo "  ${ref} will be created at ${sha:0:12}"
+            else
+              echo "  ${ref} will move ${current:0:12} → ${sha:0:12}"
+            fi
+            # `+` force-updates: required for floating v<major>.
+            refspecs+=("+refs/tags/${ref}:refs/tags/${ref}")
           done
 
-          for major in "${!major_sha[@]}"; do
-            git tag -f "v${major}" "${major_sha[$major]}"
-            echo "  v${major} → ${major_sha[$major]:0:12}  (floating)"
-            refspecs+=("+refs/tags/v${major}:refs/tags/v${major}")
-          done
-
+          if [ ${#refspecs[@]} -eq 0 ]; then
+            echo "nothing to push"
+            exit 0
+          fi
           echo "pushing ${#refspecs[@]} ref(s)"
           git push origin "${refspecs[@]}"
