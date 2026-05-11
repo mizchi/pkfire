@@ -68,6 +68,37 @@ local testPkl: Task = new {
   }
 }
 
+/// `pkl eval` every published example Taskfile. Catches schema
+/// incompatibilities ("we added a required field and forgot to bump
+/// the examples", "the examples are pinned to a version that no
+/// longer evaluates against this binary") before they ship.
+///
+/// Pure eval — no toolchain dependencies, no actual task runs. The
+/// node/rust/monorepo examples need their respective runtimes to
+/// run tasks, but evaluation only needs `pkl` on PATH.
+///
+/// `examples/dogfood/Taskfile.pkl` is left out: it uses a relative
+/// `amends "../../pkl/Taskfile.pkl"` and is exercised by `pkl
+/// test` + the CI matrix already.
+local testExamples: Task = new {
+  name = "test:examples"
+  description = "pkl eval every published example Taskfile"
+  cmd = #"""
+    set -euo pipefail
+    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl; do
+      echo "  eval $f"
+      pkl eval "$f" >/dev/null
+    done
+    """#
+  inputs {
+    "pkl/Taskfile.pkl"
+    "examples/basic/Taskfile.pkl"
+    "examples/node/Taskfile.pkl"
+    "examples/rust/Taskfile.pkl"
+    "examples/monorepo/Taskfile.pkl"
+  }
+}
+
 local checkVersion: Task = new {
   name = "check-version"
   description = "Verify every `pkfire@<ver>` reference matches pkl/PklProject"
@@ -121,14 +152,14 @@ local tag: Task = new {
 /// detector + the cross-compile matrix (those are CI's job).
 local preflight: Task = new {
   name = "preflight"
-  description = "Pre-commit gate: vet + go-test + pkl-test + version + format consistency"
+  description = "Pre-commit gate: vet + go-test + pkl-test + examples + version + format"
   // Format check runs as the cmd (deps run first, then this). `pkl
   // format --diff-name-only` exits 11 if any Pkl file is unformatted;
   // that propagates as a task failure, so a misformatted file fails
   // preflight just like a failing test would.
   cmd = "pkl format --diff-name-only pkl examples skills"
   cache = false
-  deps { vet; testGo; testPkl; checkVersion }
+  deps { vet; testGo; testPkl; testExamples; checkVersion }
 }
 
 tasks {
@@ -136,6 +167,7 @@ tasks {
   testGo
   testRace
   testPkl
+  testExamples
   checkVersion
   bump
   tag
