@@ -10,6 +10,22 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- **`pkf hooks install` / `uninstall` / `list`.** Convention-based
+  git hook manager: any task whose `name` matches a git client-side
+  hook event (`pre-commit`, `pre-push`, `commit-msg`, ... full list
+  in SKILL.md) becomes installable. Install writes
+  `.git/hooks/<event>` as a 3-line shim that delegates to
+  `pkf run <event> -- "$@"` (the trailing `$@` carries git's
+  per-hook args). The shim is marked so uninstall removes only
+  pkfire-managed hooks and won't clobber hand-written ones (use
+  `--force` to overwrite). Designed to compose with — not replace —
+  dedicated managers like [hk](https://hk.jdx.dev/) and lefthook:
+  use them when you need staged-file scoping or check/fix duality,
+  use `pkf hooks` when a `pkf run pre-commit` is enough. Recipe 13
+  covers the patterns.
+
 ## [0.5.0] - 2026-05-11
 
 Pkl schema is unchanged from 0.4.0 — bumping in lockstep with the

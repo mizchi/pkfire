@@ -162,6 +162,19 @@ local preflight: Task = new {
   deps { vet; testGo; testPkl; testExamples; checkVersion }
 }
 
+/// Git pre-commit hook target. `pkf hooks install` writes
+/// `.git/hooks/pre-commit` as a shim that calls `pkf run pre-commit`.
+/// The body just delegates to preflight — putting it behind its own
+/// task name keeps the hooks layer (config: which task wires to
+/// which event) separate from the actual gate logic.
+local preCommit: Task = new {
+  name = "pre-commit"
+  description = "Git pre-commit hook target (delegates to preflight)"
+  cmd = "echo pre-commit ok"
+  cache = false
+  deps { preflight }
+}
+
 tasks {
   vet
   testGo
@@ -172,4 +185,5 @@ tasks {
   bump
   tag
   preflight
+  preCommit
 }

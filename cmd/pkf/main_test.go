@@ -508,6 +508,112 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestHooksInstallWritesShim(t *testing.T) {
+	requirePkl(t)
+	repo := newTempRepo(t)
+	taskfile := filepath.Join(repo, "Taskfile.pkl")
+	if err := os.WriteFile(taskfile, []byte(`amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local pre = new Task {
+  name = "pre-commit"
+  cmd  = "echo ok"
+  cache = false
+}
+
+tasks { pre }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdHooks([]string{"install", "-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("hooks install: %v\n%s\n%s", err, stdout.String(), stderr.String())
+	}
+	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
+	data, err := os.ReadFile(hook)
+	if err != nil {
+		t.Fatalf("hook not written: %v", err)
+	}
+	if !strings.Contains(string(data), "pkf run pre-commit") {
+		t.Errorf("shim missing pkf run line:\n%s", data)
+	}
+	info, _ := os.Stat(hook)
+	if info.Mode()&0o100 == 0 {
+		t.Errorf("hook not executable: %v", info.Mode())
+	}
+}
+
+func TestHooksInstallPreservesUnmanagedHook(t *testing.T) {
+	requirePkl(t)
+	repo := newTempRepo(t)
+	taskfile := filepath.Join(repo, "Taskfile.pkl")
+	if err := os.WriteFile(taskfile, []byte(`amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local pre = new Task { name = "pre-commit"; cmd = "echo ok"; cache = false }
+tasks { pre }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hookDir := filepath.Join(repo, ".git", "hooks")
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(hookDir, "pre-commit")
+	if err := os.WriteFile(existing, []byte("#!/bin/sh\necho user wrote this\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdHooks([]string{"install", "-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("hooks install: %v", err)
+	}
+	got, _ := os.ReadFile(existing)
+	if strings.Contains(string(got), "managed by pkf") {
+		t.Errorf("install overwrote unmanaged hook without --force:\n%s", got)
+	}
+	if !strings.Contains(stderr.String(), "not managed by pkfire") {
+		t.Errorf("expected stderr warning, got: %s", stderr.String())
+	}
+}
+
+func TestHooksUninstallSkipsUnmanaged(t *testing.T) {
+	requirePkl(t)
+	repo := newTempRepo(t)
+	taskfile := filepath.Join(repo, "Taskfile.pkl")
+	if err := os.WriteFile(taskfile, []byte(`amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local pre = new Task { name = "pre-commit"; cmd = "echo ok"; cache = false }
+tasks { pre }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hookDir := filepath.Join(repo, ".git", "hooks")
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(hookDir, "pre-commit")
+	if err := os.WriteFile(existing, []byte("#!/bin/sh\necho user wrote this\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdHooks([]string{"uninstall", "-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("hooks uninstall: %v", err)
+	}
+	if _, err := os.Stat(existing); err != nil {
+		t.Errorf("uninstall removed an unmanaged hook")
+	}
+}
+
+func newTempRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	// Materialize a minimal .git directory so gitHooksDir's walk-up
+	// recognizes the temp dir as a repository root. We don't actually
+	// run git commands against it; the hooks code only stats .git/.
+	if err := os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
 func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {
 	requirePkl(t)
 	var stdout, stderr bytes.Buffer

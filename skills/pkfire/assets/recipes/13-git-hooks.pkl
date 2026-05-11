@@ -1,0 +1,107 @@
+/// Recipe 13: git hooks via `pkf hooks install`.
+///
+/// Convention: declare tasks named after git hook events
+/// (`pre-commit`, `pre-push`, `commit-msg`, ...) and run
+/// `pkf hooks install` once. pkfire writes
+/// `.git/hooks/<event>` as a tiny shim that delegates to
+/// `pkf run <event>`. The shim carries through `$@` so per-hook
+/// args (e.g. commit-msg's path to the message file) reach your
+/// cmd.
+///
+/// `pkf hooks list`        — see which events have tasks + which are installed.
+/// `pkf hooks install`     — write shims for every matching task.
+/// `pkf hooks uninstall`   — remove only pkfire-managed shims; hand-
+///                            written hooks are left alone (idempotent).
+///
+/// Hooks are not cached: per-commit they see a different tree, and the
+/// schema's `inputs` aren't reliable proxies for "what changed". Set
+/// `cache = false` on every hook task.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.5.0#/Taskfile.pkl"
+
+/// Existing day-to-day tasks the hooks delegate to.
+local lint: Task = new {
+  name = "lint"
+  cmd = "pnpm exec eslint ."
+  inputs { "src/**/*.{ts,tsx}"; ".eslintrc.cjs" }
+}
+
+local typecheck: Task = new {
+  name = "typecheck"
+  cmd = "pnpm exec tsc --noEmit"
+  inputs { "src/**/*.{ts,tsx}"; "tsconfig.json" }
+}
+
+local unitTest: Task = new {
+  name = "test:unit"
+  cmd = "pnpm exec vitest run"
+  inputs { "src/**/*.{ts,tsx}"; "test/**/*.{ts,tsx}" }
+}
+
+/// Pre-commit gate: lint + typecheck, but skip the full test suite
+/// because pre-commit must stay fast. `pkf hooks install` writes the
+/// `.git/hooks/pre-commit` shim that runs this.
+local preCommit: Task = new {
+  name = "pre-commit"
+  description = "Pre-commit gate (delegates to lint + typecheck)"
+  cmd = "echo pre-commit ok"
+  cache = false
+  deps { lint; typecheck }
+}
+
+/// Pre-push runs the full suite — slower but you push less often than
+/// you commit, and CI ends up running it anyway, so failing fast
+/// locally saves a CI round-trip.
+local prePush: Task = new {
+  name = "pre-push"
+  description = "Pre-push gate (full lint + typecheck + tests)"
+  cmd = "echo pre-push ok"
+  cache = false
+  deps { lint; typecheck; unitTest }
+}
+
+/// Commit-msg hook receives the message file path as $1 via the shim's
+/// `"$@"` forwarding. This example rejects empty messages and messages
+/// without a colon-prefixed scope (a common conventional-commits gate).
+local commitMsg: Task = new {
+  name = "commit-msg"
+  description = "Enforce conventional-commits-style scope"
+  cmd =
+    #"""
+    msg_file="$1"
+    head=$(head -n1 "$msg_file" | tr -d '\n')
+    if [ -z "$head" ]; then
+      echo "commit-msg: empty subject" >&2; exit 1
+    fi
+    if ! printf '%s' "$head" | grep -Eq '^[a-z]+(\([^)]+\))?: '; then
+      echo "commit-msg: subject must start with <type>(<scope>)?: ..." >&2
+      echo "  got: $head" >&2
+      exit 1
+    fi
+    """#
+  // Body uses `$@` injection from the shim; pkfire passes the args
+  // after `--`, so $1 is the commit-msg path git supplies.
+  acceptsArgs = true
+  cache = false
+}
+
+tasks { lint; typecheck; unitTest; preCommit; prePush; commitMsg }
+
+// ---------------------------------------------------------------
+// Notes on scoping to changed files
+// ---------------------------------------------------------------
+//
+// pkfire does not (yet) inject a "staged files" env var or filter
+// `inputs` automatically. If you need to lint *only* the staged
+// subset (instead of the full glob), write it in cmd:
+//
+//     cmd = """
+//       files=$(git diff --cached --name-only --diff-filter=ACMR \\
+//         | grep -E '\\.tsx?$' || true)
+//       [ -z "$files" ] && exit 0
+//       pnpm exec eslint $files
+//       """
+//
+// This trades cache hits (the action key now reflects the static
+// `inputs` glob, not the staged subset) for "actually only check
+// what changed". Hooks should set `cache = false` anyway, so the
+// trade-off is usually fine.

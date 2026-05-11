@@ -77,6 +77,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdDoctor(args[1:], stdout, stderr)
 	case "format":
 		return cmdFormat(args[1:], stdout, stderr)
+	case "hooks":
+		return cmdHooks(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -100,6 +102,8 @@ commands:
                                         emit DAG (formats: dot, mermaid)
   doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
+  hooks <install|uninstall|list> [-f FILE] [--force]
+                                        manage .git/hooks shims that delegate to pkf run
   version                               print pkf version
   help                                  show this message
 
@@ -846,6 +850,234 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 			return fmt.Errorf("compute key for %q: %w", name, err)
 		}
 		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
+	}
+	return nil
+}
+
+// gitHookEvents is the set of git client-side hook names that pkfire
+// will wire to a same-named task. Server-side hooks (pre-receive,
+// update, post-receive) are intentionally absent — they live on the
+// server and have a different lifecycle.
+var gitHookEvents = []string{
+	"pre-commit",
+	"prepare-commit-msg",
+	"commit-msg",
+	"post-commit",
+	"pre-rebase",
+	"post-checkout",
+	"post-merge",
+	"pre-push",
+	"post-rewrite",
+}
+
+// pkfHookMarker is grepped to distinguish "pkfire installed this hook"
+// from "the user (or some other tool) wrote this hook". Uninstall
+// refuses to delete hooks without the marker so a hand-written hook
+// doesn't disappear on `pkf hooks uninstall`.
+const pkfHookMarker = "# managed by pkf hooks install"
+
+// cmdHooks implements `pkf hooks <install|uninstall|list>`. The
+// convention is: any task whose `name` matches a git client-side hook
+// event becomes an installable hook. Installing writes
+// `.git/hooks/<event>` as a tiny shim that `exec`s `pkf run <event>`,
+// carrying through any args the hook receives. The Taskfile's `cmd`
+// is responsible for whatever scoping the hook needs (e.g.
+// `git diff --cached --name-only` inside `cmd` to operate on the
+// staged set).
+func cmdHooks(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: pkf hooks <install|uninstall|list> [-f FILE] [--force]")
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("pkf hooks", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	force := fs.Bool("force", false, "overwrite existing hooks not managed by pkfire")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("hooks %s takes no positional args, got %v", sub, fs.Args())
+	}
+
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+
+	hooksDir, err := gitHooksDir(abs)
+	if err != nil {
+		return err
+	}
+
+	switch sub {
+	case "install":
+		return hooksInstall(stdout, stderr, tf, hooksDir, *force)
+	case "uninstall":
+		return hooksUninstall(stdout, stderr, hooksDir)
+	case "list":
+		return hooksList(stdout, tf, hooksDir)
+	default:
+		return fmt.Errorf("unknown hooks subcommand %q (want install|uninstall|list)", sub)
+	}
+}
+
+// gitHooksDir locates the .git/hooks directory by walking up from the
+// Taskfile.pkl's directory. Returns an error when not inside a git
+// repository — `pkf hooks` is a no-op outside one.
+//
+// Honors core.hooksPath when the repository has it configured (git
+// itself respects this for hook invocation; the install ceremony has
+// to follow suit).
+func gitHooksDir(taskfilePath string) (string, error) {
+	start := filepath.Dir(taskfilePath)
+	dir := start
+	for {
+		gitDir := filepath.Join(dir, ".git")
+		if info, err := os.Stat(gitDir); err == nil {
+			if info.IsDir() {
+				// Standard repo. Check core.hooksPath via a config read.
+				if custom := readGitConfig(dir, "core.hooksPath"); custom != "" {
+					if filepath.IsAbs(custom) {
+						return custom, nil
+					}
+					return filepath.Join(dir, custom), nil
+				}
+				return filepath.Join(gitDir, "hooks"), nil
+			}
+			// .git is a file → worktree or submodule. Parse `gitdir: ...`.
+			data, err := os.ReadFile(gitDir)
+			if err != nil {
+				return "", fmt.Errorf("read %s: %w", gitDir, err)
+			}
+			line := strings.TrimSpace(string(data))
+			line = strings.TrimPrefix(line, "gitdir:")
+			line = strings.TrimSpace(line)
+			if !filepath.IsAbs(line) {
+				line = filepath.Join(dir, line)
+			}
+			return filepath.Join(line, "hooks"), nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("not inside a git repository (no .git found from %s)", start)
+		}
+		dir = parent
+	}
+}
+
+// readGitConfig reads a single git config value via `git config --get`.
+// Returns empty string when unset or git is unavailable; never errors —
+// callers treat missing as "use default".
+func readGitConfig(repoDir, key string) string {
+	cmd := exec.Command("git", "-C", repoDir, "config", "--get", key)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// hookScript renders the shim that gets written to .git/hooks/<event>.
+// Carries through `$@` so git's per-hook args (e.g. commit-msg's path
+// to the message file) reach the task's cmd. Uses /usr/bin/env to find
+// pkf so PATH overrides work in the user's interactive shell.
+func hookScript(event string) string {
+	return fmt.Sprintf(`#!/bin/sh
+%s
+exec pkf run %s -- "$@"
+`, pkfHookMarker, event)
+}
+
+func hooksInstall(stdout, stderr io.Writer, tf *config.Taskfile, hooksDir string, force bool) error {
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", hooksDir, err)
+	}
+	installed := 0
+	skipped := 0
+	for _, event := range gitHookEvents {
+		task, ok := tf.Tasks[event]
+		if !ok {
+			continue
+		}
+		// `cache = true` on a hook task is almost always a bug — hooks
+		// fire per-commit on a constantly-shifting tree. Warn but don't
+		// block; the user might have a niche reason.
+		if task.Cache {
+			fmt.Fprintf(stderr, "[pkf] warning: task %q has cache=true; hooks typically want cache=false\n", event)
+		}
+		path := filepath.Join(hooksDir, event)
+		if existing, err := os.ReadFile(path); err == nil {
+			if strings.Contains(string(existing), pkfHookMarker) {
+				// Already ours — silent overwrite (idempotent).
+			} else if !force {
+				fmt.Fprintf(stderr, "[pkf] %s: not managed by pkfire, skipping (use --force to overwrite)\n", event)
+				skipped++
+				continue
+			}
+		}
+		if err := os.WriteFile(path, []byte(hookScript(event)), 0o755); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		fmt.Fprintf(stdout, "installed %s → pkf run %s\n", path, event)
+		installed++
+	}
+	if installed == 0 && skipped == 0 {
+		fmt.Fprintln(stdout, "no installable hooks: the Taskfile declares no task named after a git hook event")
+		fmt.Fprintln(stdout, "  recognized events: "+strings.Join(gitHookEvents, ", "))
+	}
+	return nil
+}
+
+func hooksUninstall(stdout, stderr io.Writer, hooksDir string) error {
+	removed := 0
+	for _, event := range gitHookEvents {
+		path := filepath.Join(hooksDir, event)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if !strings.Contains(string(data), pkfHookMarker) {
+			fmt.Fprintf(stderr, "[pkf] %s: not managed by pkfire, leaving alone\n", event)
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed %s\n", path)
+		removed++
+	}
+	if removed == 0 {
+		fmt.Fprintln(stdout, "no pkfire-managed hooks found")
+	}
+	return nil
+}
+
+func hooksList(stdout io.Writer, tf *config.Taskfile, hooksDir string) error {
+	fmt.Fprintf(stdout, "hooks dir: %s\n\n", hooksDir)
+	for _, event := range gitHookEvents {
+		_, hasTask := tf.Tasks[event]
+		state := "—"
+		path := filepath.Join(hooksDir, event)
+		if data, err := os.ReadFile(path); err == nil {
+			if strings.Contains(string(data), pkfHookMarker) {
+				state = "installed (pkfire)"
+			} else {
+				state = "installed (other)"
+			}
+		}
+		taskState := "no task"
+		if hasTask {
+			taskState = "task declared"
+		}
+		fmt.Fprintf(stdout, "  %-20s  %-20s  %s\n", event, state, taskState)
 	}
 	return nil
 }

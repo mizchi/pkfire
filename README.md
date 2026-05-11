@@ -195,6 +195,8 @@ pkf graph --target test        # only the subgraph rooted at `test`
 pkf doctor                     # diagnose pkl/cache/remote/taskfile setup
 pkf format                     # pkl format -w on the Taskfile's directory
 pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
+pkf hooks install              # write .git/hooks/<event> shims for matching tasks
+pkf hooks list                 # show which hook events are wired
 ```
 
 Visualizing a Taskfile is a single pipeline:

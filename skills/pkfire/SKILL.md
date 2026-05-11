@@ -126,6 +126,7 @@ run, then caches the new package locally.
 | [`assets/recipes/10-args-passthrough.pkl`](./assets/recipes/10-args-passthrough.pkl) | `acceptsArgs = true`: forward `pkf run task -- a b` to `cmd` as `$@` |
 | [`assets/recipes/11-named-params.pkl`](./assets/recipes/11-named-params.pkl) | Typed flags: `params { ... }` with enum validation, defaults, required params |
 | [`assets/recipes/12-task-library.pkl`](./assets/recipes/12-task-library.pkl) | Library-author skeleton: `abstract module` + `extends` polymorphism, `allTasks` export, runtime dispatch, release-tag scheme |
+| [`assets/recipes/13-git-hooks.pkl`](./assets/recipes/13-git-hooks.pkl) | `pkf hooks install`: tasks named after git events (`pre-commit`, `pre-push`, `commit-msg`) wired to `.git/hooks/<event>` shims |
 
 ## Project layout
 
@@ -597,6 +598,74 @@ hitting `pkg.pkl-lang.org` on every CI run:
 - uses: mizchi/pkfire@v0.4.0
 - run: pkl project resolve
 ```
+
+## Git hooks (`pkf hooks install`)
+
+`pkf hooks install` is a thin opt-in convenience: any task whose
+`name` matches a git client-side hook event (`pre-commit`,
+`pre-push`, `commit-msg`, `prepare-commit-msg`, `post-commit`,
+`post-checkout`, `post-merge`, `pre-rebase`, `post-rewrite`)
+becomes installable. The install step writes
+`.git/hooks/<event>` as a 3-line shim:
+
+```sh
+#!/bin/sh
+# managed by pkf hooks install
+exec pkf run pre-commit -- "$@"
+```
+
+The trailing `-- "$@"` forwards git's per-hook args. `commit-msg`
+receives the message-file path as `$1` (your task should declare
+`acceptsArgs = true` to receive it inside `cmd`); `pre-push` gets
+the remote name and URL; etc. See `git help githooks` for the per-
+event arg list.
+
+```sh
+pkf hooks install         # write shims for every matching task
+pkf hooks install --force # also replace hand-written or other-tool hooks
+pkf hooks list            # report which events have tasks + which are installed
+pkf hooks uninstall       # remove only pkfire-managed shims
+```
+
+The shim is marked with a comment so uninstall and reinstall are
+idempotent and *will not* touch hooks installed by other tools
+(husky, lefthook, hk, etc.) unless you pass `--force`.
+
+### Rules of thumb
+
+- **`cache = false` on every hook task.** Hooks fire on a tree that
+  shifts every commit; the action key (which is keyed on declared
+  `inputs`) is not a meaningful cache for "did the staged set
+  change". Set `cache = false` explicitly. pkfire warns when an
+  installable hook task has `cache = true`.
+- **Don't reuse the same task name for the hook target and the
+  underlying gate.** Declare a thin `pre-commit` task that
+  `deps { lint; typecheck }` instead of inlining everything — it
+  keeps the hooks layer (config: which event → which task)
+  separable from the gate logic.
+- **Staged-file scoping happens in `cmd`, not in `inputs`.**
+  pkfire does not currently inject a `$STAGED_FILES` env or filter
+  `inputs` to the staged subset. If you want lint-only-staged-files
+  behavior, write `git diff --cached --name-only` inside the `cmd`
+  and feed the result to your linter. Recipe 13 shows the pattern.
+
+### Relationship to hk / lefthook / pre-commit
+
+[hk](https://hk.jdx.dev/) (by the mise author) is a purpose-built
+git-hook manager configured in Pkl. It has features pkfire
+deliberately doesn't: staged-file globs with `{{files}}`
+templating, separate `check` vs `fix` commands, exclusive locks,
+file-set scoping, fail-fast. If you need those, **use hk** and
+have its steps shell out to `pkf run <task>` for the actual work —
+the two compose cleanly.
+
+`pkf hooks install` exists for the case where the project already
+runs everything through pkfire and a single `pkf run pre-commit`
+is enough; adding a second config tool just to dispatch a hook is
+overhead. Same logic for [lefthook](https://github.com/evilmartians/lefthook)
+and [pre-commit](https://pre-commit.com/) — pkfire's built-in is
+the dependency-light path; the dedicated managers are the
+feature-rich path.
 
 ## Common pitfalls
 
