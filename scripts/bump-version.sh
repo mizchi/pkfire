@@ -18,20 +18,19 @@ echo "bumping pkfire@${old} → pkfire@${new}"
 
 perl -i -pe "s/version = \"${old}\"/version = \"${new}\"/" pkl/PklProject
 
-# Enumerate examples directly: `git ls-files 'examples/basic/**/*.pkl'`
-# does NOT match top-level `examples/basic/Taskfile.pkl` (git pathspec
-# `**` matches one or more dirs, not zero). Each example has exactly one
-# Taskfile.pkl, so listing them explicitly is both robust and short.
+# Examples are deliberately excluded: they amend the public Pkl
+# package URL, which only resolves once a release tag has been
+# pushed and the publish workflow has uploaded the package zip.
+# Bumping them pre-release leaves `pkl eval examples/<x>/Taskfile.pkl`
+# 404'ing until the new version is actually released. After the
+# release ships, bump examples in a follow-up commit (see the
+# "Cut a release" section in README.md).
 # shellcheck disable=SC2046
 perl -i -pe "s/pkfire\@${old}/pkfire\@${new}/g" $(
   git ls-files \
     'README.md' \
     'skills/**/*.md' \
-    'skills/**/*.pkl' \
-    'examples/basic/Taskfile.pkl' \
-    'examples/node/Taskfile.pkl' \
-    'examples/rust/Taskfile.pkl' \
-    'examples/monorepo/Taskfile.pkl'
+    'skills/**/*.pkl'
 )
 
 scripts/check-version-consistency.sh

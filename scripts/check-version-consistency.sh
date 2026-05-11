@@ -15,18 +15,16 @@ set -euo pipefail
 declared=$(pkl eval -f json -x package.version pkl/PklProject | tr -d '"')
 echo "declared schema version: pkfire@$declared"
 
-# Enumerate examples directly: git pathspec `**` only matches one or
-# more dirs, so `examples/basic/**/*.pkl` would silently skip
-# `examples/basic/Taskfile.pkl` (the actual file). Each example has
-# exactly one Taskfile.pkl.
+# Examples are not checked here: they pin to whatever Pkfire version
+# is actually published on pkg.pkl-lang.org (typically lagging by one
+# release because bumping them only makes sense after a release tag
+# has been pushed and the publish workflow has uploaded the zip).
+# The README + skills/recipes track the in-flight `pkl/PklProject`
+# version so they always match what new users would see.
 files=$(git ls-files \
   'README.md' \
   'skills/**/*.md' \
-  'skills/**/*.pkl' \
-  'examples/basic/Taskfile.pkl' \
-  'examples/node/Taskfile.pkl' \
-  'examples/rust/Taskfile.pkl' \
-  'examples/monorepo/Taskfile.pkl')
+  'skills/**/*.pkl')
 
 bad=0
 total=0

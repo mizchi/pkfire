@@ -80,7 +80,7 @@ the runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`.
 After it runs, the rest of the workflow calls `pkf` directly — no
 `go install`, no Pkl bootstrap.
 
-> **Why `@v0.4.0` and not `@pkfire@0.4.0`?** GitHub Actions cannot
+> **Why `@v0.4.0` and not `@pkfire@0.5.0`?** GitHub Actions cannot
 > parse `uses: <repo>@<ref>` when the ref itself contains `@` — the
 > whole workflow file fails to load with a generic
 > "workflow file issue" error and zero jobs run. Pkl release tags
@@ -106,7 +106,7 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | the action ref, falling back to the latest release | Accepts `v0.4.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.4.0`. Pinning via `uses: mizchi/pkfire@v0.4.0` is the recommended form. |
+| `version` | the action ref, falling back to the latest release | Accepts `v0.4.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.5.0`. Pinning via `uses: mizchi/pkfire@v0.4.0` is the recommended form. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
 | `cache-pkl` | `false` | Set to `true` to cache `~/.pkl/cache` between runs. Useful for projects that consume remote Pkl packages (`amends` / `import` of `package://pkg.pkl-lang.org/...`). |
@@ -142,7 +142,7 @@ your project does not need a clone of this repo.
 ## Authoring a Taskfile
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.5.0#/Taskfile.pkl"
 
 local build = new Task {
   name = "build"
@@ -306,9 +306,9 @@ pick whichever option fits:
 
 | Option | `amends` line | Notes |
 | --- | --- | --- |
-| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
+| Pkl package (recommended) | `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.5.0#/Taskfile.pkl"` | Versioned, integrity-checked, cached by Pkl. |
 | HTTPS, floating tip | `amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"` | What older `pkf init` wrote. Pkl fetches and caches. |
-| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.4.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
+| HTTPS, pinned tag | `amends "https://raw.githubusercontent.com/mizchi/pkfire/pkfire@0.5.0/pkl/Taskfile.pkl"` | Pinned to a release tag, no package resolution. |
 | Local clone | `amends "../pkfire/pkl/Taskfile.pkl"` | When `mizchi/pkfire` is a sibling checkout. |
 
 The package is published as a GitHub release whose tag matches
@@ -411,15 +411,29 @@ pkf run -f examples/dogfood/Taskfile.pkl ci   # full release gate (cross-compile
 To cut a Pkl package release:
 
 ```sh
-pkf run bump --to=<new-version>               # sweep every pkfire@<old> reference
+# 1. Bump README + skills + recipes + PklProject. Examples are NOT
+#    touched here — they pin to a *published* URL and would 404 on
+#    `pkl eval` until the release workflow finishes.
+pkf run bump --to=<new-version>
 git commit -am "release: pkfire@<new-version>"
-pkf run tag                                   # creates pkfire@<new-version> locally
-git push origin main "pkfire@<new-version>"   # triggers Release + v-tags workflows
+
+# 2. Tag locally and push. Release + v-tags workflows fire.
+pkf run tag
+git push origin main "pkfire@<new-version>"
+
+# 3. After the publish workflow uploads the package, bump examples
+#    in a follow-up commit.
+perl -i -pe 's/pkfire\@<old>/pkfire\@<new-version>/g' \
+  examples/basic/Taskfile.pkl examples/node/Taskfile.pkl \
+  examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl
+git commit -am "examples: bump amends URI to pkfire@<new-version>"
+git push
 ```
 
-Both pre-commit and CI run `pkf run check-version` (wrapping
-`scripts/check-version-consistency.sh`) so a forgotten reference
-becomes a red build, not a stale URI in the wild.
+`pkf run check-version` (wrapping
+`scripts/check-version-consistency.sh`) covers the in-flight
+schema version across README + skills + recipes. Examples are
+excluded for the publish-order reason above.
 
 ## License
 

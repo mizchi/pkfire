@@ -10,64 +10,98 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-11
+
+Pkl schema is unchanged from 0.4.0 — bumping in lockstep with the
+binary/action per project convention. The amends URI change is
+mechanical; no Taskfile rewrites needed.
+
 ### Added
 
-- **`pkf format`.** Thin alias for `pkl format` — keeps the same
-  spelling as the underlying CLI. With no positional arg, formats
-  the directory containing the discovered Taskfile (the same
-  walk-up resolution every other subcommand uses). `--check`
-  flips to `pkl format --diff-name-only`, which exits 11 if any
-  file would change — CI-friendly. No corresponding Taskfile
-  wrapper task: `pkf format` is itself the canonical entry
-  point, so adding a `format` task on top would just be a 1:1
-  redundant alias. The root Taskfile's `preflight` task does
-  embed the equivalent of `--check` inline so the pre-commit
-  gate still catches drift.
-- **Repo-root `Taskfile.pkl` for project maintenance.** Dogfoods
-  pkfire on its own development flow. Tasks: `vet`, `test:go`,
-  `test:race`, `test:pkl`, `fmt`, `check-version`, `bump --to=<ver>`,
-  `tag`, and `preflight` (the pre-commit aggregate of vet + go-test
-  + pkl-test + check-version). Build/test of the `pkf` binary itself
-  stays in `examples/dogfood/Taskfile.pkl` (that's the CI release
-  gate). The root Taskfile uses a relative `amends` to
-  `pkl/Taskfile.pkl` so it always tracks the in-tree schema.
-- **`pkf run --refresh`.** Skip the cache *lookup* but still *store*
-  the result. Distinct from `--no-cache` (which disables both). Use
-  when an undeclared dependency changed (a global tool version, an
-  environment shift outside `env { ... }`) and you want to
-  re-baseline the cache instead of running uncached forever.
-  Mutually exclusive with `--no-cache`.
-- **`pkf doctor`.** Read-only diagnostic command. Reports the
-  `pkl` CLI version vs `minPklVersion`, cache dir + total size,
-  remote-cache reachability (when `PKFIRE_REMOTE_CACHE` is set),
-  and the resolved Taskfile + its `amends` line. Exits non-zero
-  iff any check FAILed.
-- **`pkf list --json`.** Machine-readable output:
-  `{"tasks":[{name,description,cmd,shell,deps,inputs,outputs,workdir,
-  cache,service,services,acceptsArgs,inheritEnv,params:[...]}]}`.
-  For CI / editor tooling that wants to enumerate tasks without
-  parsing the human-readable list.
-- **Action input `cache-pkl: false` (opt-in `~/.pkl/cache`
-  caching).** When `true`, the action runs an `actions/cache@v4`
-  step keyed on `hashFiles('**/PklProject.deps.json',
-  '**/Taskfile.pkl')` (override via `pkl-cache-key`). Off by
+- **GitHub Action friendly `v<ver>` + floating `v<major>` tags.**
+  Release workflow now pushes `v0.5.0` and (refreshes) `v0` so
+  consumers can write `uses: mizchi/pkfire@v0.5.0` (or `@v0`)
+  without tripping GHA's `<repo>@<ref-with-@>` parse failure
+  (kawaz/pkf-tasks DR-0004). Dedicated `v-tags.yml` workflow
+  fires on Release-success via `workflow_run`, with manual
+  recovery via `workflow_dispatch`. Implemented with git CLI
+  rather than `gh api` because `git/refs` returned 403 from
+  github-actions[bot] even with `Contents: write`. Backfill is
+  intentionally skipped: the bot can't push refs whose commit
+  contains workflow files different from `main` (no
+  `workflows` permission on GITHUB_TOKEN), and old release
+  commits trip that hook.
+- **`pkf format` (alias for `pkl format`).** Defaults to the
+  directory of the discovered Taskfile; `--check` maps to
+  `--diff-name-only` (exit 11 on violations). No corresponding
+  Taskfile wrapper task — the CLI is the canonical entry point.
+- **`pkf doctor`.** Read-only diagnostic. Reports the `pkl` CLI
+  version, cache dir + total size, remote-cache reachability
+  when configured, and the resolved Taskfile + its `amends`
+  line. Exits non-zero iff any check FAILed.
+- **`pkf list --json`.** Machine-readable enumeration with every
+  Task field for editor/CI tooling that wants to discover tasks
+  without parsing the human-readable list.
+- **`pkf run --refresh`.** Skip cache *lookup* but still *store*
+  the result. Distinct from `--no-cache` (which disables both).
+  Use when an undeclared dependency changed and you want to
+  re-baseline rather than run uncached forever. Mutually
+  exclusive with `--no-cache`.
+- **Repo-root `Taskfile.pkl` for project maintenance.**
+  Dogfoods pkfire on its own development flow. Tasks: `vet`,
+  `test:go`, `test:race`, `test:pkl`, `test:examples`,
+  `check-version`, `bump --to=<ver>`, `tag`, `preflight`
+  (pre-commit gate aggregating vet + go/pkl/examples tests +
+  version + format check). The cross-compile / release matrix
+  stays in `examples/dogfood/Taskfile.pkl` (CI gate).
+- **`test:examples` task.** `pkl eval` every published example
+  Taskfile so schema/example-pin drift is caught before it
+  ships — would have flagged the `examples/*` 0.1.0 pin that
+  silently rode through three releases.
+- **Action input `cache-pkl: false` (opt-in).** When `true`,
+  the composite action wraps `actions/cache@v4` around
+  `~/.pkl/cache` keyed on `PklProject.deps.json` +
+  `Taskfile.pkl`. Override the key via `pkl-cache-key`. Off by
   default — projects that don't import remote Pkl packages
   don't pay the cache restore/save cost.
+- **"Used by" README section + library-author SKILL section.**
+  Knowledge extracted from kawaz/pkf-tasks (DR-0001 …
+  DR-0004): `abstract module` + `extends` for polymorphism,
+  `(base) { cmd = ...; description = ... }` object-amends,
+  `allTasks: Listing<Task>` export, `name = "<scope>:<action>"`
+  namespace convention, runtime dispatch pattern (Pkl can't see
+  CWD), `read("env:X")` pitfalls. Recipe 12 is a copy-paste
+  skeleton for the layout.
+- **Environment / args / params policy section in README.**
+  The non-obvious rules in one place — layer order (host <
+  defaults.Env < task.Env < params), the deliberate asymmetry
+  that `cmd` sees host env but the action key never hashes it,
+  when to use `read("env:X")` vs `inheritEnv = false`, and the
+  bool-param value-less form. Aimed at AI agents that were
+  guessing the wrong way around.
 
-- **Action-friendly tags (`v<ver>` + floating `v<major>`).** A new
-  `v-tags.yml` workflow keeps `v0.4.0` (per-release) and `v0`
-  (floating major) tags in sync with the canonical
-  `pkfire@<ver>` release tags. Triggered after a successful
-  Release publish via `workflow_run`, and self-bootstraps when the
-  workflow itself lands on main, so existing pre-workflow releases
-  get their v-tags backfilled automatically with no manual step.
-  Use those from `uses:` instead of the underlying `pkfire@<ver>`
-  tag — GitHub Actions cannot parse `uses: <repo>@<ref>` when the
-  ref contains `@`, so writing `uses: mizchi/pkfire@pkfire@0.4.0`
-  silently breaks the entire workflow file. The action's
-  version-resolution now normalizes `v0.4.0`, `0.4.0`, `v0`, and
-  `pkfire@0.4.0` to the same underlying release. Context:
-  kawaz/pkf-tasks DR-0004.
+### Fixed
+
+- **Examples were pinned to `pkfire@0.1.0` across three
+  releases.** `bump-version.sh` and
+  `check-version-consistency.sh` used `git ls-files
+  'examples/<name>/**/*.pkl'`, but git pathspec `**` matches
+  **one or more** directory segments — top-level
+  `examples/<name>/Taskfile.pkl` was silently invisible. Fix:
+  enumerate the four example Taskfiles directly. examples
+  swept to the current version.
+- **Action.yml version resolver.** Now normalizes
+  `v0.5.0` / `0.5.0` / `v0` / `pkfire@0.5.0` to the same
+  underlying release tag.
+
+### Changed
+
+- `actions/checkout@v4` → `@v5`, `actions/setup-go@v5` → `@v6`
+  across all workflows. Silences the Node.js 20 deprecation
+  notice ahead of the 2026-06-02 forced runtime bump.
+- All Pkl files in `pkl/`, `examples/`, and `skills/` reformatted
+  with `pkl format`. No semantic changes; long-line wraps and
+  spaces around `|` in type unions.
 
 ## [0.4.0] - 2026-05-11
 
@@ -123,7 +157,7 @@ Action version all move together — there is one tag per release
   Set `inheritEnv = false` per-task to opt back into the old
   behavior.
 
-### Previously-unreleased (now shipping in 0.4.0)
+### Added (services + supervision, all new in 0.4.0)
 
 - **Per-service granular restart in `pkf up --watch`.** Each service
   now has its own action key tracked across watch iterations. On a
@@ -220,6 +254,7 @@ Action version all move together — there is one tag per release
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.4.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.5.0...HEAD
+[0.5.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.5.0
 [0.4.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.4.0
 [0.1.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.1.0
