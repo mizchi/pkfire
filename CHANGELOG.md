@@ -12,6 +12,14 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Recipe 14: secretlint as a pkfire pre-commit hook.** A
+  copy-paste path for repos whose ONLY git hook concern is
+  secrets-scanning: `pnpm add -D secretlint` + a 7-line
+  `.secretlintrc.json` + this recipe + `pkf hooks install` = done,
+  no prek / `.pre-commit-config.yaml`. Scopes to staged files via
+  `git diff --cached --name-only -z` so unstaged junk in the
+  working tree doesn't trip the hook. Documents the
+  composition with prek for projects that already use it.
 - **`pkf hooks install` / `uninstall` / `list`.** Convention-based
   git hook manager: any task whose `name` matches a git client-side
   hook event (`pre-commit`, `pre-push`, `commit-msg`, ... full list
