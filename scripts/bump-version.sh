@@ -25,13 +25,21 @@ perl -i -pe "s/version = \"${old}\"/version = \"${new}\"/" pkl/PklProject
 # 404'ing until the new version is actually released. After the
 # release ships, bump examples in a follow-up commit (see the
 # "Cut a release" section in README.md).
+#
+# Two reference forms get swept in lockstep:
+#   - `pkfire@<ver>`         — Pkl package URI / release tag
+#   - `mizchi/pkfire@v<ver>` — GitHub Action `uses:` pin (the v-tag
+#                               that v-tags.yml publishes alongside
+#                               each Pkl release)
+# action.yml's own input.description references the action pin too.
+files=$(git ls-files \
+  'README.md' \
+  'skills/**/*.md' \
+  'skills/**/*.pkl' \
+  'action.yml')
+
 # shellcheck disable=SC2046
-perl -i -pe "s/pkfire\@${old}/pkfire\@${new}/g" $(
-  git ls-files \
-    'README.md' \
-    'skills/**/*.md' \
-    'skills/**/*.pkl'
-)
+perl -i -pe "s/pkfire\@${old}/pkfire\@${new}/g; s|mizchi/pkfire\@v${old}|mizchi/pkfire\@v${new}|g" $files
 
 scripts/check-version-consistency.sh
 echo

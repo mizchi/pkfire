@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: mizchi/pkfire@v0.4.0       # or @v0 to track the latest 0.x
+      - uses: mizchi/pkfire@v0.5.0       # or @v0 to track the latest 0.x
       - run: pkf run ci
 ```
 
@@ -80,7 +80,7 @@ the runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`.
 After it runs, the rest of the workflow calls `pkf` directly — no
 `go install`, no Pkl bootstrap.
 
-> **Why `@v0.4.0` and not `@pkfire@0.5.0`?** GitHub Actions cannot
+> **Why `@v0.5.0` and not `@pkfire@0.5.0`?** GitHub Actions cannot
 > parse `uses: <repo>@<ref>` when the ref itself contains `@` — the
 > whole workflow file fails to load with a generic
 > "workflow file issue" error and zero jobs run. Pkl release tags
@@ -88,14 +88,14 @@ After it runs, the rest of the workflow calls `pkf` directly — no
 > additionally publishes `v<ver>` and a floating `v<major>` tag at
 > the same commit. Use those from `uses:`. For maximum supply-chain
 > safety, pin to the commit SHA directly:
-> `uses: mizchi/pkfire@<40-char-sha> # v0.4.0`.
+> `uses: mizchi/pkfire@<40-char-sha> # v0.5.0`.
 
 Pin the action ref to a release tag so the action code, the `pkf`
 binary, and the Pkl schema all move together. To share cache hits
 across CI runs and developers, wire the remote cache env:
 
 ```yaml
-      - uses: mizchi/pkfire@v0.4.0
+      - uses: mizchi/pkfire@v0.5.0
       - run: pkf run ci
         env:
           PKFIRE_REMOTE_CACHE: ${{ vars.PKFIRE_REMOTE_CACHE }}
@@ -106,7 +106,7 @@ Inputs:
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `version` | the action ref, falling back to the latest release | Accepts `v0.4.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.5.0`. Pinning via `uses: mizchi/pkfire@v0.4.0` is the recommended form. |
+| `version` | the action ref, falling back to the latest release | Accepts `v0.5.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.5.0`. Pinning via `uses: mizchi/pkfire@v0.5.0` is the recommended form. |
 | `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
 | `cache-pkl` | `false` | Set to `true` to cache `~/.pkl/cache` between runs. Useful for projects that consume remote Pkl packages (`amends` / `import` of `package://pkg.pkl-lang.org/...`). |
