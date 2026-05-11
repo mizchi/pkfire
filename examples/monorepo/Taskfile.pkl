@@ -5,7 +5,7 @@
 /// edge by referencing the upstream Task instance directly in the
 /// downstream's `deps` — no string-keyed lookup, just a Pkl reference,
 /// so a typo would fail at evaluation time.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.5.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0#/Taskfile.pkl"
 
 local class Package {
   /// Workspace name (`@example/greet` etc.).
