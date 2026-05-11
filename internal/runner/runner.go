@@ -103,7 +103,6 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 	cmd := exec.Command(shell, cmdArgs...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = mergeEnv(defaults, task, inv)
 
 	// `task.Workdir` is interpreted relative to the runner's base Workdir
 	// (typically the directory holding Taskfile.pkl). This matches how
@@ -117,6 +116,19 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 			cmd.Dir = filepath.Join(r.opts.Workdir, *task.Workdir)
 		}
 	}
+
+	// Inject pkfire-derived context as env vars so the cmd can
+	// reference its own task identity without hard-coding paths.
+	// Done AFTER cmd.Dir is computed so we can leak the resolved
+	// absolute path. These vars are NOT part of the action key —
+	// they're constants of the task definition (name, workdir),
+	// already reflected in the digest via cmd/env/inputs.
+	pkfEnv := []string{
+		"PKF_TASK_NAME=" + name,
+		"PKF_TASK_ROOT=" + cmd.Dir,
+		"PKF_WORKSPACE_ROOT=" + r.opts.Workdir,
+	}
+	cmd.Env = append(mergeEnv(defaults, task, inv), pkfEnv...)
 
 	// Make the child a process-group leader so cancellation reaches the
 	// whole subtree. exec.CommandContext only kills the direct child,

@@ -12,6 +12,24 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --keep-going` (also wired into `pkf affected`).**
+  Bazel `-k` / make `-k` semantics: a failure in one subgraph
+  doesn't cancel other independent subgraphs. Transitive
+  downstreams of a failed task still skip (`OutcomeSkipped`).
+  Execute aggregates failures via `errors.Join` so the caller
+  sees every error, not just the first.
+- **`pkf explain <task>`.** Dumps every input to the action
+  key: cmd, shell, sorted env, sorted tools, every expanded
+  input file with its content-hash prefix, the Pkl module's
+  config hash, plus `acceptsArgs` / `params` declarations.
+  Diagnostic for the recurring question "why isn't this hitting
+  cache?" — diff two runs' `pkf explain <task>` outputs to see
+  exactly which component flipped.
+- **Auto-injected env vars `PKF_TASK_NAME` / `PKF_TASK_ROOT` /
+  `PKF_WORKSPACE_ROOT`.** Every task's `cmd` now sees these
+  three so it can reference its own context without hardcoding
+  paths. Not part of the action key (they're constants of the
+  task definition, already implicit via cmd / env / inputs).
 - **`pkf completion <bash|zsh|fish>`.** Emit a shell-completion
   script to stdout. Dynamic task-name completion for `run` /
   `affected` / `clean` / `up` calls back into `pkf list` at

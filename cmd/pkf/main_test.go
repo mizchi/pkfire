@@ -509,6 +509,59 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestCmdExplainShowsKeyComponents(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdExplain([]string{"-f", basicTaskfile(t), "build"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdExplain: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"task:        build",
+		"action key:",
+		"cmd:",
+		"go build",
+		"shell:",
+		"env (",
+		"tools (",
+		"inputs (",
+		"config hash:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("explain output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdExplainErrorsOnUnknownTask(t *testing.T) {
+	requirePkl(t)
+	err := cmdExplain([]string{"-f", basicTaskfile(t), "nope"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unknown task") {
+		t.Errorf("expected unknown-task error, got %v", err)
+	}
+}
+
+func TestRunKeepGoingDoesNotCancelOnFailure(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local failing = new Task { name = "failing"; cmd = "exit 1"; cache = false }
+local other   = new Task { name = "other";   cmd = "echo ran"; cache = false }
+tasks { failing; other }
+`)
+	// Multi-target so both are roots. Default mode: the first failure
+	// cancels everything (`other` may or may not have started — that's
+	// the point). --keep-going forces independent subgraphs to
+	// completion; we verify `other` ran in its output.
+	var stdout, stderr bytes.Buffer
+	err := cmdRun([]string{"-f", taskfile, "--keep-going", "failing", "other"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected aggregated error from `failing`")
+	}
+	if !strings.Contains(stderr.String(), "echo ran") && !strings.Contains(stdout.String(), "ran") {
+		t.Errorf("--keep-going should have let `other` run.\nstdout: %s\nstderr: %s", stdout.String(), stderr.String())
+	}
+}
+
 func TestCompletionEmitsBashScript(t *testing.T) {
 	var buf bytes.Buffer
 	if err := cmdCompletion([]string{"bash"}, &buf, &bytes.Buffer{}); err != nil {

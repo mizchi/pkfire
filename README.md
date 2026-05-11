@@ -211,7 +211,20 @@ pkf run --quiet build          # suppress per-task log lines (errors + summary s
 pkf completion bash > ~/.bash_completion.d/pkf  # dynamic task-name completion
 pkf completion zsh > "${fpath[1]}/_pkf"
 pkf completion fish > ~/.config/fish/completions/pkf.fish
+pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
+pkf explain build              # dump every input to the action key (cache-miss debug)
 ```
+
+Inside `cmd`, three env vars are always injected so tasks can
+reference their own context without hardcoding paths:
+
+- `PKF_TASK_NAME` — the task's `name`.
+- `PKF_TASK_ROOT` — absolute path to the task's `workdir` (or the
+  Taskfile directory when `workdir` is null).
+- `PKF_WORKSPACE_ROOT` — absolute path to the Taskfile's directory.
+
+These are NOT part of the action key — they're constants of the
+task definition, already implicit in the hash via cmd / env / inputs.
 
 Visualizing a Taskfile is a single pipeline:
 

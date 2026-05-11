@@ -41,7 +41,7 @@ var runGlobalValueFlags = map[string]bool{
 	"f": true, "file": true, "j": true, "jobs": true,
 }
 var runGlobalBoolFlags = map[string]bool{
-	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true,
+	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true,
 }
 
 // version is overridden at link time via `-ldflags "-X main.version=…"`.
@@ -90,6 +90,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdCache(args[1:], stdout, stderr)
 	case "completion":
 		return cmdCompletion(args[1:], stdout, stderr)
+	case "explain":
+		return cmdExplain(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -120,6 +122,7 @@ commands:
   clean [-f FILE] [--dry-run] [task...] remove tasks' declared outputs (no arg = every task with outputs)
   cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
   completion <bash|zsh|fish>            emit a shell-completion script to stdout
+  explain <task>                        dump every input to the task's action key (for cache-miss debugging)
   version                               print pkf version
   help                                  show this message
 
@@ -505,6 +508,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	watch := fs.Bool("watch", false, "re-run on input changes")
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
 	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
+	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(globalArgs); err != nil {
@@ -608,6 +612,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{
 		Parallelism: *jobs,
 		Quiet:       *quiet,
+		KeepGoing:   *keepGoing,
 	})
 	plan := &orchestrator.Plan{
 		Order:            order,
@@ -1016,6 +1021,139 @@ var gitHookEvents = []string{
 // refuses to delete hooks without the marker so a hand-written hook
 // doesn't disappear on `pkf hooks uninstall`.
 const pkfHookMarker = "# managed by pkf hooks install"
+
+// cmdExplain prints every input that feeds a task's action key —
+// cmd, shell, sorted env, sorted tools, every expanded input file
+// with its content hash, the Pkl module's config hash, and any
+// resolved CLI params/args. Diagnostic for "why isn't this hitting
+// cache?" — when the action key changes between runs and the user
+// can't figure out which component flipped.
+//
+// The output is grouped by component so you can diff two runs'
+// `pkf explain <task>` outputs and see exactly what moved.
+func cmdExplain(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf explain", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: pkf explain <task>")
+	}
+	target := rest[0]
+
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+	task, ok := tf.Tasks[target]
+	if !ok {
+		return fmt.Errorf("unknown task: %q", target)
+	}
+	root := filepath.Dir(abs)
+	taskRoot := orchestrator.TaskRoot(task, root)
+	configHash := hash.HashBytes(tf.Canonical)
+
+	// Re-derive the same things ComputeKey computes, but expose them
+	// at every layer (not just the final BLAKE3 digest).
+	shell := task.Shell
+	var defEnv map[string]string
+	if tf.Defaults != nil {
+		if shell == "" {
+			shell = tf.Defaults.Shell
+		}
+		defEnv = tf.Defaults.Env
+	}
+	env := hash.MergeEnv(defEnv, task.Env)
+	entries, err := hash.HashInputs(taskRoot, task.Inputs)
+	if err != nil {
+		return fmt.Errorf("hash inputs for %q: %w", target, err)
+	}
+	action := &hash.Action{
+		Cmd:        task.Cmd,
+		Shell:      shell,
+		Env:        env,
+		Tools:      task.Tools,
+		Inputs:     entries,
+		ConfigHash: configHash,
+	}
+	key := action.Key()
+
+	fmt.Fprintf(stdout, "task:        %s\n", target)
+	fmt.Fprintf(stdout, "action key:  %s\n", hash.FormatKey(key))
+	fmt.Fprintf(stdout, "cache:       %v\n", task.Cache)
+	if task.Workdir != nil && *task.Workdir != "" {
+		fmt.Fprintf(stdout, "workdir:     %s  (absolute: %s)\n", *task.Workdir, taskRoot)
+	} else {
+		fmt.Fprintf(stdout, "workdir:     %s  (Taskfile dir)\n", taskRoot)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "cmd:\n  %s\n", strings.ReplaceAll(task.Cmd, "\n", "\n  "))
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "shell:       %s\n", shell)
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintf(stdout, "env (%d):\n", len(env))
+	envKeys := make([]string, 0, len(env))
+	for k := range env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		fmt.Fprintf(stdout, "  %s=%s\n", k, env[k])
+	}
+	if len(env) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	}
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintf(stdout, "tools (%d):\n", len(task.Tools))
+	toolKeys := make([]string, 0, len(task.Tools))
+	for k := range task.Tools {
+		toolKeys = append(toolKeys, k)
+	}
+	sort.Strings(toolKeys)
+	for _, k := range toolKeys {
+		fmt.Fprintf(stdout, "  %s=%s\n", k, task.Tools[k])
+	}
+	if len(task.Tools) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	}
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintf(stdout, "inputs (%d files):\n", len(entries))
+	for _, e := range entries {
+		fmt.Fprintf(stdout, "  %x  %s\n", e.Hash[:6], e.Path)
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(stdout, "  (none — glob expansion matched zero files)")
+	}
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintf(stdout, "config hash: %x  (sha-256-ish prefix of pkl/Taskfile.pkl canonical form)\n", configHash[:8])
+
+	if task.AcceptsArgs || len(task.Params) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "invocation overlay:")
+		fmt.Fprintf(stdout, "  acceptsArgs: %v\n", task.AcceptsArgs)
+		fmt.Fprintf(stdout, "  params: %d declared\n", len(task.Params))
+		for _, p := range task.Params {
+			def := "(required)"
+			if p.Default != nil {
+				def = fmt.Sprintf("default=%q", *p.Default)
+			}
+			fmt.Fprintf(stdout, "    --%s (%s) %s\n", p.Name, p.Type, def)
+		}
+		fmt.Fprintln(stdout, "  these contribute to the action key only when supplied on the cmd line")
+	}
+	return nil
+}
 
 // Shell-completion scripts shipped with the binary. Sources live in
 // cmd/pkf/completion/ so the bash/zsh/fish snippets stay readable and
@@ -1481,6 +1619,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results")
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
 	quiet := fs.Bool("quiet", false, "suppress per-task log lines (errors + summary still print)")
+	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
@@ -1584,7 +1723,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet})
-	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs, Quiet: *quiet})
+	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs, Quiet: *quiet, KeepGoing: *keepGoing})
 	plan := &orchestrator.Plan{
 		Order:      order,
 		Tasks:      tf.Tasks,

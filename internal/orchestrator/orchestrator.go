@@ -99,6 +99,13 @@ type Options struct {
 	// Errors and the end-of-run summary printed by the caller are
 	// still emitted.
 	Quiet bool
+	// KeepGoing, when true, prevents the first failure from
+	// cancelling the run. Independent subgraphs continue to
+	// execute; transitive downstreams of a failed task still
+	// skip (their `deps[d] == false`-status check catches that).
+	// Bazel's `--keep_going` / make's `-k`. The aggregated error
+	// returned by Execute joins every failure encountered.
+	KeepGoing bool
 }
 
 // Orchestrator holds the long-lived runner and (optionally) cache.
@@ -205,12 +212,16 @@ func (o *Orchestrator) Execute(ctx context.Context, p *Plan) ([]Result, error) {
 	sema := make(chan struct{}, parallelism)
 	var ioMu sync.Mutex
 	var errMu sync.Mutex
-	var firstErr error
+	var errs []error
 
 	setErr := func(err error) {
 		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
+		errs = append(errs, err)
+		// In the default mode, the first failure cancels everything so
+		// downstreams skip immediately. With KeepGoing, independent
+		// subgraphs keep running — the cancel is skipped and Execute
+		// returns errors.Join of every failure.
+		if !o.opts.KeepGoing && len(errs) == 1 {
 			cancel()
 		}
 		errMu.Unlock()
@@ -264,7 +275,7 @@ func (o *Orchestrator) Execute(ctx context.Context, p *Plan) ([]Result, error) {
 		}(name)
 	}
 	wg.Wait()
-	return results, firstErr
+	return results, errors.Join(errs...)
 }
 
 // TaskRoot returns the directory used as the resolution base for a task's

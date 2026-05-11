@@ -57,6 +57,25 @@ func TestRunReportsFailure(t *testing.T) {
 	}
 }
 
+func TestRunInjectsPkfEnvVars(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr, Workdir: "/tmp"})
+	err := r.Run(context.Background(), "show-me", &config.Task{
+		Cmd:   `printf "%s|%s|%s" "$PKF_TASK_NAME" "$PKF_TASK_ROOT" "$PKF_WORKSPACE_ROOT"`,
+		Shell: "bash",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := stdout.String()
+	if !strings.HasPrefix(got, "show-me|") {
+		t.Errorf("PKF_TASK_NAME not injected: got %q", got)
+	}
+	if !strings.Contains(got, "|/tmp|") || !strings.HasSuffix(got, "|/tmp") {
+		t.Errorf("PKF_TASK_ROOT / PKF_WORKSPACE_ROOT not set to expected /tmp: got %q", got)
+	}
+}
+
 func TestRunInheritsHostEnvByDefault(t *testing.T) {
 	t.Setenv("PKFIRE_TEST_INHERIT", "yes")
 	var stdout, stderr bytes.Buffer
