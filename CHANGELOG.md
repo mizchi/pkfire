@@ -12,6 +12,33 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf clean [task...]`.** Remove tasks' declared `outputs`
+  (resolved relative to each task's `workdir`). With no
+  positional arg, cleans every task that declares outputs.
+  `--dry-run` prints the paths without removing. Cache is
+  intentionally untouched — use `pkf cache rm <key>` (or
+  `pkf run --refresh`) to invalidate the cached result too.
+  Glob targets (`pkf clean 'build:*'`) expand against the
+  task list, same as `pkf run` / `pkf affected`.
+- **Glob targets for `pkf run` / `pkf affected` / `pkf clean`.**
+  Any target containing `*` or `?` is treated as a `path.Match`
+  pattern and expanded against task names. So `pkf run
+  'test:*'` runs every test-prefixed task in topological
+  order. Literal (`*`-free) names pass through unchanged; a
+  pattern that matches nothing falls through as the literal
+  task name so the existing "unknown task" error surfaces.
+- **`pkf cache <stats|prune|rm|clear>`.** Direct control over
+  the local CAS at `$PKFIRE_CACHE_DIR` (default
+  `$XDG_CACHE_HOME/pkfire`).
+  - `stats` — entry count, total size, oldest/newest mtime.
+  - `prune [--older-than=Nd]` (default 30d) — drop entries
+    whose newest file mtime is older than the threshold.
+    `--dry-run` previews. Accepts `Nd` (days),
+    `Nh`, `Nm`, `Ns` durations.
+  - `rm <action-key>...` — drop specific entries. Accepts
+    full 64-char hex or any ≥ 2-char unique prefix.
+  - `clear --yes` — nuke the entire `cas/` directory.
+    Refuses without `--yes` so accidents stay rare.
 - **Auto-generated GitHub Release notes from CHANGELOG.md.**
   The Release workflow now runs `scripts/release-notes.sh
   <version>` and feeds the section between `## [<version>]` and

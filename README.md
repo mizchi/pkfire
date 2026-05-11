@@ -201,6 +201,12 @@ pkf affected --since=origin/main test  # run only tasks affected by the PR diff
 pkf run a b c                  # run multiple targets in one go (topological union)
 pkf run                        # no args = the `default` task (errors if absent)
 pkf run --timing build         # also print per-task wall time at the end
+pkf run 'test:*'               # glob over task names (also works on affected / clean)
+pkf clean                      # rm declared outputs of every task; --dry-run to preview
+pkf cache stats                # local CAS: entries, size, oldest/newest
+pkf cache prune --older-than=7d  # drop stale entries (--dry-run to preview)
+pkf cache rm <action-key>      # remove a specific entry (≥2-char prefix accepted)
+pkf cache clear --yes          # nuke everything (scripting-safe with --yes)
 ```
 
 Visualizing a Taskfile is a single pipeline:

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -82,6 +83,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdHooks(args[1:], stdout, stderr)
 	case "affected":
 		return cmdAffected(args[1:], stdout, stderr)
+	case "clean":
+		return cmdClean(args[1:], stdout, stderr)
+	case "cache":
+		return cmdCache(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -109,6 +114,8 @@ commands:
                                         manage .git/hooks shims that delegate to pkf run
   affected [--since=<ref>] [--dry-run] [task...]
                                         run only tasks whose inputs changed since <ref> (and their dependents)
+  clean [-f FILE] [--dry-run] [task...] remove tasks' declared outputs (no arg = every task with outputs)
+  cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
   version                               print pkf version
   help                                  show this message
 
@@ -524,6 +531,14 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
+	// Expand glob-shaped targets (`pkf run 'test:*'`) against the
+	// task list. Exact names pass through. After expansion we may
+	// have more than one target, which then trips the multi-target
+	// / param mutual-exclusion just like an explicit `pkf run a b`.
+	if expanded := expandPatterns(targets, tf.Tasks); expanded != nil {
+		targets = expanded
+	}
+
 	// Multiple targets are unambiguous for non-overlay flags, but
 	// `--param=value` and `-- tail args` can't be safely routed to two
 	// different tasks. Reject the combination early.
@@ -537,7 +552,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	}
 	for _, t := range targets {
 		if !g.Has(t) {
-			return fmt.Errorf("unknown task: %q", t)
+			return fmt.Errorf("unknown task: %q (no glob pattern matched)", t)
 		}
 	}
 	order, err := unionSubgraph(g, targets)
@@ -996,6 +1011,398 @@ var gitHookEvents = []string{
 // doesn't disappear on `pkf hooks uninstall`.
 const pkfHookMarker = "# managed by pkf hooks install"
 
+// cmdClean removes the declared `outputs` of one or more tasks. The
+// cache is intentionally NOT touched — clean is "remove the artifacts
+// you can re-generate", not "force re-run". To force re-run, use
+// `pkf run --refresh <task>`. To drop a cache entry too, follow up
+// with `pkf cache rm <action-key>`.
+//
+// Outputs paths are interpreted relative to each task's `workdir`,
+// same as the runner uses them. Removal is recursive (os.RemoveAll)
+// so an `outputs { "bin" }` cleans the directory and everything in
+// it. Missing paths are silently OK (idempotent).
+func cmdClean(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf clean", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	dryRun := fs.Bool("dry-run", false, "list paths without removing them")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+	root := filepath.Dir(abs)
+
+	requested := fs.Args()
+	if patterns := expandPatterns(requested, tf.Tasks); patterns != nil {
+		requested = patterns
+	}
+
+	// No targets = every task that declares outputs. Skip the rest so
+	// users don't accidentally trigger "rm -rf" on tasks they didn't
+	// even know existed.
+	var names []string
+	if len(requested) == 0 {
+		for n, t := range tf.Tasks {
+			if len(t.Outputs) > 0 {
+				names = append(names, n)
+			}
+		}
+		sort.Strings(names)
+	} else {
+		for _, n := range requested {
+			if _, ok := tf.Tasks[n]; !ok {
+				return fmt.Errorf("unknown task: %q", n)
+			}
+			names = append(names, n)
+		}
+	}
+
+	if len(names) == 0 {
+		fmt.Fprintln(stderr, "[pkf] clean: no tasks declare outputs — nothing to do")
+		return nil
+	}
+
+	removed := 0
+	for _, name := range names {
+		task := tf.Tasks[name]
+		if len(task.Outputs) == 0 {
+			fmt.Fprintf(stderr, "[pkf] %s: no outputs declared — skipping\n", name)
+			continue
+		}
+		taskRoot := orchestrator.TaskRoot(task, root)
+		for _, out := range task.Outputs {
+			path := filepath.Join(taskRoot, out)
+			if _, err := os.Lstat(path); err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(stderr, "[pkf] %s: stat %s: %v\n", name, path, err)
+				}
+				continue
+			}
+			if *dryRun {
+				fmt.Fprintf(stdout, "would remove: %s  (%s)\n", path, name)
+			} else {
+				if err := os.RemoveAll(path); err != nil {
+					return fmt.Errorf("remove %s: %w", path, err)
+				}
+				fmt.Fprintf(stdout, "removed: %s  (%s)\n", path, name)
+			}
+			removed++
+		}
+	}
+	if removed == 0 && !*dryRun {
+		fmt.Fprintln(stderr, "[pkf] clean: nothing to remove (no declared outputs exist on disk)")
+	}
+	return nil
+}
+
+// cmdCache implements `pkf cache <stats|prune|rm|clear>` over the
+// local CAS at $PKFIRE_CACHE_DIR (default $XDG_CACHE_HOME/pkfire).
+// Remote cache is never touched here — that's the server admin's
+// problem.
+func cmdCache(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: pkf cache <stats|prune|rm|clear> [args]")
+	}
+	sub := args[0]
+	dir, err := cache.DefaultDir()
+	if err != nil {
+		return fmt.Errorf("resolve cache dir: %w", err)
+	}
+
+	switch sub {
+	case "stats":
+		return cacheStatsCmd(stdout, dir)
+	case "prune":
+		return cachePruneCmd(stdout, stderr, dir, args[1:])
+	case "rm":
+		return cacheRmCmd(stdout, stderr, dir, args[1:])
+	case "clear":
+		return cacheClearCmd(stdout, stderr, dir, args[1:])
+	default:
+		return fmt.Errorf("unknown cache subcommand %q (want stats|prune|rm|clear)", sub)
+	}
+}
+
+// cachePath returns the on-disk entry path for a hex action key.
+// Mirrors internal/cache/cache.go's `entryDir` layout — keep these
+// two in sync (or move to a shared helper later).
+func cachePath(dir, hex string) string {
+	if len(hex) < 2 {
+		return ""
+	}
+	return filepath.Join(dir, "cas", hex[:2], hex[2:])
+}
+
+// walkCacheEntries iterates every cas/<aa>/<bbbb...> directory in
+// `dir` and calls `fn` with the entry's hex key, full path, total
+// size, and the mtime of its archive file. Errors during walk are
+// logged but don't abort — best-effort.
+func walkCacheEntries(dir string, fn func(hex, path string, size int64, mtime time.Time)) error {
+	cas := filepath.Join(dir, "cas")
+	prefixes, err := os.ReadDir(cas)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, p := range prefixes {
+		if !p.IsDir() || len(p.Name()) != 2 {
+			continue
+		}
+		suffixes, err := os.ReadDir(filepath.Join(cas, p.Name()))
+		if err != nil {
+			continue
+		}
+		for _, s := range suffixes {
+			if !s.IsDir() {
+				continue
+			}
+			entryDir := filepath.Join(cas, p.Name(), s.Name())
+			var size int64
+			var mtime time.Time
+			filepath.Walk(entryDir, func(_ string, info os.FileInfo, err error) error {
+				if err != nil || info == nil {
+					return nil
+				}
+				if !info.IsDir() {
+					size += info.Size()
+					if info.ModTime().After(mtime) {
+						mtime = info.ModTime()
+					}
+				}
+				return nil
+			})
+			fn(p.Name()+s.Name(), entryDir, size, mtime)
+		}
+	}
+	return nil
+}
+
+func cacheStatsCmd(stdout io.Writer, dir string) error {
+	var total int64
+	count := 0
+	var oldest, newest time.Time
+	err := walkCacheEntries(dir, func(_, _ string, size int64, mtime time.Time) {
+		total += size
+		count++
+		if oldest.IsZero() || mtime.Before(oldest) {
+			oldest = mtime
+		}
+		if mtime.After(newest) {
+			newest = mtime
+		}
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "cache dir: %s\n", dir)
+	fmt.Fprintf(stdout, "entries:   %d\n", count)
+	fmt.Fprintf(stdout, "size:      %s\n", humanBytes(total))
+	if count > 0 {
+		fmt.Fprintf(stdout, "oldest:    %s (%s ago)\n", oldest.Format(time.RFC3339), time.Since(oldest).Round(time.Hour))
+		fmt.Fprintf(stdout, "newest:    %s (%s ago)\n", newest.Format(time.RFC3339), time.Since(newest).Round(time.Hour))
+	}
+	return nil
+}
+
+func cachePruneCmd(stdout, stderr io.Writer, dir string, args []string) error {
+	fs := flag.NewFlagSet("pkf cache prune", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	olderThan := fs.String("older-than", "30d", "drop entries whose newest file mtime is older than this (e.g. 7d, 24h)")
+	dryRun := fs.Bool("dry-run", false, "list what would be removed without removing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	threshold, err := parseDuration(*olderThan)
+	if err != nil {
+		return fmt.Errorf("--older-than: %w", err)
+	}
+	cutoff := time.Now().Add(-threshold)
+	removed := 0
+	var freed int64
+	err = walkCacheEntries(dir, func(hex, path string, size int64, mtime time.Time) {
+		if mtime.After(cutoff) {
+			return
+		}
+		freed += size
+		removed++
+		if *dryRun {
+			fmt.Fprintf(stdout, "would remove %s (%s, %s old)\n", hex[:12], humanBytes(size), time.Since(mtime).Round(time.Hour))
+			return
+		}
+		if err := os.RemoveAll(path); err != nil {
+			fmt.Fprintf(stderr, "[pkf] cache: rm %s: %v\n", path, err)
+			return
+		}
+		fmt.Fprintf(stdout, "removed %s (%s, %s old)\n", hex[:12], humanBytes(size), time.Since(mtime).Round(time.Hour))
+	})
+	if err != nil {
+		return err
+	}
+	if *dryRun {
+		fmt.Fprintf(stdout, "\nwould remove %d entries (%s)\n", removed, humanBytes(freed))
+	} else {
+		fmt.Fprintf(stdout, "\nremoved %d entries (%s freed)\n", removed, humanBytes(freed))
+	}
+	return nil
+}
+
+func cacheRmCmd(stdout, stderr io.Writer, dir string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: pkf cache rm <action-key-hex>")
+	}
+	removed := 0
+	for _, key := range args {
+		// Accept full 64-char hex or any prefix ≥ 2; the layout is
+		// cas/<aa>/<rest>, so we need ≥ 2 chars to find the bucket.
+		if len(key) < 2 {
+			return fmt.Errorf("action key %q too short (need ≥ 2 hex chars)", key)
+		}
+		path := cachePath(dir, key)
+		if len(key) < 64 {
+			// Prefix match: find a unique entry in the bucket.
+			bucket := filepath.Join(dir, "cas", key[:2])
+			entries, _ := os.ReadDir(bucket)
+			var matches []string
+			rest := key[2:]
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), rest) {
+					matches = append(matches, e.Name())
+				}
+			}
+			switch len(matches) {
+			case 0:
+				fmt.Fprintf(stderr, "[pkf] cache rm: no entry matching %s\n", key)
+				continue
+			case 1:
+				path = filepath.Join(bucket, matches[0])
+			default:
+				return fmt.Errorf("prefix %q matches %d entries; disambiguate", key, len(matches))
+			}
+		}
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				fmt.Fprintf(stderr, "[pkf] cache rm: no entry at %s\n", key)
+				continue
+			}
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+		fmt.Fprintf(stdout, "removed %s\n", key)
+		removed++
+	}
+	fmt.Fprintf(stdout, "\nremoved %d entries\n", removed)
+	return nil
+}
+
+func cacheClearCmd(stdout, stderr io.Writer, dir string, args []string) error {
+	fs := flag.NewFlagSet("pkf cache clear", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	yes := fs.Bool("yes", false, "skip confirmation (intended for scripts / CI)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cas := filepath.Join(dir, "cas")
+	if _, err := os.Stat(cas); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(stdout, "cache already empty")
+			return nil
+		}
+		return err
+	}
+	if !*yes {
+		return fmt.Errorf("refusing to clear %s without --yes (interactive confirmation not wired up; use --yes for scripts)", cas)
+	}
+	if err := os.RemoveAll(cas); err != nil {
+		return fmt.Errorf("remove %s: %w", cas, err)
+	}
+	fmt.Fprintf(stdout, "cleared %s\n", cas)
+	return nil
+}
+
+// parseDuration extends Go's time.ParseDuration with "d" for days,
+// since cache age is naturally expressed in days for prune contexts.
+// "7d" → 168h, "30d" → 720h, etc. Any standard suffix
+// (h/m/s/...) still works.
+func parseDuration(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		nDays, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("parse %q: %w", s, err)
+		}
+		return time.Duration(nDays) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
+// expandPatterns expands any glob-shaped (`*` or `?`) entries in
+// `targets` against `tasks`'s keys, leaving exact names untouched.
+// Returns nil when nothing expanded (caller can use the original
+// slice); returns a non-nil slice (possibly empty) when at least
+// one pattern was attempted, so callers can detect the
+// expand-vs-passthrough boundary.
+//
+// Used by `pkf run`, `pkf affected`, and `pkf clean` so all three
+// share consistent semantics — `pkf run 'test:*'` does the same
+// thing as `pkf clean 'build:*'`.
+func expandPatterns(targets []string, tasks map[string]*config.Task) []string {
+	anyPattern := false
+	for _, t := range targets {
+		if strings.ContainsAny(t, "*?") {
+			anyPattern = true
+			break
+		}
+	}
+	if !anyPattern {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, t := range targets {
+		if !strings.ContainsAny(t, "*?") {
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+			continue
+		}
+		matched := false
+		var names []string
+		for n := range tasks {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			ok, _ := path.Match(t, n)
+			if !ok {
+				continue
+			}
+			matched = true
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+		if !matched {
+			// Caller can spot empty expansion by length, but warn
+			// here so users see WHY: pattern matched nothing.
+			out = append(out, t) // keep the literal; caller's "unknown task" path will surface it cleanly
+		}
+	}
+	return out
+}
+
 // cmdAffected runs only those tasks whose declared `inputs` glob
 // matches at least one file changed between `--since=<ref>` and HEAD,
 // plus their transitive *dependents* (downstream tasks reachable in
@@ -1067,12 +1474,18 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	// Filter to user-supplied targets if any.
-	if len(fs.Args()) > 0 {
-		filter := make(map[string]bool, len(fs.Args()))
-		for _, n := range fs.Args() {
+	// Filter to user-supplied targets if any. Glob-shaped names
+	// (`test:*`) expand against the task list first so
+	// `pkf affected --since=X 'test:*'` selects every test:*
+	// task that the diff actually affected.
+	if posArgs := fs.Args(); len(posArgs) > 0 {
+		if expanded := expandPatterns(posArgs, tf.Tasks); expanded != nil {
+			posArgs = expanded
+		}
+		filter := make(map[string]bool, len(posArgs))
+		for _, n := range posArgs {
 			if _, ok := tf.Tasks[n]; !ok {
-				return fmt.Errorf("unknown task: %q", n)
+				return fmt.Errorf("unknown task: %q (no glob pattern matched)", n)
 			}
 			filter[n] = true
 		}

@@ -509,6 +509,136 @@ func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestExpandPatternsExpandsGlobs(t *testing.T) {
+	tasks := map[string]*config.Task{
+		"test:unit":        {},
+		"test:integration": {},
+		"build:linux":      {},
+		"build:darwin":     {},
+		"lint":             {},
+	}
+	got := expandPatterns([]string{"test:*"}, tasks)
+	if got == nil {
+		t.Fatal("expected expansion, got nil")
+	}
+	want := map[string]bool{"test:unit": true, "test:integration": true}
+	if len(got) != len(want) {
+		t.Errorf("got %v, want keys %v", got, want)
+	}
+	for _, n := range got {
+		if !want[n] {
+			t.Errorf("unexpected name: %s", n)
+		}
+	}
+}
+
+func TestExpandPatternsLeavesExactNames(t *testing.T) {
+	tasks := map[string]*config.Task{"build": {}, "test": {}}
+	got := expandPatterns([]string{"build", "test"}, tasks)
+	if got != nil {
+		t.Errorf("expected nil (no patterns), got %v", got)
+	}
+}
+
+func TestExpandPatternsKeepsLiteralOnNoMatch(t *testing.T) {
+	tasks := map[string]*config.Task{"build": {}}
+	got := expandPatterns([]string{"nope:*"}, tasks)
+	if got == nil {
+		t.Fatal("expected expansion result even when no match")
+	}
+	if len(got) != 1 || got[0] != "nope:*" {
+		t.Errorf("expected the literal `nope:*` to fall through, got %v", got)
+	}
+}
+
+func TestCmdCleanDryRunListsOutputs(t *testing.T) {
+	requirePkl(t)
+	repo := t.TempDir()
+	taskfile := filepath.Join(repo, "Taskfile.pkl")
+	binFile := filepath.Join(repo, "bin/app")
+	if err := os.MkdirAll(filepath.Dir(binFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binFile, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(taskfile, []byte(`amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local build = new Task { name = "build"; cmd = "echo build"; outputs { "bin/app" }; cache = false }
+tasks { build }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdClean([]string{"-f", taskfile, "--dry-run"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdClean: %v\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "would remove") {
+		t.Errorf("expected `would remove` in output:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(binFile); err != nil {
+		t.Errorf("--dry-run should not have removed bin/app: %v", err)
+	}
+}
+
+func TestCmdCleanRemovesOutputs(t *testing.T) {
+	requirePkl(t)
+	repo := t.TempDir()
+	taskfile := filepath.Join(repo, "Taskfile.pkl")
+	binFile := filepath.Join(repo, "bin/app")
+	if err := os.MkdirAll(filepath.Dir(binFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binFile, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(taskfile, []byte(`amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local build = new Task { name = "build"; cmd = "echo build"; outputs { "bin/app" }; cache = false }
+tasks { build }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdClean([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdClean: %v\n%s", err, stderr.String())
+	}
+	if _, err := os.Stat(binFile); !os.IsNotExist(err) {
+		t.Errorf("bin/app should be gone, got err = %v", err)
+	}
+}
+
+func TestParseDurationAcceptsDays(t *testing.T) {
+	cases := map[string]time.Duration{
+		"7d":  7 * 24 * time.Hour,
+		"30d": 30 * 24 * time.Hour,
+		"24h": 24 * time.Hour,
+		"5m":  5 * time.Minute,
+	}
+	for input, want := range cases {
+		got, err := parseDuration(input)
+		if err != nil {
+			t.Errorf("%s: %v", input, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: got %v want %v", input, got, want)
+		}
+	}
+}
+
+func TestCacheStatsHandlesMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nonexistent")
+	var buf bytes.Buffer
+	if err := cacheStatsCmd(&buf, dir); err != nil {
+		t.Fatalf("cacheStatsCmd: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "entries:   0") {
+		t.Errorf("expected `entries:   0`:\n%s", out)
+	}
+}
+
 func TestTasksMatchingChangesHonorsWorkdir(t *testing.T) {
 	wd := "services/api"
 	tf := &config.Taskfile{
