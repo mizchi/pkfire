@@ -22,6 +22,14 @@ Action version all move together — there is one tag per release
   '@{push}..HEAD'` (falling back to `@{u}` then to all tracked
   files for first-push-of-new-branch). Documents the composition
   with prek for projects that already use it.
+- **`.envrc`-safe idempotent `pkf hooks install`.** Silent
+  (zero stdout/stderr) when every shim is already present and
+  bit-identical to what pkfire would write — safe to drop into
+  `.envrc` for auto-install on `cd`. Writes go through tempfile
+  + rename so concurrent reloads can't tear the shim. The
+  "no installable hooks" hint only fires when the Taskfile
+  declares NO hook-named task at all (likely a typo), not on
+  every no-op reload.
 - **`pkf hooks install` / `uninstall` / `list`.** Convention-based
   git hook manager: any task whose `name` matches a git client-side
   hook event (`pre-commit`, `pre-push`, `commit-msg`, ... full list

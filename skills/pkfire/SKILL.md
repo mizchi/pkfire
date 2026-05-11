@@ -632,6 +632,27 @@ The shim is marked with a comment so uninstall and reinstall are
 idempotent and *will not* touch hooks installed by other tools
 (husky, lefthook, hk, etc.) unless you pass `--force`.
 
+### Auto-install on `cd` (direnv)
+
+`pkf hooks install` is **silent on no-op**: when every matching
+shim is already present and bit-identical to what pkfire would
+write, the command produces no output. That makes it safe to drop
+into `.envrc` so the hooks always get re-installed (and
+re-aligned to the current Taskfile) the first time you `cd` into
+the repo on a fresh checkout:
+
+```sh
+# .envrc
+if command -v pkf >/dev/null; then
+  pkf hooks install
+fi
+```
+
+The first `direnv reload` after the Taskfile changes writes a line
+to stdout. Every subsequent reload is quiet. File writes go
+through tempfile + rename so a concurrent reload (two terminals
+hitting `cd` at the same moment) won't tear the shim.
+
 ### Rules of thumb
 
 - **`cache = false` on every hook task.** Hooks fire on a tree that

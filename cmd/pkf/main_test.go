@@ -542,6 +542,39 @@ tasks { pre }
 	}
 }
 
+func TestHooksInstallIsSilentOnNoop(t *testing.T) {
+	requirePkl(t)
+	repo := newTempRepo(t)
+	taskfile := filepath.Join(repo, "Taskfile.pkl")
+	if err := os.WriteFile(taskfile, []byte(`amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local pre = new Task { name = "pre-commit"; cmd = "echo ok"; cache = false }
+tasks { pre }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// First install: should write the shim and report.
+	var out1, err1 bytes.Buffer
+	if err := cmdHooks([]string{"install", "-f", taskfile}, &out1, &err1); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	if !strings.Contains(out1.String(), "installed") {
+		t.Errorf("first install should log `installed`, got %q", out1.String())
+	}
+
+	// Second install with no change: must be completely silent so
+	// `.envrc` / direnv-reload-on-cd doesn't spam the terminal.
+	var out2, err2 bytes.Buffer
+	if err := cmdHooks([]string{"install", "-f", taskfile}, &out2, &err2); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if out2.Len() != 0 || err2.Len() != 0 {
+		t.Errorf("idempotent reinstall must be silent.\nstdout=%q\nstderr=%q",
+			out2.String(), err2.String())
+	}
+}
+
 func TestHooksInstallPreservesUnmanagedHook(t *testing.T) {
 	requirePkl(t)
 	repo := newTempRepo(t)

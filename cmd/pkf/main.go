@@ -997,13 +997,17 @@ func hooksInstall(stdout, stderr io.Writer, tf *config.Taskfile, hooksDir string
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", hooksDir, err)
 	}
-	installed := 0
+	// Counters distinguish "nothing in the Taskfile to install" (silent
+	// noop) from "everything was already up-to-date" (also silent).
+	matched := 0
+	wrote := 0
 	skipped := 0
 	for _, event := range gitHookEvents {
 		task, ok := tf.Tasks[event]
 		if !ok {
 			continue
 		}
+		matched++
 		// `cache = true` on a hook task is almost always a bug — hooks
 		// fire per-commit on a constantly-shifting tree. Warn but don't
 		// block; the user might have a niche reason.
@@ -1011,24 +1015,74 @@ func hooksInstall(stdout, stderr io.Writer, tf *config.Taskfile, hooksDir string
 			fmt.Fprintf(stderr, "[pkf] warning: task %q has cache=true; hooks typically want cache=false\n", event)
 		}
 		path := filepath.Join(hooksDir, event)
-		if existing, err := os.ReadFile(path); err == nil {
-			if strings.Contains(string(existing), pkfHookMarker) {
-				// Already ours — silent overwrite (idempotent).
-			} else if !force {
+		want := hookScript(event)
+		existing, readErr := os.ReadFile(path)
+		switch {
+		case readErr == nil && string(existing) == want:
+			// Bit-identical shim already on disk. Silent so this is
+			// safe to spam from .envrc / direnv-reload-on-cd.
+			continue
+		case readErr == nil && strings.Contains(string(existing), pkfHookMarker):
+			// Pkfire-managed but stale (probably an older shim that
+			// pre-dates the current pkf version). Overwrite + report.
+		case readErr == nil:
+			// Some other tool (or the user) wrote this hook. Don't
+			// stomp on it without `--force`.
+			if !force {
 				fmt.Fprintf(stderr, "[pkf] %s: not managed by pkfire, skipping (use --force to overwrite)\n", event)
 				skipped++
 				continue
 			}
 		}
-		if err := os.WriteFile(path, []byte(hookScript(event)), 0o755); err != nil {
+		if err := writeAtomic(path, []byte(want), 0o755); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 		fmt.Fprintf(stdout, "installed %s → pkf run %s\n", path, event)
-		installed++
+		wrote++
 	}
-	if installed == 0 && skipped == 0 {
+	if matched == 0 {
+		// Only print this "nothing to do" hint when there were NO hook
+		// tasks at all — that almost always means a Taskfile typo or
+		// missing task. Silent when matches exist and were idempotent.
 		fmt.Fprintln(stdout, "no installable hooks: the Taskfile declares no task named after a git hook event")
 		fmt.Fprintln(stdout, "  recognized events: "+strings.Join(gitHookEvents, ", "))
+	}
+	_ = wrote
+	_ = skipped
+	return nil
+}
+
+// writeAtomic writes `data` to `path` with `mode`, going through a
+// temp file in the same directory + rename so a concurrent reader
+// (or a concurrent `pkf hooks install` triggered by parallel direnv
+// reloads) never sees a partial write. Failure modes:
+//   - tempfile creation fails: returned as-is.
+//   - chmod fails: we already wrote, so unlink and bail.
+//   - rename fails: unlink the temp and bail.
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".pkf-hook-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return err
 	}
 	return nil
 }
