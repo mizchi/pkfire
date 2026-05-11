@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mizchi/pkfire/internal/config"
+	"github.com/mizchi/pkfire/internal/graph"
+	"github.com/mizchi/pkfire/internal/orchestrator"
 )
 
 func requirePkl(t *testing.T) {
@@ -730,6 +733,480 @@ func TestRunDryRunNoCacheForcesAllWillRun(t *testing.T) {
 		if strings.HasPrefix(line, "  hit ") {
 			t.Errorf("--no-cache dry-run reported a hit row, expected none:\n%s", out)
 			break
+		}
+	}
+}
+
+// -----------------------------------------------------------------
+// Tests for the 0.5.0+ multi-target / default-task / summary / affected
+// feature batch. Split into focused units (unionSubgraph, printRunSummary,
+// affected-helpers) + integration (full cmdRun / cmdAffected paths).
+// -----------------------------------------------------------------
+
+// taskfileWithTasks writes a Taskfile.pkl in a temp dir with the
+// canonical `amends` line followed by `body`, returning the file path.
+// Body is raw Pkl (e.g. `local foo = new Task { ... }; tasks { foo }`).
+func taskfileWithTasks(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Taskfile.pkl")
+	full := `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+` + body
+	if err := os.WriteFile(path, []byte(full), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// newGitRepoWithCommit initializes a fresh git repo in a temp dir,
+// writes the given files, and commits them. Returns the repo path.
+// Sets author/committer via env so `git commit` succeeds regardless
+// of host git config. Branch is `main`.
+func newGitRepoWithCommit(t *testing.T, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available on PATH")
+	}
+	repo := t.TempDir()
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = gitEnv
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	for path, content := range files {
+		full := filepath.Join(repo, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "initial")
+	return repo
+}
+
+// commitChange writes additional files (or overwrites existing ones)
+// in `repo` and creates a new commit. Used to produce a non-empty
+// `git diff HEAD~1..HEAD` for the affected-set tests.
+func commitChange(t *testing.T, repo string, files map[string]string) {
+	t.Helper()
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	for path, content := range files {
+		full := filepath.Join(repo, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-C", repo, "add", "."},
+		{"-C", repo, "commit", "-q", "-m", "change"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = gitEnv
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+}
+
+func TestUnionSubgraphPreservesTopoOrder(t *testing.T) {
+	// graph:
+	//   a ← b ← c
+	//   d ← c           (d also depends on c)
+	g, err := graph.Build([]graph.Node{
+		{Name: "a", Deps: []string{"b"}},
+		{Name: "b", Deps: []string{"c"}},
+		{Name: "c"},
+		{Name: "d", Deps: []string{"c"}},
+	})
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	order, err := unionSubgraph(g, []string{"a", "d"})
+	if err != nil {
+		t.Fatalf("unionSubgraph: %v", err)
+	}
+	pos := map[string]int{}
+	for i, n := range order {
+		pos[n] = i
+	}
+	// Both subgraphs must be present, deduplicated.
+	for _, n := range []string{"a", "b", "c", "d"} {
+		if _, ok := pos[n]; !ok {
+			t.Errorf("missing node %q in union: %v", n, order)
+		}
+	}
+	if pos["c"] >= pos["b"] || pos["b"] >= pos["a"] {
+		t.Errorf("topo order violated for a-chain: %v", order)
+	}
+	if pos["c"] >= pos["d"] {
+		t.Errorf("d should come after c: %v", order)
+	}
+}
+
+func TestUnionSubgraphDedupesSharedDeps(t *testing.T) {
+	g, err := graph.Build([]graph.Node{
+		{Name: "shared"},
+		{Name: "x", Deps: []string{"shared"}},
+		{Name: "y", Deps: []string{"shared"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, err := unionSubgraph(g, []string{"x", "y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 3 {
+		t.Errorf("expected 3 unique tasks, got %v", order)
+	}
+}
+
+func TestPrintRunSummaryBasic(t *testing.T) {
+	results := []orchestrator.Result{
+		{Name: "a", Outcome: orchestrator.OutcomeHit, Duration: 50 * time.Millisecond},
+		{Name: "b", Outcome: orchestrator.OutcomeRan, Duration: 200 * time.Millisecond},
+		{Name: "c", Outcome: orchestrator.OutcomeUncached, Duration: 100 * time.Millisecond},
+	}
+	var buf bytes.Buffer
+	printRunSummary(&buf, results, 500*time.Millisecond, false)
+	out := buf.String()
+	for _, want := range []string{"3 tasks", "1 hit", "2 ran", "1 uncached", "500ms wall"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q:\n%s", want, out)
+		}
+	}
+	// No `--timing` table when flag is false.
+	if strings.Contains(out, "[pkf] timing:") {
+		t.Errorf("--timing=false should suppress per-task table:\n%s", out)
+	}
+}
+
+func TestPrintRunSummaryTimingOrdersDescending(t *testing.T) {
+	results := []orchestrator.Result{
+		{Name: "fast", Outcome: orchestrator.OutcomeRan, Duration: 1 * time.Millisecond},
+		{Name: "slow", Outcome: orchestrator.OutcomeRan, Duration: 1 * time.Second},
+		{Name: "med", Outcome: orchestrator.OutcomeRan, Duration: 100 * time.Millisecond},
+	}
+	var buf bytes.Buffer
+	printRunSummary(&buf, results, 2*time.Second, true)
+	out := buf.String()
+	iSlow := strings.Index(out, "slow")
+	iMed := strings.Index(out, "med")
+	iFast := strings.Index(out, "fast")
+	if iSlow < 0 || iMed < 0 || iFast < 0 {
+		t.Fatalf("missing one of the rows:\n%s", out)
+	}
+	if !(iSlow < iMed && iMed < iFast) {
+		t.Errorf("timing rows not descending by duration:\n%s", out)
+	}
+}
+
+func TestPrintRunSummarySkippedTasksAreReported(t *testing.T) {
+	results := []orchestrator.Result{
+		{Name: "a", Outcome: orchestrator.OutcomeRan, Duration: 10 * time.Millisecond},
+		{Name: "b", Outcome: orchestrator.OutcomeSkipped, Duration: 0},
+	}
+	var buf bytes.Buffer
+	printRunSummary(&buf, results, 50*time.Millisecond, false)
+	out := buf.String()
+	if !strings.Contains(out, "1 skipped") {
+		t.Errorf("expected `1 skipped` in summary:\n%s", out)
+	}
+}
+
+func TestPrintRunSummaryEmptyResultsIsNoop(t *testing.T) {
+	var buf bytes.Buffer
+	printRunSummary(&buf, nil, 0, false)
+	if buf.Len() != 0 {
+		t.Errorf("empty results should produce no output, got %q", buf.String())
+	}
+}
+
+func TestRunMultiTargetExecutesUnion(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", basicTaskfile(t), "--dry-run", "build", "test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("multi-target dry-run: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"build", "test"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("multi-target plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunMultiTargetRejectsParams(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local a = new Task { name = "a"; cmd = "echo a"; cache = false }
+local b = new Task { name = "b"; cmd = "echo b"; cache = false }
+tasks { a; b }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdRun([]string{"-f", taskfile, "--dry-run", "a", "b", "--foo=x"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error: multi-target + --param ambiguity")
+	}
+	if !strings.Contains(err.Error(), "multi-target") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunNoArgsUsesDefaultTask(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local def = new Task { name = "default"; cmd = "echo defaulted"; cache = false }
+tasks { def }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "--dry-run"}, &stdout, &stderr); err != nil {
+		t.Fatalf("default dry-run: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"default"`) {
+		t.Errorf("expected default task in plan header:\n%s", stdout.String())
+	}
+}
+
+func TestRunNoArgsErrorsWithoutDefault(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local foo = new Task { name = "foo"; cmd = "echo foo"; cache = false }
+tasks { foo }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdRun([]string{"-f", taskfile, "--dry-run"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error when no target and no `default` task")
+	}
+	if !strings.Contains(err.Error(), "default") {
+		t.Errorf("error should mention `default`: %v", err)
+	}
+}
+
+func TestGitChangedFilesReturnsAsymmetricDiff(t *testing.T) {
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"src/main.go": "package main\n",
+		"README.md":   "hello\n",
+	})
+	commitChange(t, repo, map[string]string{
+		"src/main.go": "package main\nfunc main() {}\n",
+	})
+	got, err := gitChangedFiles(repo, "HEAD~1")
+	if err != nil {
+		t.Fatalf("gitChangedFiles: %v", err)
+	}
+	if len(got) != 1 || got[0] != "src/main.go" {
+		t.Errorf("got %v, want [src/main.go]", got)
+	}
+}
+
+func TestGitChangedFilesEmptyWhenNoCommits(t *testing.T) {
+	repo := newGitRepoWithCommit(t, map[string]string{"x": "1\n"})
+	got, err := gitChangedFiles(repo, "HEAD")
+	if err != nil {
+		t.Fatalf("gitChangedFiles: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected no changed files vs HEAD, got %v", got)
+	}
+}
+
+func TestDefaultAffectedRefFallsBackToHEAD1(t *testing.T) {
+	repo := newGitRepoWithCommit(t, map[string]string{"x": "1\n"})
+	if got := defaultAffectedRef(repo); got != "HEAD~1" {
+		t.Errorf("no origin/* configured: expected HEAD~1, got %q", got)
+	}
+}
+
+func TestCmdAffectedSelectsTouchedTaskOnly(t *testing.T) {
+	requirePkl(t)
+	taskfile := `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local goBuild = new Task {
+  name = "go-build"
+  cmd  = "echo go build"
+  cache = false
+  inputs { "src/**/*.go" }
+}
+local docs = new Task {
+  name = "docs"
+  cmd  = "echo docs"
+  cache = false
+  inputs { "docs/**/*.md" }
+}
+tasks { goBuild; docs }
+`
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"Taskfile.pkl":  taskfile,
+		"src/main.go":   "package main\n",
+		"docs/intro.md": "intro\n",
+	})
+	commitChange(t, repo, map[string]string{
+		"src/main.go": "package main\nfunc main() {}\n",
+	})
+
+	var stdout, stderr bytes.Buffer
+	err := cmdAffected(
+		[]string{"-f", filepath.Join(repo, "Taskfile.pkl"), "--since=HEAD~1", "--dry-run"},
+		&stdout, &stderr,
+	)
+	if err != nil {
+		t.Fatalf("cmdAffected: %v\n%s\n%s", err, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "go-build") {
+		t.Errorf("`go-build` should be in the affected plan:\n%s", out)
+	}
+	// `docs` should NOT appear in the plan — its inputs glob doesn't
+	// match anything in the diff.
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "uncached") || strings.HasPrefix(trimmed, "will run") || strings.HasPrefix(trimmed, "hit") {
+			if strings.Contains(trimmed, " docs") || strings.HasSuffix(trimmed, " docs") {
+				t.Errorf("`docs` should not be affected by src/*.go changes:\n%s", out)
+				break
+			}
+		}
+	}
+}
+
+func TestCmdAffectedNoChangedFilesIsSilent(t *testing.T) {
+	requirePkl(t)
+	taskfile := `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local t = new Task { name = "t"; cmd = "echo t"; cache = false; inputs { "**/*.go" } }
+tasks { t }
+`
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"Taskfile.pkl": taskfile,
+		"main.go":      "package main\n",
+	})
+	var stdout, stderr bytes.Buffer
+	err := cmdAffected(
+		[]string{"-f", filepath.Join(repo, "Taskfile.pkl"), "--since=HEAD"},
+		&stdout, &stderr,
+	)
+	if err != nil {
+		t.Fatalf("cmdAffected: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "no changed files") {
+		t.Errorf("expected `no changed files` notice on stderr, got: %s", stderr.String())
+	}
+}
+
+func TestCmdAffectedPositionalFilterRestrictsPlan(t *testing.T) {
+	requirePkl(t)
+	taskfile := `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local goBuild = new Task {
+  name = "go-build"
+  cmd  = "echo go build"
+  cache = false
+  inputs { "src/**/*.go" }
+}
+local goTest = new Task {
+  name = "go-test"
+  cmd  = "echo go test"
+  cache = false
+  inputs { "src/**/*.go" }
+}
+tasks { goBuild; goTest }
+`
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"Taskfile.pkl": taskfile,
+		"src/main.go":  "package main\n",
+	})
+	commitChange(t, repo, map[string]string{
+		"src/main.go": "package main\nvar _ = 1\n",
+	})
+	var stdout, stderr bytes.Buffer
+	err := cmdAffected(
+		[]string{"-f", filepath.Join(repo, "Taskfile.pkl"), "--since=HEAD~1", "--dry-run", "go-build"},
+		&stdout, &stderr,
+	)
+	if err != nil {
+		t.Fatalf("cmdAffected: %v\n%s", err, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "go-build") {
+		t.Errorf("`go-build` should be in the filtered plan:\n%s", out)
+	}
+	// Filter should drop go-test even though its inputs would match.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "go-test") {
+			t.Errorf("`go-test` should have been filtered out:\n%s", out)
+			break
+		}
+	}
+}
+
+func TestCmdAffectedExpandsToDependents(t *testing.T) {
+	requirePkl(t)
+	// `gen` is directly touched; `build` deps on `gen`; `test` deps on
+	// `build`. The whole chain must end up in the plan even though
+	// build/test's own inputs don't intersect the diff.
+	taskfile := `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+
+local gen = new Task {
+  name = "gen"
+  cmd  = "echo gen"
+  cache = false
+  inputs { "schema/**/*.txt" }
+}
+local build = new Task {
+  name = "build"
+  cmd  = "echo build"
+  cache = false
+  deps { gen }
+}
+local test = new Task {
+  name = "test"
+  cmd  = "echo test"
+  cache = false
+  deps { build }
+}
+tasks { gen; build; test }
+`
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"Taskfile.pkl":   taskfile,
+		"schema/api.txt": "v1\n",
+	})
+	commitChange(t, repo, map[string]string{
+		"schema/api.txt": "v2\n",
+	})
+	var stdout, stderr bytes.Buffer
+	if err := cmdAffected(
+		[]string{"-f", filepath.Join(repo, "Taskfile.pkl"), "--since=HEAD~1", "--dry-run"},
+		&stdout, &stderr,
+	); err != nil {
+		t.Fatalf("cmdAffected: %v\n%s", err, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"gen", "build", "test"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dependent expansion lost %q:\n%s", want, out)
 		}
 	}
 }
