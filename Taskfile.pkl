@@ -9,10 +9,12 @@
 /// *developer* gate.
 ///
 /// Common entry points:
-///   pkf run preflight              vet + tests + version consistency
+///   pkf run preflight              vet + tests + version + format consistency
 ///   pkf run bump --to=0.5.0        sweep pkfire@<old> → pkfire@0.5.0
 ///   pkf run tag                    create the pkfire@<ver> tag locally
-///   pkf run format                 pkl format -w on every Pkl file
+///
+/// Formatting is handled by the built-in `pkf format` subcommand
+/// (no Taskfile wrapper task — it would be a 1:1 redundant alias).
 ///
 /// Relative `amends` so this file always tracks the in-tree schema
 /// (including unreleased changes). External examples use the
@@ -64,25 +66,6 @@ local testPkl: Task = new {
     "pkl/Taskfile.test.pkl"
     "pkl/Taskfile.test.pkl-expected.pcf"
   }
-}
-
-local format: Task = new {
-  name = "format"
-  description = "pkl format -w on every Pkl file in the repo (idempotent)"
-  // Direct `pkl format` invocation so the task does not depend on
-  // `pkf` being on PATH at run time. Interactive users get the same
-  // behavior via `pkf format`, which wraps this with sensible defaults.
-  // Listing the three roots avoids re-formatting build artifacts
-  // under `pkl/.out/` and downloaded packages under the cache.
-  cmd = "pkl format -w pkl examples skills"
-  cache = false
-}
-
-local formatCheck: Task = new {
-  name = "format:check"
-  description = "Report unformatted Pkl files (exit 11 if any)"
-  cmd = "pkl format --diff-name-only pkl examples skills"
-  cache = false
 }
 
 local checkVersion: Task = new {
@@ -138,10 +121,14 @@ local tag: Task = new {
 /// detector + the cross-compile matrix (those are CI's job).
 local preflight: Task = new {
   name = "preflight"
-  description = "Pre-commit gate: vet + go-test + pkl-test + version consistency + format:check"
-  cmd = "echo preflight ok"
+  description = "Pre-commit gate: vet + go-test + pkl-test + version + format consistency"
+  // Format check runs as the cmd (deps run first, then this). `pkl
+  // format --diff-name-only` exits 11 if any Pkl file is unformatted;
+  // that propagates as a task failure, so a misformatted file fails
+  // preflight just like a failing test would.
+  cmd = "pkl format --diff-name-only pkl examples skills"
   cache = false
-  deps { vet; testGo; testPkl; checkVersion; formatCheck }
+  deps { vet; testGo; testPkl; checkVersion }
 }
 
 tasks {
@@ -149,8 +136,6 @@ tasks {
   testGo
   testRace
   testPkl
-  format
-  formatCheck
   checkVersion
   bump
   tag

@@ -17,10 +17,12 @@ Action version all move together — there is one tag per release
   the directory containing the discovered Taskfile (the same
   walk-up resolution every other subcommand uses). `--check`
   flips to `pkl format --diff-name-only`, which exits 11 if any
-  file would change — CI-friendly. The root Taskfile's `format`
-  / `format:check` tasks call `pkl format` directly (the CLI
-  alias is for interactive use, where it shouldn't depend on the
-  consumer having `pkf` itself on PATH inside its own tasks).
+  file would change — CI-friendly. No corresponding Taskfile
+  wrapper task: `pkf format` is itself the canonical entry
+  point, so adding a `format` task on top would just be a 1:1
+  redundant alias. The root Taskfile's `preflight` task does
+  embed the equivalent of `--check` inline so the pre-commit
+  gate still catches drift.
 - **Repo-root `Taskfile.pkl` for project maintenance.** Dogfoods
   pkfire on its own development flow. Tasks: `vet`, `test:go`,
   `test:race`, `test:pkl`, `fmt`, `check-version`, `bump --to=<ver>`,
