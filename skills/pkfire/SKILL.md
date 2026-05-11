@@ -127,7 +127,7 @@ run, then caches the new package locally.
 | [`assets/recipes/11-named-params.pkl`](./assets/recipes/11-named-params.pkl) | Typed flags: `params { ... }` with enum validation, defaults, required params |
 | [`assets/recipes/12-task-library.pkl`](./assets/recipes/12-task-library.pkl) | Library-author skeleton: `abstract module` + `extends` polymorphism, `allTasks` export, runtime dispatch, release-tag scheme |
 | [`assets/recipes/13-git-hooks.pkl`](./assets/recipes/13-git-hooks.pkl) | `pkf hooks install`: tasks named after git events (`pre-commit`, `pre-push`, `commit-msg`) wired to `.git/hooks/<event>` shims |
-| [`assets/recipes/14-secretlint-pre-commit.pkl`](./assets/recipes/14-secretlint-pre-commit.pkl) | secretlint as a `pkf run pre-commit` task — drops the prek dep for the "secretlint-only" hook case |
+| [`assets/recipes/14-secretlint-pre-push.pkl`](./assets/recipes/14-secretlint-pre-push.pkl) | secretlint as a `pkf run pre-push` task (scans the outgoing diff, not every commit) — drops the prek dep for the "secretlint-only" hook case |
 
 ## Project layout
 
