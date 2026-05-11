@@ -25,8 +25,8 @@ local class Platform {
 local platforms: Listing<Platform> = new {
   new { os = "darwin"; arch = "arm64" }
   new { os = "darwin"; arch = "amd64" }
-  new { os = "linux";  arch = "amd64" }
-  new { os = "linux";  arch = "arm64" }
+  new { os = "linux"; arch = "amd64" }
+  new { os = "linux"; arch = "arm64" }
 }
 
 local function buildTask(p: Platform): Task = new {

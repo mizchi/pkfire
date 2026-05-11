@@ -463,6 +463,42 @@ func TestDoctorReportsTaskfileMetadata(t *testing.T) {
 	}
 }
 
+func TestFmtCheckMode(t *testing.T) {
+	requirePkl(t)
+	// A well-formed Pkl file produced by `pkf fmt` itself: fmt --check on
+	// the in-tree schema dir should exit zero because we keep pkl/
+	// formatted at HEAD.
+	var stdout, stderr bytes.Buffer
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pklDir := filepath.Join(repoRoot, "pkl")
+	if err := cmdFmt([]string{"--check", pklDir}, &stdout, &stderr); err != nil {
+		t.Fatalf("expected pkl/ to be clean, got %v\nstdout: %s\nstderr: %s",
+			err, stdout.String(), stderr.String())
+	}
+}
+
+func TestFmtDetectsViolation(t *testing.T) {
+	requirePkl(t)
+	// Write a deliberately mis-indented Pkl file and expect fmt --check
+	// to flag it. Using a temp dir keeps the in-tree files clean.
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.pkl")
+	if err := os.WriteFile(bad, []byte("foo =     1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := cmdFmt([]string{"--check", dir}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected fmt --check to flag bad.pkl, got nil")
+	}
+	if !strings.Contains(err.Error(), "exited 11") {
+		t.Errorf("expected exit-code-11 error, got: %v", err)
+	}
+}
+
 func TestRunRefreshAndNoCacheAreMutuallyExclusive(t *testing.T) {
 	requirePkl(t)
 	var stdout, stderr bytes.Buffer

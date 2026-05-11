@@ -69,10 +69,19 @@ local testPkl: Task = new {
 local fmt: Task = new {
   name = "fmt"
   description = "pkl format -w on every Pkl file in the repo (idempotent)"
-  // `pkl format` accepts file paths or directories and recurses on dirs.
-  // Listing the three roots explicitly avoids re-formatting in-flight
-  // build artifacts under `pkl/.out/` and the cache.
+  // Direct `pkl format` invocation so the task does not depend on
+  // `pkf` being on PATH at run time. Interactive users get the same
+  // behavior via `pkf fmt`, which wraps this with sensible defaults.
+  // Listing the three roots avoids re-formatting build artifacts
+  // under `pkl/.out/` and downloaded packages under the cache.
   cmd = "pkl format -w pkl examples skills"
+  cache = false
+}
+
+local fmtCheck: Task = new {
+  name = "fmt:check"
+  description = "Report unformatted Pkl files (exit 11 if any)"
+  cmd = "pkl format --diff-name-only pkl examples skills"
   cache = false
 }
 
@@ -129,10 +138,10 @@ local tag: Task = new {
 /// detector + the cross-compile matrix (those are CI's job).
 local preflight: Task = new {
   name = "preflight"
-  description = "Pre-commit gate: vet + go-test + pkl-test + version consistency"
+  description = "Pre-commit gate: vet + go-test + pkl-test + version consistency + fmt:check"
   cmd = "echo preflight ok"
   cache = false
-  deps { vet; testGo; testPkl; checkVersion }
+  deps { vet; testGo; testPkl; checkVersion; fmtCheck }
 }
 
 tasks {
@@ -141,6 +150,7 @@ tasks {
   testRace
   testPkl
   fmt
+  fmtCheck
   checkVersion
   bump
   tag

@@ -73,7 +73,8 @@ local generate: Task = new {
 local devServer: Task = new {
   name = "dev-server"
   description = "Start the dev server on a configurable port"
-  cmd = """
+  cmd =
+    """
     if [ "$WATCH" = "true" ]; then
       exec node server.js --port $PORT --watch
     else
@@ -84,7 +85,12 @@ local devServer: Task = new {
   readyPort = 3000
   params {
     new { name = "port"; type = "int"; default = "3000"; description = "TCP port to bind" }
-    new { name = "watch"; type = "bool"; default = "false"; description = "Restart on source change" }
+    new {
+      name = "watch"
+      type = "bool"
+      default = "false"
+      description = "Restart on source change"
+    }
   }
 }
 

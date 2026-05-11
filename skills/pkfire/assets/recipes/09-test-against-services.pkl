@@ -72,7 +72,7 @@ local e2e: Task = new {
   // connections.
   cmd = "pnpm exec playwright test"
   inputs = sources
-  cache = false   // e2e against external state should always run
+  cache = false // e2e against external state should always run
   services { api } // api transitively brings up db
   deps { install }
   tools { ["node"] = "24"; ["pnpm"] = "10" }
@@ -83,12 +83,13 @@ local e2e: Task = new {
 local migrateTest: Task = new {
   name = "migrate-test"
   description = "Verify the migration applies cleanly to a fresh schema"
-  cmd = """
+  cmd =
+    """
     pnpm exec drizzle-kit migrate
     pnpm exec drizzle-kit check
     """
   inputs { "migrations/**/*.sql"; "drizzle.config.ts" }
-  services { db }   // db's readyCmd gates this
+  services { db } // db's readyCmd gates this
   deps { install }
   env { ["DATABASE_URL"] = "postgres://postgres:test@localhost:5432/postgres" }
   tools { ["node"] = "24"; ["pnpm"] = "10" }

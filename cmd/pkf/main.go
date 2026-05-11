@@ -75,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdUp(args[1:], stdout, stderr)
 	case "doctor":
 		return cmdDoctor(args[1:], stdout, stderr)
+	case "fmt":
+		return cmdFmt(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", args[0])
@@ -97,6 +99,7 @@ commands:
   graph [-f FILE] [--format FMT] [--target TASK]
                                         emit DAG (formats: dot, mermaid)
   doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
+  fmt [-f FILE] [--check] [PATH...]     pkl format -w (no PATH = the Taskfile's directory)
   version                               print pkf version
   help                                  show this message
 
@@ -843,6 +846,61 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 			return fmt.Errorf("compute key for %q: %w", name, err)
 		}
 		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
+	}
+	return nil
+}
+
+// cmdFmt is a thin alias for `pkl format`. With no positional args,
+// formats the directory containing the discovered Taskfile.pkl — same
+// walk-up behavior every other subcommand uses, so `pkf fmt` from a
+// nested directory still does the right thing. `--check` flips to
+// `pkl format --diff-name-only`, which exits 11 on violations and
+// prints the path of each unformatted file (CI-friendly).
+func cmdFmt(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("pkf fmt", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	check := fs.Bool("check", false, "report unformatted files without writing (exit 11 if any)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	paths := fs.Args()
+	if len(paths) == 0 {
+		abs, err := resolveFile(fs, *file)
+		if err != nil {
+			return err
+		}
+		// If the discovered Taskfile exists, format its directory.
+		// Otherwise fall back to cwd so `pkf fmt` works in a fresh
+		// Pkl-only project that has no Taskfile yet.
+		if info, statErr := os.Stat(abs); statErr == nil && !info.IsDir() {
+			paths = []string{filepath.Dir(abs)}
+		} else {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			paths = []string{cwd}
+		}
+	}
+	pklArgs := []string{"format"}
+	if *check {
+		pklArgs = append(pklArgs, "--diff-name-only")
+	} else {
+		pklArgs = append(pklArgs, "-w")
+	}
+	pklArgs = append(pklArgs, paths...)
+
+	cmd := exec.Command("pkl", pklArgs...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		// Propagate pkl's exit code so CI can act on --check (11) vs
+		// any other failure (binary missing, parse error, ...).
+		if ee, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("pkl format exited %d", ee.ExitCode())
+		}
+		return fmt.Errorf("pkl format: %w", err)
 	}
 	return nil
 }

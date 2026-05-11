@@ -24,8 +24,8 @@ amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfi
 // import "tasks/test.pkl"  as tt
 
 tasks {
-  // ...bt.tasks
-  // ...tt.tasks
+// ...bt.tasks
+// ...tt.tasks
 }
 
 // ---------------------------------------------------------------

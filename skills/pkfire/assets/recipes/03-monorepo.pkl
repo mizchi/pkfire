@@ -38,8 +38,8 @@ local function testTask(p: Package, taskDeps: Listing<Task>): Task = new {
   cmd = "node --test src/*.test.js"
   workdir = p.path
   inputs = p.sources
-  deps = taskDeps    // NB: parameter is `taskDeps`, not `deps`, to avoid
-                     //     same-name shadow that triggers stack overflow.
+  deps = taskDeps // NB: parameter is `taskDeps`, not `deps`, to avoid
+  //     same-name shadow that triggers stack overflow.
   tools { ["node"] = "24" }
 }
 
@@ -61,7 +61,7 @@ local install: Task = new {
 }
 
 local testGreet: Task = testTask(greet, new Listing<Task> { install })
-local testCli:   Task = testTask(cli,   new Listing<Task> { install; testGreet })
+local testCli: Task = testTask(cli, new Listing<Task> { install; testGreet })
 
 local ci: Task = new {
   name = "ci"

@@ -29,8 +29,8 @@ local class Platform {
 local platforms: Listing<Platform> = new {
   new { os = "darwin"; arch = "arm64" }
   new { os = "darwin"; arch = "amd64" }
-  new { os = "linux";  arch = "amd64" }
-  new { os = "linux";  arch = "arm64" }
+  new { os = "linux"; arch = "amd64" }
+  new { os = "linux"; arch = "arm64" }
 }
 
 local function buildTask(p: Platform): Task = new {
@@ -124,7 +124,8 @@ local integration: Task = new {
 local initSmoke: Task = new {
   name = "init-smoke"
   description = "pkf init writes a structurally valid Taskfile (end-to-end)"
-  cmd = """
+  cmd =
+    """
     rm -rf bin/init-smoke && mkdir -p bin/init-smoke
     bin/pkf-$(go env GOOS)-$(go env GOARCH) init -f bin/init-smoke/Taskfile.pkl
     grep -q '^amends ' bin/init-smoke/Taskfile.pkl

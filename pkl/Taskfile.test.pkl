@@ -56,18 +56,19 @@ facts {
   }
 
   ["readyPort accepts a valid TCP port"] {
-    (new Schema.Task { name = "db"; cmd = "postgres"; service = true; readyPort = 5432 }).readyPort == 5432
+    (new Schema.Task { name = "db"; cmd = "postgres"; service = true; readyPort = 5432 }).readyPort
+      == 5432
   }
 
   ["readyPort rejects values outside the TCP range"] {
-    module.catch(() ->
-      (new Schema.Task { name = "x"; cmd = "y"; readyPort = 99999 }).readyPort
-    ) != null
+    module.catch(() -> (new Schema.Task { name = "x"; cmd = "y"; readyPort = 99999 }).readyPort)
+      != null
   }
 
   ["negative shutdownTimeoutSeconds is rejected"] {
     module.catch(() ->
-      (new Schema.Task { name = "x"; cmd = "y"; shutdownTimeoutSeconds = -1 }).shutdownTimeoutSeconds
+      (new Schema.Task { name = "x"; cmd = "y"; shutdownTimeoutSeconds = -1 })
+        .shutdownTimeoutSeconds
     ) != null
   }
 
@@ -109,9 +110,16 @@ facts {
   }
 
   ["enum param round-trips"] {
-    let (p = new Schema.Param { name = "bump"; type = "enum"; choices { "patch"; "minor"; "major" }; default = "patch" })
-      let (t = new Schema.Task { name = "bump-version"; cmd = "echo $BUMP"; params { p } })
-        t.params.toList().first.name == "bump"
+    let (
+      p = new Schema.Param {
+        name = "bump"
+        type = "enum"
+        choices { "patch"; "minor"; "major" }
+        default = "patch"
+      }
+    )
+    let (t = new Schema.Task { name = "bump-version"; cmd = "echo $BUMP"; params { p } })
+      t.params.toList().first.name == "bump"
   }
 
   ["param name with uppercase is rejected"] {
