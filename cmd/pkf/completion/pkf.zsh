@@ -11,6 +11,7 @@ _pkf() {
     'run:run one or more tasks'
     'up:supervise long-running services'
     'doctor:diagnose pkfire setup'
+    'lint:detect Taskfile dead code patterns'
     'format:pkl format -w wrapper'
     'hooks:manage .git/hooks shims'
     'affected:run tasks whose inputs changed since <ref>'

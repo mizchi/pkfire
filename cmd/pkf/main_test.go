@@ -654,6 +654,56 @@ func TestDoctorReportsTaskfileMetadata(t *testing.T) {
 	}
 }
 
+func TestLintDetectsUnlistedLocalTask(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local used = new Task { name = "used"; cmd = "echo used" }
+local dead = new Task { name = "dead"; cmd = "echo dead" }
+tasks { used }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected lint finding for unlisted local task")
+	}
+	out := stdout.String()
+	for _, want := range []string{"dead", "local task", "not included in tasks"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("lint output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestLintAllowsTasksListedViaSpread(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task { name = "build"; cmd = "echo build" }
+local grouped: Listing<Task> = new { build }
+tasks { ...grouped }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdLint: %v\n%s", err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ok: no lint findings") {
+		t.Fatalf("expected success message, got:\n%s", stdout.String())
+	}
+}
+
+func TestLintSkipsDynamicTaskNames(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local suffix = "build"
+local live = new Task { name = "live"; cmd = "echo live" }
+local dynamic = new Task { name = "dyn-\(suffix)"; cmd = "echo dynamic" }
+tasks { live }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("dynamic names should be skipped for now: %v\n%s", err, stdout.String())
+	}
+}
+
 func TestFormatCheckMode(t *testing.T) {
 	requirePkl(t)
 	// A well-formed Pkl file produced by `pkf format` itself: format

@@ -83,7 +83,8 @@ local testPkl: Task = new {
 local testExamples: Task = new {
   name = "test:examples"
   description = "pkl eval every published example Taskfile"
-  cmd = #"""
+  cmd =
+    #"""
     set -euo pipefail
     for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl; do
       echo "  eval $f"
@@ -96,6 +97,18 @@ local testExamples: Task = new {
     "examples/node/Taskfile.pkl"
     "examples/rust/Taskfile.pkl"
     "examples/monorepo/Taskfile.pkl"
+  }
+}
+
+local lintTaskfile: Task = new {
+  name = "lint:taskfile"
+  description = "Detect local Task definitions omitted from tasks"
+  cmd = "go run ./cmd/pkf lint"
+  cache = false
+  inputs {
+    ...sources
+    "Taskfile.pkl"
+    "pkl/Taskfile.pkl"
   }
 }
 
@@ -133,7 +146,8 @@ local tag: Task = new {
   name = "tag"
   description = "Create the pkfire@<ver> tag locally (no push)"
   cache = false
-  cmd = """
+  cmd =
+    """
     set -euo pipefail
     ver=$(pkl eval -f json -x package.version pkl/PklProject | tr -d '"')
     tagname="pkfire@$ver"
@@ -159,7 +173,7 @@ local preflight: Task = new {
   // preflight just like a failing test would.
   cmd = "pkl format --diff-name-only pkl examples skills"
   cache = false
-  deps { vet; testGo; testPkl; testExamples; checkVersion; testReleaseNotes }
+  deps { vet; testGo; testPkl; testExamples; lintTaskfile; checkVersion; testReleaseNotes }
 }
 
 /// Verify the release-notes extractor stays correct. Catches
@@ -192,6 +206,7 @@ tasks {
   testRace
   testPkl
   testExamples
+  lintTaskfile
   testReleaseNotes
   checkVersion
   bump

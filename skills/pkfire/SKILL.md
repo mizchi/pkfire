@@ -771,6 +771,7 @@ pkf graph                      # Graphviz DOT
 pkf graph --format mermaid     # GitHub-renderable
 pkf graph --format tree        # terminal-readable dependency tree
 pkf graph --target build       # only the subgraph rooted at `build`
+pkf lint                       # detect local Task definitions omitted from tasks { ... }
 pkf doctor                     # diagnose pkl / cache / remote / Taskfile setup
 ```
 

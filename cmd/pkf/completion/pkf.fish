@@ -11,6 +11,7 @@ complete -c pkf -f -n '__fish_use_subcommand' -a list      -d 'list declared tas
 complete -c pkf -f -n '__fish_use_subcommand' -a run       -d 'run one or more tasks'
 complete -c pkf -f -n '__fish_use_subcommand' -a up        -d 'supervise long-running services'
 complete -c pkf -f -n '__fish_use_subcommand' -a doctor    -d 'diagnose pkfire setup'
+complete -c pkf -f -n '__fish_use_subcommand' -a lint      -d 'detect Taskfile dead code patterns'
 complete -c pkf -f -n '__fish_use_subcommand' -a format    -d 'pkl format -w wrapper'
 complete -c pkf -f -n '__fish_use_subcommand' -a hooks     -d 'manage .git/hooks shims'
 complete -c pkf -f -n '__fish_use_subcommand' -a affected  -d 'run tasks whose inputs changed since <ref>'

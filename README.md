@@ -224,6 +224,7 @@ pkf affected --watch           # re-evaluate affected set on every file change
 pkf graph --target build --depth=1   # show only direct deps (one hop)
 pkf graph --format tree        # terminal-readable dependency tree (roots only when no target)
 pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
+pkf lint                       # detect local Task definitions omitted from tasks { ... }
 pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
 pkf pkl-cache warm             # pre-populate ~/.pkl/cache (CI prefetch step)
 pkf <plugin> <args>            # exec `pkf-<plugin>` on PATH (git-style fallthrough)

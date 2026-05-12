@@ -13,7 +13,7 @@ _pkf() {
 
   # First positional = subcommand.
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "init list run up doctor format hooks affected clean cache completion graph version help" -- "$cur"))
+    COMPREPLY=($(compgen -W "init list run up doctor lint format hooks affected clean cache completion graph version help" -- "$cur"))
     return
   fi
 

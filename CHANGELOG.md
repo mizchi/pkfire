@@ -23,6 +23,8 @@ Action version all move together — there is one tag per release
   to human-readable list output.
 - `pkf graph --format tree` emits a terminal-readable dependency
   tree with `--target` and `--depth=N` support.
+- `pkf lint` detects local `Task` definitions in the current
+  Taskfile that are not rendered through `tasks { ... }`.
 
 ## [0.6.0] - 2026-05-11
 

@@ -79,6 +79,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdUp(args[1:], stdout, stderr)
 	case "doctor":
 		return cmdDoctor(args[1:], stdout, stderr)
+	case "lint":
+		return cmdLint(args[1:], stdout, stderr)
 	case "format":
 		return cmdFormat(args[1:], stdout, stderr)
 	case "hooks":
@@ -133,6 +135,7 @@ commands:
   graph [-f FILE] [--format FMT] [--target TASK] [--all] [--unsorted]
                                         emit DAG (formats: dot, mermaid, tree)
   doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
+  lint [-f FILE]                        detect Taskfile dead code patterns
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   hooks <install|uninstall|list> [-f FILE] [--force]
                                         manage .git/hooks shims that delegate to pkf run
@@ -485,6 +488,216 @@ func taskVisibility(t *config.Task) string {
 		return "public"
 	}
 	return t.Visibility
+}
+
+type lintFinding struct {
+	Path    string
+	Line    int
+	Message string
+}
+
+type localTaskDecl struct {
+	VarName  string
+	TaskName string
+	Line     int
+}
+
+func cmdLint(args []string, stdout, _ io.Writer) error {
+	fs := flag.NewFlagSet("pkf lint", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("lint takes no positional args, got %v", fs.Args())
+	}
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return err
+	}
+	findings := lintDeadLocalTasks(abs, data, tf)
+	if len(findings) == 0 {
+		fmt.Fprintln(stdout, "ok: no lint findings")
+		return nil
+	}
+	for _, f := range findings {
+		fmt.Fprintf(stdout, "%s:%d: %s\n", f.Path, f.Line, f.Message)
+	}
+	return fmt.Errorf("lint found %d issue%s", len(findings), plural(len(findings)))
+}
+
+func lintDeadLocalTasks(path string, data []byte, tf *config.Taskfile) []lintFinding {
+	rendered := make(map[string]bool, len(tf.Tasks))
+	for name := range tf.Tasks {
+		rendered[name] = true
+	}
+	var findings []lintFinding
+	for _, decl := range scanLocalTaskDecls(data) {
+		if decl.TaskName == "" {
+			continue
+		}
+		if !rendered[decl.TaskName] {
+			findings = append(findings, lintFinding{
+				Path: path,
+				Line: decl.Line,
+				Message: fmt.Sprintf("local task %q declares name %q but is not included in tasks",
+					decl.VarName, decl.TaskName),
+			})
+		}
+	}
+	return findings
+}
+
+var localTaskDeclRE = regexp.MustCompile(`\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?:[A-Za-z_][A-Za-z0-9_.]*\.)?Task)?\s*=\s*new(?:\s+(?:[A-Za-z_][A-Za-z0-9_.]*\.)?Task)?\s*\{`)
+var staticTaskNameRE = regexp.MustCompile(`\bname\s*=\s*"([A-Za-z][A-Za-z0-9_:./-]*)"`)
+
+func scanLocalTaskDecls(data []byte) []localTaskDecl {
+	src := string(data)
+	masked := maskPklTrivia(src)
+	matches := localTaskDeclRE.FindAllStringSubmatchIndex(masked, -1)
+	decls := make([]localTaskDecl, 0, len(matches))
+	for _, m := range matches {
+		if !strings.Contains(masked[m[0]:m[1]], "Task") {
+			continue
+		}
+		open := strings.LastIndex(masked[m[0]:m[1]], "{")
+		if open < 0 {
+			continue
+		}
+		open += m[0]
+		close := findMatchingBrace(masked, open)
+		if close < 0 {
+			continue
+		}
+		body := src[open : close+1]
+		taskName := ""
+		if nameMatch := staticTaskNameRE.FindStringSubmatch(body); len(nameMatch) == 2 && !strings.Contains(nameMatch[1], `\(`) {
+			taskName = nameMatch[1]
+		}
+		decls = append(decls, localTaskDecl{
+			VarName:  src[m[2]:m[3]],
+			TaskName: taskName,
+			Line:     1 + strings.Count(src[:m[0]], "\n"),
+		})
+	}
+	return decls
+}
+
+func findMatchingBrace(src string, open int) int {
+	depth := 0
+	for i := open; i < len(src); i++ {
+		switch src[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func maskPklTrivia(src string) string {
+	out := []byte(src)
+	for i := 0; i < len(out); {
+		switch {
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '/':
+			for i < len(out) && out[i] != '\n' {
+				out[i] = ' '
+				i++
+			}
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
+			out[i], out[i+1] = ' ', ' '
+			i += 2
+			for i+1 < len(out) && !(out[i] == '*' && out[i+1] == '/') {
+				if out[i] != '\n' {
+					out[i] = ' '
+				}
+				i++
+			}
+			if i+1 < len(out) {
+				out[i], out[i+1] = ' ', ' '
+				i += 2
+			}
+		case out[i] == '"':
+			i = maskPklString(out, i)
+		default:
+			i++
+		}
+	}
+	return string(out)
+}
+
+func maskPklString(out []byte, start int) int {
+	quoteCount := 1
+	for start+quoteCount < len(out) && out[start+quoteCount] == '"' {
+		quoteCount++
+	}
+	if quoteCount >= 3 {
+		for j := 0; j < quoteCount && start+j < len(out); j++ {
+			out[start+j] = ' '
+		}
+		i := start + quoteCount
+		for i+quoteCount-1 < len(out) {
+			if repeatedByteAt(out, i, '"', quoteCount) {
+				for j := 0; j < quoteCount; j++ {
+					out[i+j] = ' '
+				}
+				return i + quoteCount
+			}
+			if out[i] != '\n' {
+				out[i] = ' '
+			}
+			i++
+		}
+		return len(out)
+	}
+	out[start] = ' '
+	i := start + 1
+	for i < len(out) {
+		if out[i] == '\\' {
+			out[i] = ' '
+			if i+1 < len(out) && out[i+1] != '\n' {
+				out[i+1] = ' '
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if out[i] == '"' {
+			out[i] = ' '
+			return i + 1
+		}
+		if out[i] != '\n' {
+			out[i] = ' '
+		}
+		i++
+	}
+	return i
+}
+
+func repeatedByteAt(out []byte, start int, b byte, count int) bool {
+	if start+count > len(out) {
+		return false
+	}
+	for i := 0; i < count; i++ {
+		if out[start+i] != b {
+			return false
+		}
+	}
+	return true
 }
 
 // listParamJSON mirrors config.Param for the --json output. Kept as
