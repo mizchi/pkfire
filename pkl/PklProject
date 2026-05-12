@@ -3,7 +3,7 @@ amends "pkl:Project"
 package {
   name = "pkfire"
   baseUri = "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/\(name)"
-  version = "0.6.0"
+  version = "0.7.0"
   packageZipUrl =
     "https://github.com/mizchi/pkfire/releases/download/\(name)@\(version)/\(name)@\(version).zip"
   description = "Typed task runner with Bazel-style incremental caching, configured in Pkl."

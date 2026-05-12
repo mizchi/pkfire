@@ -10,6 +10,8 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-13
+
 ### Added
 
 - `pkf run -- args...` now forwards tail args to the `default`
@@ -476,7 +478,11 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.5.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.7.0...HEAD
+[0.7.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.7.0
+[0.6.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.6.0
 [0.5.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.5.0
 [0.4.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.4.0
+[0.3.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.3.0
+[0.2.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.2.0
 [0.1.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.1.0

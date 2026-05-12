@@ -18,7 +18,7 @@
 /// are kept in comments so the file evaluates standalone. To use,
 /// uncomment the imports / spreads and create the four fragments
 /// under `tasks/` and `shared/`.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.7.0#/Taskfile.pkl"
 
 // import "tasks/build.pkl" as bt
 // import "tasks/test.pkl"  as tt

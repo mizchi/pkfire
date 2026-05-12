@@ -84,7 +84,7 @@
 /// CONSUMER side (their Taskfile.pkl)
 /// ============================================================
 ///
-///     amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0#/Taskfile.pkl"
+///     amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.7.0#/Taskfile.pkl"
 ///     import  "package://pkg.pkl-lang.org/github.com/<you>/mylib/mylib@0.1.0#/auto.pkl" as mylib
 ///
 ///     tasks { ...mylib.allTasks }
@@ -102,7 +102,7 @@
 ///     }
 ///     dependencies {
 ///       ["pkfire"] {
-///         uri = "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0"
+///         uri = "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.7.0"
 ///       }
 ///     }
 ///
@@ -116,7 +116,7 @@
 /// from CI so consumers can `uses: <you>/mylib@v0.1.0` from a
 /// GitHub Action without hitting the GHA parser's
 /// `<repo>@<ref-with-@>` bug.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.6.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.7.0#/Taskfile.pkl"
 
 local stub: Task = new {
   name = "stub"
