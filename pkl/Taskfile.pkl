@@ -5,14 +5,15 @@
 ///     `deps` references to other Task instances. Typos in dependency
 ///     names become Pkl name-resolution errors at evaluation time.
 ///   - `tasks: Listing<Task>` collects the authored tasks; the order is
-///     informational. The execution order is the topological sort over
-///     `deps`, computed by `pkf` at runtime.
+///     preserved for human-facing display (`pkf list --unsorted`,
+///     `pkf graph --unsorted`). The execution order is the topological
+///     sort over `deps`, computed by `pkf` at runtime.
 ///
 /// Wire format:
 ///   - `output.value` is a Mapping<String, RenderedTask> keyed by task
-///     name, with `deps` collapsed to a list of names. This is what the
-///     Go runner deserializes — keeping the wire shape identical to
-///     earlier phases so the runner did not need a decoder change.
+///     name, plus a `taskOrder` list preserving the authored `tasks`
+///     order, with `deps` collapsed to a list of names. This is what the
+///     Go runner deserializes.
 ///   - Duplicate names raise an error before output is rendered.
 @ModuleInfo { minPklVersion = "0.31.0" }
 open module pkfire.Taskfile
@@ -112,6 +113,11 @@ class Task {
 
   /// Free-form description shown by `pkf list`.
   description: String? = null
+
+  /// Visibility for human-facing discovery commands. `public` tasks show
+  /// up in `pkf list` / `pkf graph` by default; `internal` tasks stay
+  /// runnable by name but are hidden unless those commands receive `--all`.
+  visibility: "public" | "internal" = "public"
 
   /// When true, this task is a long-running service. It is started by
   /// `pkf up` and supervised until the up session ends (Ctrl+C or a
@@ -216,6 +222,7 @@ class RenderedTask {
   cache: Boolean
   workdir: String?
   description: String?
+  visibility: String
   service: Boolean
   shutdownTimeoutSeconds: Int
   services: Listing<String>
@@ -231,6 +238,7 @@ class RenderedTask {
 /// up the Go target type via `pkl.RegisterMapping("pkfire.Taskfile#Rendered", ...)`.
 class Rendered {
   defaults: Defaults
+  taskOrder: Listing<String>
   tasks: Mapping<String, RenderedTask>
 }
 
@@ -268,6 +276,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       cache = t.cache
       workdir = t.workdir
       description = t.description
+      visibility = t.visibility
       service = t.service
       shutdownTimeoutSeconds = t.shutdownTimeoutSeconds
       services = new Listing { for (s in t.services) { s.name } }
@@ -294,6 +303,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
 output {
   value = new Rendered {
     defaults = module.defaults
+    taskOrder = new Listing { for (t in module.tasks) { t.name } }
     tasks =
       if (duplicateNames.isEmpty)
         rendered

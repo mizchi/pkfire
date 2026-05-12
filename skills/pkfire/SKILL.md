@@ -75,6 +75,7 @@ class Task {
   cache: Boolean = true                           // false = always run
   workdir: String?     = null                     // relative to Taskfile dir
   description: String? = null
+  visibility: "public"|"internal" = "public"      // hidden from list/graph unless --all
   service: Boolean = false                        // long-running, supervised by `pkf up`
   shutdownTimeoutSeconds: Int = 5                 // SIGTERM grace before SIGKILL
   services: Listing<Task> = new {}                // services to bring up while this task runs
@@ -731,6 +732,7 @@ common selection questions:
 
 ```sh
 pkf run                        # no args → the task named `default` (errors clearly when absent)
+pkf run -- a b c               # no task name + tail args → `default` receives "$@"
 pkf run a b c                  # multi-target: topological union of all subgraphs
 pkf run --refresh build        # skip cache lookup but re-store result (re-baseline)
 pkf run --no-cache test        # skip lookup AND store for this run
@@ -759,11 +761,15 @@ auto-pulled in just because they're always-run.
 ### Inspection (read-only)
 
 ```sh
-pkf list                       # one task per line + description
+pkf list                       # public tasks, one per line + description
+pkf list --unsorted            # Taskfile declaration order
+pkf list --all                 # include visibility = "internal" tasks
+pkf list --color=always        # force ANSI color (auto, always, never)
 pkf list -v                    # cmd preview + deps + cache status
 pkf list --json                # machine-readable; for editor / CI tooling
 pkf graph                      # Graphviz DOT
 pkf graph --format mermaid     # GitHub-renderable
+pkf graph --format tree        # terminal-readable dependency tree
 pkf graph --target build       # only the subgraph rooted at `build`
 pkf doctor                     # diagnose pkl / cache / remote / Taskfile setup
 ```

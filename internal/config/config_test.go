@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -47,5 +48,37 @@ func TestLoadBasicExample(t *testing.T) {
 	}
 	if tf.Defaults.Shell != "bash" {
 		t.Errorf("defaults.Shell = %q", tf.Defaults.Shell)
+	}
+}
+
+func TestLoadPreservesTaskOrderAndVisibility(t *testing.T) {
+	requirePkl(t)
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	taskfile := filepath.Join(dir, "Taskfile.pkl")
+	body := `amends "` + filepath.ToSlash(filepath.Join(repoRoot, "pkl/Taskfile.pkl")) + `"
+
+local z = new Task { name = "z"; cmd = "echo z"; visibility = "internal" }
+local a = new Task { name = "a"; cmd = "echo a" }
+tasks { z; a }
+`
+	if err := os.WriteFile(taskfile, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tf, err := config.Load(context.Background(), taskfile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(tf.TaskOrder) != 2 || tf.TaskOrder[0] != "z" || tf.TaskOrder[1] != "a" {
+		t.Fatalf("TaskOrder = %v, want [z a]", tf.TaskOrder)
+	}
+	if got := tf.Tasks["z"].Visibility; got != "internal" {
+		t.Fatalf("z.Visibility = %q, want internal", got)
+	}
+	if got := tf.Tasks["a"].Visibility; got != "public" {
+		t.Fatalf("a.Visibility = %q, want public", got)
 	}
 }

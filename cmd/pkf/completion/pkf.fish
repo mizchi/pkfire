@@ -17,7 +17,7 @@ complete -c pkf -f -n '__fish_use_subcommand' -a affected  -d 'run tasks whose i
 complete -c pkf -f -n '__fish_use_subcommand' -a clean     -d 'remove declared outputs'
 complete -c pkf -f -n '__fish_use_subcommand' -a cache     -d 'inspect / clean the local CAS'
 complete -c pkf -f -n '__fish_use_subcommand' -a completion -d 'emit shell completion script'
-complete -c pkf -f -n '__fish_use_subcommand' -a graph     -d 'emit DAG (dot / mermaid)'
+complete -c pkf -f -n '__fish_use_subcommand' -a graph     -d 'emit DAG (dot / mermaid / tree)'
 complete -c pkf -f -n '__fish_use_subcommand' -a version   -d 'print pkf version'
 complete -c pkf -f -n '__fish_use_subcommand' -a help      -d 'show usage'
 
@@ -28,6 +28,7 @@ complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up' -a '(_
 complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
 complete -c pkf -f -n '__fish_seen_subcommand_from cache' -a 'stats prune rm clear'
 complete -c pkf -f -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -l color -a 'auto always never'
 
 # `pkf graph --format <TAB>`.
-complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid'
+complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree'

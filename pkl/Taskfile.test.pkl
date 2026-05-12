@@ -105,6 +105,20 @@ facts {
     (new Schema.Task { name = "run"; cmd = "node \"$@\""; acceptsArgs = true }).acceptsArgs == true
   }
 
+  ["visibility defaults to public"] {
+    build.visibility == "public"
+  }
+
+  ["visibility can be internal"] {
+    (new Schema.Task { name = "helper"; cmd = "echo helper"; visibility = "internal" }).visibility
+      == "internal"
+  }
+
+  ["unknown visibility is rejected"] {
+    module.catch(() -> (new Schema.Task { name = "x"; cmd = "y"; visibility = "hidden" }).visibility)
+      != null
+  }
+
   ["params defaults to empty"] {
     build.params.toList().isEmpty
   }

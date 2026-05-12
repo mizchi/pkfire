@@ -10,6 +10,20 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- `pkf run -- args...` now forwards tail args to the `default`
+  task when no explicit task name is given.
+- `pkf list --unsorted` / `pkf graph --unsorted` preserve
+  Taskfile declaration order, and `pkf list` aligns description
+  columns.
+- `Task.visibility = "internal"` hides helper tasks from
+  `pkf list` / `pkf graph` by default; `--all` reveals them.
+- `pkf list --color=auto|always|never` adds optional ANSI color
+  to human-readable list output.
+- `pkf graph --format tree` emits a terminal-readable dependency
+  tree with `--target` and `--depth=N` support.
+
 ## [0.6.0] - 2026-05-11
 
 Pkl schema is unchanged from 0.4.0 / 0.5.0 — this release ships

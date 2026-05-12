@@ -208,6 +208,7 @@ func TestSplitRunArgsAcceptsTrailingFlags(t *testing.T) {
 		{"multi target + flag after", []string{"a", "b", "--watch"}, nil, []string{"a", "b"}, []string{"--watch"}},
 		{"global + multi target", []string{"-j", "8", "a", "b"}, []string{"-j", "8"}, []string{"a", "b"}, nil},
 		{"no task (default fallback hint)", []string{"--watch"}, []string{"--watch"}, nil, nil},
+		{"default tail args", []string{"--", "a", "b"}, nil, nil, []string{"--", "a", "b"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -445,6 +446,195 @@ func TestListJSONAndVerboseAreMutuallyExclusive(t *testing.T) {
 	err := cmdList([]string{"-f", basicTaskfile(t), "--json", "-v"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "subsumes") {
 		t.Fatalf("expected --json + -v to error, got %v", err)
+	}
+}
+
+func TestListUnsortedUsesTaskfileOrderAndAlignsDescriptions(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local z = new Task { name = "z"; cmd = "echo z"; description = "first" }
+local long = new Task { name = "long-name"; cmd = "echo long"; description = "second" }
+tasks { z; long }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", taskfile, "--unsorted"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList --unsorted: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines:\n%s", len(lines), stdout.String())
+	}
+	if !strings.HasPrefix(lines[0], "z") || !strings.HasPrefix(lines[1], "long-name") {
+		t.Fatalf("expected declaration order [z long-name], got:\n%s", stdout.String())
+	}
+	if !strings.Contains(lines[0], "z          — first") {
+		t.Fatalf("expected description column to align with long-name:\n%s", stdout.String())
+	}
+}
+
+func TestListHidesInternalTasksUnlessAll(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local public = new Task { name = "public"; cmd = "echo public"; description = "shown" }
+local helper = new Task { name = "helper"; cmd = "echo helper"; description = "hidden"; visibility = "internal" }
+tasks { public; helper }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", taskfile, "--unsorted"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList: %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "helper") || !strings.Contains(out, "public") {
+		t.Fatalf("default list should show only public tasks:\n%s", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := cmdList([]string{"-f", taskfile, "--unsorted", "--all"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList --all: %v", err)
+	}
+	out = stdout.String()
+	if !strings.Contains(out, "helper") || !strings.Contains(out, "[internal]") {
+		t.Fatalf("--all should reveal internal tasks with a marker:\n%s", out)
+	}
+}
+
+func TestListColorAlwaysColorsDescriptionAndInternalMarker(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local public = new Task { name = "public"; cmd = "echo public"; description = "shown" }
+local helper = new Task { name = "helper"; cmd = "echo helper"; description = "hidden"; visibility = "internal" }
+tasks { public; helper }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", taskfile, "--all", "--color=always"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList --color=always: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"\x1b[33m[internal]\x1b[0m", "\x1b[2m— shown\x1b[0m"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("colored list missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestListColorNeverSuppressesANSI(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local public = new Task { name = "public"; cmd = "echo public"; description = "shown" }
+tasks { public }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", taskfile, "--color=never"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList --color=never: %v", err)
+	}
+	if strings.Contains(stdout.String(), "\x1b[") {
+		t.Fatalf("--color=never should not emit ANSI escapes:\n%s", stdout.String())
+	}
+}
+
+func TestListRejectsUnknownColorMode(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	err := cmdList([]string{"-f", basicTaskfile(t), "--color=rainbow"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown color mode") {
+		t.Fatalf("expected unknown color mode error, got %v", err)
+	}
+}
+
+func TestGraphMermaidHidesInternalTasksUnlessAll(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local helper = new Task { name = "helper"; cmd = "echo helper"; visibility = "internal" }
+local public = new Task { name = "public"; cmd = "echo public"; deps { helper } }
+tasks { helper; public }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", taskfile, "--format", "mermaid"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph mermaid: %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "helper") || !strings.Contains(out, "public") {
+		t.Fatalf("default graph should show only public tasks:\n%s", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := cmdGraph([]string{"-f", taskfile, "--format", "mermaid", "--all"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph mermaid --all: %v", err)
+	}
+	out = stdout.String()
+	if !strings.Contains(out, "helper --> public") {
+		t.Fatalf("--all graph should include internal dependency edge:\n%s", out)
+	}
+}
+
+func TestGraphUnsortedUsesTaskfileOrder(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local z = new Task { name = "z"; cmd = "echo z" }
+local a = new Task { name = "a"; cmd = "echo a" }
+tasks { z; a }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", taskfile, "--format", "mermaid", "--unsorted"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph --unsorted: %v", err)
+	}
+	out := stdout.String()
+	zIdx := strings.Index(out, "z[")
+	aIdx := strings.Index(out, "a[")
+	if zIdx < 0 || aIdx < 0 || zIdx > aIdx {
+		t.Fatalf("expected declaration order z before a:\n%s", out)
+	}
+}
+
+func TestGraphTreeTargetAndDepth(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local d = new Task { name = "d"; cmd = "echo d" }
+local c = new Task { name = "c"; cmd = "echo c"; deps { d } }
+local b = new Task { name = "b"; cmd = "echo b"; deps { c } }
+local a = new Task { name = "a"; cmd = "echo a"; deps { b } }
+tasks { a; b; c; d }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", taskfile, "--format", "tree", "--target", "a", "--depth=1"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph tree: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "a\n└── b") {
+		t.Fatalf("tree output missing target and direct dep:\n%s", out)
+	}
+	if strings.Contains(out, "c") || strings.Contains(out, "d") {
+		t.Fatalf("--depth=1 should omit grand-deps:\n%s", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := cmdGraph([]string{"-f", taskfile, "--format", "tree", "--target", "a"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph tree default depth: %v", err)
+	}
+	out = stdout.String()
+	if !strings.Contains(out, "    └── c") || strings.Contains(out, "d") {
+		t.Fatalf("tree default depth should include two hops and omit deeper deps:\n%s", out)
+	}
+}
+
+func TestGraphTreeWithoutTargetUsesRootTasks(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local lint = new Task { name = "lint"; cmd = "echo lint" }
+local test = new Task { name = "test"; cmd = "echo test"; deps { lint } }
+local push = new Task { name = "push"; cmd = "echo push"; deps { test } }
+tasks { lint; test; push }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", taskfile, "--format", "tree", "--unsorted"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph tree: %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "\nlint\n") || !strings.HasPrefix(out, "push\n") {
+		t.Fatalf("tree without --target should start from root tasks only:\n%s", out)
 	}
 }
 
@@ -1053,11 +1243,11 @@ func TestRunDryRunPrintsPlanWithoutExecuting(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		`plan for "test"`,           // header
-		"build", "test",             // both tasks in the subgraph
-		"go build", "go test",       // truncated cmd previews
-		"status", "action key",      // table header
-		"summary:", "will run",      // bottom summary line
+		`plan for "test"`, // header
+		"build", "test",   // both tasks in the subgraph
+		"go build", "go test", // truncated cmd previews
+		"status", "action key", // table header
+		"summary:", "will run", // bottom summary line
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry-run output missing %q:\n%s", want, out)
@@ -1100,6 +1290,22 @@ func taskfileWithTasks(t *testing.T, body string) string {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Taskfile.pkl")
 	full := `amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.4.0#/Taskfile.pkl"
+` + body
+	if err := os.WriteFile(path, []byte(full), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func taskfileWithLocalSchema(t *testing.T, body string) string {
+	t.Helper()
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Taskfile.pkl")
+	full := `amends "` + filepath.ToSlash(filepath.Join(repoRoot, "pkl/Taskfile.pkl")) + `"
 ` + body
 	if err := os.WriteFile(path, []byte(full), 0o644); err != nil {
 		t.Fatal(err)
@@ -1335,6 +1541,35 @@ tasks { def }
 	}
 	if !strings.Contains(stdout.String(), `"default"`) {
 		t.Errorf("expected default task in plan header:\n%s", stdout.String())
+	}
+}
+
+func TestRunDefaultTaskForwardsTailArgs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local def = new Task { name = "default"; cmd = "echo defaulted"; cache = false; acceptsArgs = true }
+tasks { def }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "--dry-run", "--", "patch", "VERSION", "--write"}, &stdout, &stderr); err != nil {
+		t.Fatalf("default dry-run with tail args: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"default"`) || !strings.Contains(out, `↳ -- patch VERSION --write`) {
+		t.Errorf("expected default task and forwarded args in plan:\n%s", out)
+	}
+}
+
+func TestRunDefaultTaskRejectsTailArgsWhenNotAccepted(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithTasks(t, `
+local def = new Task { name = "default"; cmd = "echo defaulted"; cache = false }
+tasks { def }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdRun([]string{"-f", taskfile, "--dry-run", "--", "patch"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "does not accept positional args") {
+		t.Fatalf("expected acceptsArgs error, got %v", err)
 	}
 }
 

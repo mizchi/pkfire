@@ -177,7 +177,10 @@ cd /repo/root && pkf run ci               # uses /repo/root/Taskfile.pkl
 ```
 
 ```sh
-pkf list                       # show declared tasks
+pkf list                       # show public tasks
+pkf list --unsorted            # show tasks in Taskfile declaration order
+pkf list --all                 # include internal tasks
+pkf list --color=always        # force ANSI color (auto, always, never)
 pkf list -v                    # add cmd preview and deps
 pkf list --json                # machine-readable (for editor / CI tooling)
 pkf run test                   # builds first, then tests; second run hits cache
@@ -200,6 +203,7 @@ pkf hooks list                 # show which hook events are wired
 pkf affected --since=origin/main test  # run only tasks affected by the PR diff
 pkf run a b c                  # run multiple targets in one go (topological union)
 pkf run                        # no args = the `default` task (errors if absent)
+pkf run -- a b c               # forward args to the `default` task when it accepts args
 pkf run --timing build         # also print per-task wall time at the end
 pkf run 'test:*'               # glob over task names (also works on affected / clean)
 pkf clean                      # rm declared outputs of every task; --dry-run to preview
@@ -218,6 +222,8 @@ pkf run --on-fail=shell build  # drop into $SHELL in the failed task's workdir o
 pkf run --remote-only build    # skip local cache, only consult remote (verify remote populated)
 pkf affected --watch           # re-evaluate affected set on every file change
 pkf graph --target build --depth=1   # show only direct deps (one hop)
+pkf graph --format tree        # terminal-readable dependency tree (roots only when no target)
+pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
 pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
 pkf pkl-cache warm             # pre-populate ~/.pkl/cache (CI prefetch step)
 pkf <plugin> <args>            # exec `pkf-<plugin>` on PATH (git-style fallthrough)
@@ -239,6 +245,7 @@ Visualizing a Taskfile is a single pipeline:
 ```sh
 pkf graph | dot -Tsvg -o tasks.svg
 pkf graph --format mermaid > tasks.mmd
+pkf graph --format tree --target test
 ```
 
 ## Environment, args, and the action key
@@ -311,6 +318,10 @@ the action key.
   Set `acceptsArgs = true` and write `cmd = "node \"$@\""`. Callers
   pass `pkf run task -- a b c`. The args fold into the action key,
   so command wrappers typically also set `cache = false`.
+- **You want helper tasks hidden from normal discovery.** Set
+  `visibility = "internal"`. `pkf list` and `pkf graph` hide it by
+  default, `--all` reveals it, and `pkf run <name>` can still execute
+  it directly.
 
 ### Things that confuse agents
 

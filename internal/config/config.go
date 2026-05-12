@@ -25,6 +25,7 @@ type Task struct {
 	Cache                  bool              `pkl:"cache"`
 	Workdir                *string           `pkl:"workdir"`
 	Description            *string           `pkl:"description"`
+	Visibility             string            `pkl:"visibility"`
 	Service                bool              `pkl:"service"`
 	ShutdownTimeoutSeconds int               `pkl:"shutdownTimeoutSeconds"`
 	Services               []string          `pkl:"services"`
@@ -60,6 +61,7 @@ type Defaults struct {
 // change to the underlying Pkl invalidates caches.
 type Taskfile struct {
 	Defaults  *Defaults        `pkl:"defaults"`
+	TaskOrder []string         `pkl:"taskOrder"`
 	Tasks     map[string]*Task `pkl:"tasks"`
 	Canonical []byte           `pkl:"-"`
 }

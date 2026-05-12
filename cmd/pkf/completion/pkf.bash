@@ -19,6 +19,11 @@ _pkf() {
 
   local sub="${COMP_WORDS[1]}"
   case "$sub" in
+    list)
+      if [[ "$prev" == "--color" ]]; then
+        COMPREPLY=($(compgen -W "auto always never" -- "$cur"))
+      fi
+      ;;
     run|affected|clean|up)
       if [[ "$cur" == -* ]]; then return; fi
       local tasks
@@ -42,7 +47,7 @@ _pkf() {
       ;;
     graph)
       if [[ "$prev" == "--format" ]]; then
-        COMPREPLY=($(compgen -W "dot mermaid" -- "$cur"))
+        COMPREPLY=($(compgen -W "dot mermaid tree" -- "$cur"))
       fi
       ;;
   esac

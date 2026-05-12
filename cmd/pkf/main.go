@@ -128,9 +128,10 @@ commands:
                                         run one or more tasks (no arg = the default task); multi-target runs the union
   up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
                                         Ctrl+C releases the whole process tree
-  list [-f FILE] [-v] [--json]          list declared tasks (-v: cmd/deps; --json: machine-readable)
-  graph [-f FILE] [--format FMT] [--target TASK]
-                                        emit DAG (formats: dot, mermaid)
+  list [-f FILE] [-v] [--json] [--all] [--unsorted] [--color=auto|always|never]
+                                        list declared public tasks (-v: cmd/deps; --json: machine-readable)
+  graph [-f FILE] [--format FMT] [--target TASK] [--all] [--unsorted]
+                                        emit DAG (formats: dot, mermaid, tree)
   doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   hooks <install|uninstall|list> [-f FILE] [--force]
@@ -156,6 +157,9 @@ flags:
       --no-cache         disable cache lookup and store for this run
       --refresh          skip cache lookup but still store results (re-baseline)
       --json             (list only) machine-readable output
+      --all              (list/graph) include internal tasks
+      --unsorted         (list/graph) use declaration order instead of alphabetical
+      --color MODE       (list only) auto, always, never (default: auto)
   -v, --verbose          (list only) include cmd preview and deps
 
 cache directory:
@@ -282,6 +286,10 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	verbose := fs.Bool("v", false, "show cmd preview and deps")
 	fs.BoolVar(verbose, "verbose", false, "show cmd preview and deps")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	all := fs.Bool("all", false, "include internal tasks")
+	unsorted := fs.Bool("unsorted", false, "use Taskfile declaration order")
+	fs.BoolVar(unsorted, "source-order", false, "use Taskfile declaration order")
+	colorMode := fs.String("color", "auto", "when to color output: auto, always, never")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -291,6 +299,10 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	if *asJSON && *verbose {
 		return fmt.Errorf("--json subsumes -v (use one or the other)")
 	}
+	color, err := listColorEnabled(*colorMode, stdout)
+	if err != nil {
+		return err
+	}
 	abs, err := resolveFile(fs, *file)
 	if err != nil {
 		return err
@@ -299,24 +311,12 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(tf.Tasks))
-	for n := range tf.Tasks {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	names := filterVisibleTaskNames(tf, orderedTaskNames(tf, *unsorted), *all)
 	if *asJSON {
 		return printListJSON(stdout, tf, names)
 	}
 	if !*verbose {
-		for _, n := range names {
-			t := tf.Tasks[n]
-			desc := ""
-			if t.Description != nil {
-				desc = "  — " + *t.Description
-			}
-			fmt.Fprintf(stdout, "%s%s\n", n, desc)
-		}
-		return nil
+		return printList(stdout, tf, names, *all, color)
 	}
 	for i, n := range names {
 		if i > 0 {
@@ -327,6 +327,9 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		if t.Description != nil {
 			fmt.Fprintf(stdout, "  desc: %s\n", *t.Description)
 		}
+		if taskVisibility(t) == "internal" {
+			fmt.Fprintf(stdout, "  visibility: internal\n")
+		}
 		fmt.Fprintf(stdout, "  cmd:  %s\n", t.Cmd)
 		if len(t.Deps) > 0 {
 			fmt.Fprintf(stdout, "  deps: %s\n", strings.Join(t.Deps, ", "))
@@ -336,6 +339,152 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		}
 	}
 	return nil
+}
+
+type listRow struct {
+	signature string
+	marker    string
+	desc      string
+}
+
+func printList(stdout io.Writer, tf *config.Taskfile, names []string, includeInternal bool, color bool) error {
+	rows := make([]listRow, 0, len(names))
+	sigWidth := 0
+	markerWidth := 0
+	for _, n := range names {
+		t := tf.Tasks[n]
+		row := listRow{signature: taskSignature(n, t)}
+		if includeInternal && taskVisibility(t) == "internal" {
+			row.marker = "[internal]"
+		}
+		if t.Description != nil {
+			row.desc = *t.Description
+		}
+		if len(row.signature) > sigWidth {
+			sigWidth = len(row.signature)
+		}
+		if len(row.marker) > markerWidth {
+			markerWidth = len(row.marker)
+		}
+		rows = append(rows, row)
+	}
+	for _, row := range rows {
+		fmt.Fprintf(stdout, "%-*s", sigWidth, row.signature)
+		if markerWidth > 0 {
+			marker := row.marker
+			if color && marker != "" {
+				marker = ansiYellow + marker + ansiReset
+			}
+			fmt.Fprintf(stdout, "  %-*s", markerWidth, marker)
+		}
+		if row.desc != "" {
+			desc := "— " + row.desc
+			if color {
+				desc = ansiDim + desc + ansiReset
+			}
+			fmt.Fprintf(stdout, "  %s", desc)
+		}
+		fmt.Fprintln(stdout)
+	}
+	return nil
+}
+
+const (
+	ansiReset  = "\x1b[0m"
+	ansiDim    = "\x1b[2m"
+	ansiYellow = "\x1b[33m"
+)
+
+func listColorEnabled(mode string, stdout io.Writer) (bool, error) {
+	switch mode {
+	case "never":
+		return false, nil
+	case "always":
+		return true, nil
+	case "auto":
+		return writerLooksLikeTerminal(stdout), nil
+	default:
+		return false, fmt.Errorf("unknown color mode %q (want: auto, always, never)", mode)
+	}
+}
+
+func writerLooksLikeTerminal(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func taskSignature(name string, t *config.Task) string {
+	parts := []string{name}
+	if t.AcceptsArgs {
+		parts = append(parts, "*ARGS")
+	}
+	for _, p := range t.Params {
+		part := p.Name
+		if p.Default != nil {
+			part += "=" + *p.Default
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, " ")
+}
+
+func orderedTaskNames(tf *config.Taskfile, sourceOrder bool) []string {
+	if !sourceOrder || len(tf.TaskOrder) == 0 {
+		names := make([]string, 0, len(tf.Tasks))
+		for n := range tf.Tasks {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return names
+	}
+	names := make([]string, 0, len(tf.Tasks))
+	seen := make(map[string]bool, len(tf.TaskOrder))
+	for _, n := range tf.TaskOrder {
+		if _, ok := tf.Tasks[n]; !ok || seen[n] {
+			continue
+		}
+		names = append(names, n)
+		seen[n] = true
+	}
+	var rest []string
+	for n := range tf.Tasks {
+		if !seen[n] {
+			rest = append(rest, n)
+		}
+	}
+	sort.Strings(rest)
+	return append(names, rest...)
+}
+
+func filterVisibleTaskNames(tf *config.Taskfile, names []string, includeInternal bool) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		t := tf.Tasks[n]
+		if t == nil {
+			continue
+		}
+		if includeInternal || taskVisibility(t) == "public" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func taskVisibility(t *config.Task) string {
+	if t == nil || t.Visibility == "" {
+		return "public"
+	}
+	return t.Visibility
 }
 
 // listParamJSON mirrors config.Param for the --json output. Kept as
@@ -352,6 +501,7 @@ type listParamJSON struct {
 type listTaskJSON struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
+	Visibility  string          `json:"visibility"`
 	Cmd         string          `json:"cmd"`
 	Shell       string          `json:"shell,omitempty"`
 	Deps        []string        `json:"deps,omitempty"`
@@ -377,6 +527,7 @@ func printListJSON(stdout io.Writer, tf *config.Taskfile, names []string) error 
 		entry := listTaskJSON{
 			Name:        n,
 			Cmd:         t.Cmd,
+			Visibility:  taskVisibility(t),
 			Shell:       t.Shell,
 			Deps:        t.Deps,
 			Inputs:      t.Inputs,
@@ -414,20 +565,46 @@ func printListJSON(stdout io.Writer, tf *config.Taskfile, names []string) error 
 	return enc.Encode(out)
 }
 
+type optionalIntFlag struct {
+	value int
+	set   bool
+}
+
+func (f *optionalIntFlag) String() string {
+	return strconv.Itoa(f.value)
+}
+
+func (f *optionalIntFlag) Set(s string) error {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return err
+	}
+	f.value = v
+	f.set = true
+	return nil
+}
+
 func cmdGraph(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("pkf graph", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
-	format := fs.String("format", "dot", "output format: dot or mermaid")
+	format := fs.String("format", "dot", "output format: dot, mermaid, or tree")
 	target := fs.String("target", "", "render only the subgraph rooted at this task")
-	depth := fs.Int("depth", 0, "limit dep traversal to N hops from --target (0 = unlimited)")
+	all := fs.Bool("all", false, "include internal tasks")
+	unsorted := fs.Bool("unsorted", false, "use Taskfile declaration order")
+	fs.BoolVar(unsorted, "source-order", false, "use Taskfile declaration order")
+	depth := optionalIntFlag{}
+	fs.Var(&depth, "depth", "limit dep traversal to N hops (0 = unlimited; tree default = 2)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("graph takes no positional args, got %v", fs.Args())
 	}
-	if *depth != 0 && *target == "" {
+	if depth.set && depth.value < 0 {
+		return fmt.Errorf("--depth must be >= 0")
+	}
+	if *format != "tree" && depth.set && *target == "" {
 		return fmt.Errorf("--depth requires --target (depth is measured from the target)")
 	}
 	abs, err := resolveFile(fs, *file)
@@ -443,22 +620,30 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 		return err
 	}
 
+	ordered := orderedTaskNames(tf, *unsorted)
 	var nodes []string
 	if *target != "" {
 		if !g.Has(*target) {
 			return fmt.Errorf("unknown task: %q", *target)
 		}
-		if *depth > 0 {
-			nodes = bfsLimited(tf, *target, *depth)
+		if !*all && taskVisibility(tf.Tasks[*target]) == "internal" {
+			return fmt.Errorf("task %q is internal (use --all to include it)", *target)
+		}
+		if depth.set && depth.value > 0 {
+			nodes = bfsLimited(tf, *target, depth.value)
 		} else {
 			nodes, err = g.Subgraph(*target)
 			if err != nil {
 				return err
 			}
 		}
+		if *unsorted {
+			nodes = intersectTaskNames(ordered, nodes)
+		}
 	} else {
-		nodes = g.Names()
+		nodes = ordered
 	}
+	nodes = filterVisibleTaskNames(tf, nodes, *all)
 	keep := make(map[string]bool, len(nodes))
 	for _, n := range nodes {
 		keep[n] = true
@@ -469,9 +654,35 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 		return writeDOT(stdout, tf, nodes, keep)
 	case "mermaid":
 		return writeMermaid(stdout, tf, nodes, keep)
+	case "tree":
+		treeDepth := depth.value
+		if !depth.set {
+			treeDepth = 2
+		}
+		var roots []string
+		if *target != "" {
+			roots = []string{*target}
+		} else {
+			roots = rootTaskNames(tf, ordered, *all)
+		}
+		return writeTree(stdout, tf, roots, *all, treeDepth)
 	default:
-		return fmt.Errorf("unknown format %q (want: dot, mermaid)", *format)
+		return fmt.Errorf("unknown format %q (want: dot, mermaid, tree)", *format)
 	}
+}
+
+func intersectTaskNames(ordered []string, keepNames []string) []string {
+	keep := make(map[string]bool, len(keepNames))
+	for _, n := range keepNames {
+		keep[n] = true
+	}
+	out := make([]string, 0, len(keepNames))
+	for _, n := range ordered {
+		if keep[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // bfsLimited returns every task reachable from `target` along `deps`
@@ -557,6 +768,104 @@ func writeMermaid(w io.Writer, tf *config.Taskfile, nodes []string, keep map[str
 		}
 	}
 	return nil
+}
+
+func rootTaskNames(tf *config.Taskfile, ordered []string, includeInternal bool) []string {
+	visible := make(map[string]bool, len(ordered))
+	for _, n := range ordered {
+		t := tf.Tasks[n]
+		if t == nil {
+			continue
+		}
+		if includeInternal || taskVisibility(t) == "public" {
+			visible[n] = true
+		}
+	}
+	dependedOn := make(map[string]bool, len(visible))
+	for _, n := range ordered {
+		if !visible[n] {
+			continue
+		}
+		for _, d := range tf.Tasks[n].Deps {
+			if visible[d] {
+				dependedOn[d] = true
+			}
+		}
+	}
+	roots := make([]string, 0, len(visible))
+	for _, n := range ordered {
+		if visible[n] && !dependedOn[n] {
+			roots = append(roots, n)
+		}
+	}
+	if len(roots) > 0 {
+		return roots
+	}
+	for _, n := range ordered {
+		if visible[n] {
+			roots = append(roots, n)
+		}
+	}
+	return roots
+}
+
+func writeTree(w io.Writer, tf *config.Taskfile, roots []string, includeInternal bool, maxDepth int) error {
+	for i, root := range roots {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		writeTreeNode(w, tf, root, includeInternal, maxDepth, 0, "", true)
+	}
+	return nil
+}
+
+func writeTreeNode(w io.Writer, tf *config.Taskfile, name string, includeInternal bool, maxDepth, depth int, prefix string, last bool) {
+	task := tf.Tasks[name]
+	if depth == 0 {
+		fmt.Fprintln(w, treeTaskLabel(name, task, includeInternal))
+	} else {
+		branch := "├── "
+		if last {
+			branch = "└── "
+		}
+		fmt.Fprintf(w, "%s%s%s\n", prefix, branch, treeTaskLabel(name, task, includeInternal))
+	}
+	if task == nil || (maxDepth > 0 && depth >= maxDepth) {
+		return
+	}
+	deps := visibleDeps(tf, task.Deps, includeInternal)
+	childPrefix := prefix
+	if depth > 0 {
+		if last {
+			childPrefix += "    "
+		} else {
+			childPrefix += "│   "
+		}
+	}
+	for i, dep := range deps {
+		writeTreeNode(w, tf, dep, includeInternal, maxDepth, depth+1, childPrefix, i == len(deps)-1)
+	}
+}
+
+func visibleDeps(tf *config.Taskfile, deps []string, includeInternal bool) []string {
+	out := make([]string, 0, len(deps))
+	for _, d := range deps {
+		t := tf.Tasks[d]
+		if t == nil {
+			continue
+		}
+		if includeInternal || taskVisibility(t) == "public" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func treeTaskLabel(name string, t *config.Task, includeInternal bool) string {
+	if includeInternal && taskVisibility(t) == "internal" {
+		return name + " [internal]"
+	}
+	return name
 }
 
 func cmdRun(args []string, stdout, stderr io.Writer) error {
@@ -882,8 +1191,11 @@ func splitRunArgs(args []string) (globalArgs []string, taskNames []string, taskA
 			taskArgs = args[i:]
 			return
 		}
-		// `--` before a task name is unusual; preserve it as a global
-		// token (the FlagSet will reject it cleanly).
+		if a == "--" {
+			globalArgs = args[:i]
+			taskArgs = args[i:]
+			return
+		}
 		bare := strings.TrimLeft(a, "-")
 		if eq := strings.Index(bare, "="); eq >= 0 {
 			bare = bare[:eq]

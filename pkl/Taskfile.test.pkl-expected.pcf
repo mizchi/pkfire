@@ -17,6 +17,7 @@ examples {
       cache = true
       workdir = null
       description = null
+      visibility = "public"
       service = false
       shutdownTimeoutSeconds = 5
       services {}

@@ -17,7 +17,7 @@ _pkf() {
     'clean:remove declared outputs'
     'cache:inspect / clean the local CAS'
     'completion:emit shell completion script'
-    'graph:emit DAG (dot / mermaid)'
+    'graph:emit DAG (dot / mermaid / tree)'
     'version:print pkf version'
     'help:show usage'
   )
@@ -28,6 +28,11 @@ _pkf() {
   fi
 
   case "${words[2]}" in
+    list)
+      if [[ "${words[$((CURRENT-1))]}" == "--color" ]]; then
+        _values 'color' auto always never
+      fi
+      ;;
     run|affected|clean|up)
       local -a tasks
       tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -50,7 +55,7 @@ _pkf() {
       ;;
     graph)
       if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
-        _values 'format' dot mermaid
+        _values 'format' dot mermaid tree
       fi
       ;;
   esac
