@@ -28,12 +28,12 @@ _pkf() {
       ;;
     lint)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
       fi
       ;;
     doctor)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
       fi
       ;;
     run|affected|clean|up)

@@ -37,6 +37,11 @@ complete -c pkf -f -n '__fish_seen_subcommand_from list' -l all -d 'include inte
 complete -c pkf -f -n '__fish_seen_subcommand_from list' -l unsorted -d 'use declaration order'
 complete -c pkf -f -n '__fish_seen_subcommand_from list' -l source-order -d 'use declaration order'
 complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l json -d 'emit machine-readable output'
+complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l fix -d 'apply safe fixes'
+complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l dry-run -d 'show fixes without writing files'
+complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l json -d 'emit machine-readable output'
+complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l fix -d 'apply safe fixes'
+complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l dry-run -d 'show fixes without writing files'
 
 # `pkf graph --format <TAB>`.
 complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree'

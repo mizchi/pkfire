@@ -228,6 +228,8 @@ pkf graph                      # emit Graphviz DOT for the full DAG
 pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
 pkf graph --target test        # only the subgraph rooted at `test`
 pkf doctor                     # diagnose pkf PATH, pkl/cache/remote/taskfile setup
+pkf doctor --json              # emit structured setup checks
+pkf doctor --fix --dry-run     # preview replacing stale pkf on PATH with this binary
 pkf format                     # pkl format -w on the Taskfile's directory
 pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
 pkf hooks install              # write .git/hooks/<event> shims for matching tasks
@@ -260,6 +262,7 @@ pkf graph --format tree        # terminal-readable dependency tree (roots only w
 pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
 pkf lint                       # detect dead local tasks and suspicious task definitions
 pkf lint --json                # emit machine-readable findings for CI/editor tooling
+pkf lint --fix                 # safely add cache = false for outputs-without-inputs findings
 pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
 pkf pkl-cache warm             # pre-populate ~/.pkl/cache (CI prefetch step)
 pkf <plugin> <args>            # exec `pkf-<plugin>` on PATH (git-style fallthrough)

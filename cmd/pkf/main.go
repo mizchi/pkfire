@@ -136,8 +136,8 @@ commands:
                                         list declared public tasks (-v: detail; --long: audit table; --json: machine-readable)
   graph [-f FILE] [--format FMT] [--target TASK] [--all] [--unsorted]
                                         emit DAG (formats: dot, mermaid, tree)
-  doctor [-f FILE]                      diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
-  lint [-f FILE] [--json]               detect Taskfile dead code and suspicious task definitions
+  doctor [-f FILE] [--json] [--fix]     diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
+  lint [-f FILE] [--json] [--fix]       detect Taskfile dead code and suspicious task definitions
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   hooks <install|uninstall|list> [-f FILE] [--force]
                                         manage .git/hooks shims that delegate to pkf run
@@ -157,11 +157,12 @@ flags:
   -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
   -j, --jobs N           max concurrent tasks (default: NumCPU)
       --watch            re-run on input changes (Ctrl+C to stop)
-      --dry-run          print the execution plan and exit (no exec, no cache)
+      --dry-run          print the plan and exit (run/affected/clean/migrate/doctor/lint)
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
       --refresh          skip cache lookup but still store results (re-baseline)
-      --json             (list/lint) machine-readable output
+      --json             (list/doctor/lint) machine-readable output
+      --fix              (doctor/lint) apply safe fixes
       --long             (list only) compact audit table
       --all              (list/graph) include internal tasks
       --unsorted         (list/graph) use declaration order instead of alphabetical
@@ -619,26 +620,52 @@ func taskVisibility(t *config.Task) string {
 }
 
 type lintFinding struct {
-	Path    string `json:"path"`
-	Line    int    `json:"line"`
-	Message string `json:"message"`
+	Path       string `json:"path"`
+	Line       int    `json:"line"`
+	Kind       string `json:"kind"`
+	Task       string `json:"task,omitempty"`
+	Message    string `json:"message"`
+	Suggestion string `json:"suggestion,omitempty"`
+	Fixable    bool   `json:"fixable,omitempty"`
 }
 
 type lintJSON struct {
 	Findings []lintFinding `json:"findings"`
+	Fixes    []lintFix     `json:"fixes,omitempty"`
 }
 
 type localTaskDecl struct {
 	VarName  string
 	TaskName string
 	Line     int
+	Open     int
+	Close    int
 }
+
+type lintFix struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Task    string `json:"task"`
+	Action  string `json:"action"`
+	Message string `json:"message"`
+	Applied bool   `json:"applied"`
+	DryRun  bool   `json:"dryRun"`
+}
+
+const (
+	lintKindDeadLocal       = "dead-local-task"
+	lintKindOutputsNoInputs = "outputs-without-inputs"
+	lintKindServiceNoProbe  = "service-without-readiness"
+	lintKindNoopTask        = "noop-task"
+)
 
 func cmdLint(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("pkf lint", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	fix := fs.Bool("fix", false, "apply safe fixes")
+	dryRun := fs.Bool("dry-run", false, "show fixes without writing files")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -657,16 +684,37 @@ func cmdLint(args []string, stdout, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
-	findings := lintDeadLocalTasks(abs, data, tf)
-	findings = append(findings, lintRenderedTasks(abs, data, tf)...)
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Line != findings[j].Line {
-			return findings[i].Line < findings[j].Line
+	findings := lintFindings(abs, data, tf)
+	var fixes []lintFix
+	if *fix {
+		next, planned, err := applyLintFixes(abs, data, findings, *dryRun)
+		if err != nil {
+			return err
 		}
-		return findings[i].Message < findings[j].Message
-	})
+		fixes = planned
+		if !*asJSON {
+			for _, f := range fixes {
+				verb := "fixed"
+				if f.DryRun {
+					verb = "would fix"
+				}
+				fmt.Fprintf(stdout, "%s task %q: %s\n", verb, f.Task, f.Message)
+			}
+		}
+		if len(fixes) > 0 && !*dryRun {
+			if err := os.WriteFile(abs, next, 0o644); err != nil {
+				return err
+			}
+			data = next
+			tf, err = config.Load(context.Background(), abs)
+			if err != nil {
+				return err
+			}
+			findings = lintFindings(abs, data, tf)
+		}
+	}
 	if *asJSON {
-		out := lintJSON{Findings: findings}
+		out := lintJSON{Findings: findings, Fixes: fixes}
 		if out.Findings == nil {
 			out.Findings = []lintFinding{}
 		}
@@ -686,8 +734,23 @@ func cmdLint(args []string, stdout, _ io.Writer) error {
 	}
 	for _, f := range findings {
 		fmt.Fprintf(stdout, "%s:%d: %s\n", f.Path, f.Line, f.Message)
+		if f.Suggestion != "" {
+			fmt.Fprintf(stdout, "  suggestion: %s\n", f.Suggestion)
+		}
 	}
 	return fmt.Errorf("lint found %d issue%s", len(findings), plural(len(findings)))
+}
+
+func lintFindings(path string, data []byte, tf *config.Taskfile) []lintFinding {
+	findings := lintDeadLocalTasks(path, data, tf)
+	findings = append(findings, lintRenderedTasks(path, data, tf)...)
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Line != findings[j].Line {
+			return findings[i].Line < findings[j].Line
+		}
+		return findings[i].Message < findings[j].Message
+	})
+	return findings
 }
 
 func lintDeadLocalTasks(path string, data []byte, tf *config.Taskfile) []lintFinding {
@@ -702,8 +765,11 @@ func lintDeadLocalTasks(path string, data []byte, tf *config.Taskfile) []lintFin
 		}
 		if !rendered[decl.TaskName] {
 			findings = append(findings, lintFinding{
-				Path: path,
-				Line: decl.Line,
+				Path:       path,
+				Line:       decl.Line,
+				Kind:       lintKindDeadLocal,
+				Task:       decl.TaskName,
+				Suggestion: fmt.Sprintf("remove local task %q or include it in tasks { ... }", decl.VarName),
 				Message: fmt.Sprintf("local task %q declares name %q but is not included in tasks",
 					decl.VarName, decl.TaskName),
 			})
@@ -729,23 +795,33 @@ func lintRenderedTasks(path string, data []byte, tf *config.Taskfile) []lintFind
 		}
 		if t.Cmd == "" && len(t.Deps) == 0 {
 			findings = append(findings, lintFinding{
-				Path:    path,
-				Line:    line,
-				Message: fmt.Sprintf("task %q has neither cmd nor deps; it is a no-op task", name),
+				Path:       path,
+				Line:       line,
+				Kind:       lintKindNoopTask,
+				Task:       name,
+				Message:    fmt.Sprintf("task %q has neither cmd nor deps; it is a no-op task", name),
+				Suggestion: "add deps for an umbrella task, add cmd for an executable task, or remove the task",
 			})
 		}
 		if t.Cache && len(t.Outputs) > 0 && len(t.Inputs) == 0 {
 			findings = append(findings, lintFinding{
-				Path:    path,
-				Line:    line,
-				Message: fmt.Sprintf("task %q declares outputs but no inputs; cache can go stale because only config changes invalidate it", name),
+				Path:       path,
+				Line:       line,
+				Kind:       lintKindOutputsNoInputs,
+				Task:       name,
+				Message:    fmt.Sprintf("task %q declares outputs but no inputs; cache can go stale because only config changes invalidate it", name),
+				Suggestion: "declare every input the command reads, or set cache = false when the task is intentionally uncached",
+				Fixable:    true,
 			})
 		}
 		if t.Service && t.ReadyPort == 0 && t.ReadyCmd == "" {
 			findings = append(findings, lintFinding{
-				Path:    path,
-				Line:    line,
-				Message: fmt.Sprintf("task %q has service=true but no readiness probe; add readyPort or readyCmd so dependents do not race startup", name),
+				Path:       path,
+				Line:       line,
+				Kind:       lintKindServiceNoProbe,
+				Task:       name,
+				Message:    fmt.Sprintf("task %q has service=true but no readiness probe; add readyPort or readyCmd so dependents do not race startup", name),
+				Suggestion: "add readyPort when the service opens a TCP port, otherwise add readyCmd",
 			})
 		}
 	}
@@ -763,6 +839,103 @@ func taskNameLineMap(data []byte) map[string]int {
 		}
 	}
 	return lines
+}
+
+type textEdit struct {
+	start int
+	end   int
+	text  string
+}
+
+func applyLintFixes(path string, data []byte, findings []lintFinding, dryRun bool) ([]byte, []lintFix, error) {
+	fixTasks := make(map[string]lintFinding)
+	for _, finding := range findings {
+		if finding.Kind != lintKindOutputsNoInputs || !finding.Fixable || finding.Task == "" {
+			continue
+		}
+		fixTasks[finding.Task] = finding
+	}
+	if len(fixTasks) == 0 {
+		return data, nil, nil
+	}
+
+	var edits []textEdit
+	var fixes []lintFix
+	for _, decl := range scanLocalTaskDecls(data) {
+		finding, ok := fixTasks[decl.TaskName]
+		if !ok {
+			continue
+		}
+		edit, ok := cacheFalseEdit(string(data), decl)
+		if !ok {
+			continue
+		}
+		edits = append(edits, edit)
+		fixes = append(fixes, lintFix{
+			Path:    path,
+			Line:    finding.Line,
+			Task:    finding.Task,
+			Action:  "set-cache-false",
+			Message: "set cache = false because the task declares outputs but no inputs",
+			Applied: !dryRun,
+			DryRun:  dryRun,
+		})
+	}
+	if len(edits) == 0 || dryRun {
+		return data, fixes, nil
+	}
+	sort.Slice(edits, func(i, j int) bool {
+		return edits[i].start > edits[j].start
+	})
+	next := string(data)
+	for _, edit := range edits {
+		if edit.start < 0 || edit.end < edit.start || edit.end > len(next) {
+			return nil, fixes, fmt.Errorf("invalid lint fix edit for %s", path)
+		}
+		next = next[:edit.start] + edit.text + next[edit.end:]
+	}
+	return []byte(next), fixes, nil
+}
+
+var cacheTrueRE = regexp.MustCompile(`\bcache\s*=\s*(true)\b`)
+
+func cacheFalseEdit(src string, decl localTaskDecl) (textEdit, bool) {
+	if decl.Open < 0 || decl.Close <= decl.Open || decl.Close > len(src) {
+		return textEdit{}, false
+	}
+	bodyStart := decl.Open + 1
+	body := src[bodyStart:decl.Close]
+	masked := maskPklTrivia(body)
+	if m := cacheTrueRE.FindStringSubmatchIndex(masked); m != nil {
+		return textEdit{
+			start: bodyStart + m[2],
+			end:   bodyStart + m[3],
+			text:  "false",
+		}, true
+	}
+
+	lineStart := strings.LastIndexByte(src[:decl.Close], '\n') + 1
+	lineBeforeClose := src[lineStart:decl.Close]
+	closingIndent := leadingWhitespace(lineBeforeClose)
+	propertyIndent := closingIndent + "  "
+	prefix := ""
+	if strings.TrimSpace(lineBeforeClose) != "" {
+		prefix = "\n"
+	}
+	return textEdit{
+		start: decl.Close,
+		end:   decl.Close,
+		text:  prefix + propertyIndent + "cache = false\n" + closingIndent,
+	}, true
+}
+
+func leadingWhitespace(s string) string {
+	for i, r := range s {
+		if r != ' ' && r != '\t' {
+			return s[:i]
+		}
+	}
+	return s
 }
 
 var localTaskDeclRE = regexp.MustCompile(`\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?:[A-Za-z_][A-Za-z0-9_.]*\.)?Task)?\s*=\s*new(?:\s+(?:[A-Za-z_][A-Za-z0-9_.]*\.)?Task)?\s*\{`)
@@ -795,6 +968,8 @@ func scanLocalTaskDecls(data []byte) []localTaskDecl {
 			VarName:  src[m[2]:m[3]],
 			TaskName: taskName,
 			Line:     1 + strings.Count(src[:m[0]], "\n"),
+			Open:     open,
+			Close:    close,
 		})
 	}
 	return decls
@@ -3518,6 +3693,9 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("pkf doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	fix := fs.Bool("fix", false, "apply safe fixes")
+	dryRun := fs.Bool("dry-run", false, "show fixes without writing files")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -3526,18 +3704,25 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var anyFail bool
+	var checks []doctorCheck
+	var fixes []doctorFix
 	report := func(level, label, msg string) {
-		fmt.Fprintf(stdout, "  %-4s  %-10s  %s\n", level, label, msg)
+		checks = append(checks, doctorCheck{Level: level, Label: label, Message: msg})
+		if !*asJSON {
+			fmt.Fprintf(stdout, "  %-4s  %-10s  %s\n", level, label, msg)
+		}
 		if level == "FAIL" {
 			anyFail = true
 		}
 	}
 
-	fmt.Fprintf(stdout, "pkf doctor (pkf %s)\n", version)
+	if !*asJSON {
+		fmt.Fprintf(stdout, "pkf doctor (pkf %s)\n", version)
+	}
 
 	// 1. pkf on PATH — shell hooks use `pkf` from PATH, which can lag
 	// behind the binary currently running doctor.
-	reportPKFPath(report)
+	pkfStatus := reportPKFPath(report)
 
 	// 2. pkl CLI
 	if pklPath, err := exec.LookPath("pkl"); err == nil {
@@ -3615,7 +3800,38 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 		report("WARN", "taskfile", fmt.Sprintf("could not resolve file path: %v", ferr))
 	}
 
-	fmt.Fprintln(stdout)
+	if *fix {
+		if planned, ok, err := fixPKFPath(pkfStatus, *dryRun); err != nil {
+			report("FAIL", "pkf-fix", err.Error())
+		} else if ok {
+			fixes = append(fixes, planned)
+			if !*asJSON {
+				level := "FIX"
+				if planned.DryRun {
+					level = "PLAN"
+				}
+				fmt.Fprintf(stdout, "  %-4s  %-10s  %s\n", level, planned.Label, planned.Message)
+			}
+		}
+	}
+
+	if *asJSON {
+		out := doctorJSON{
+			Version: version,
+			Checks:  checks,
+			Fixes:   fixes,
+		}
+		if out.Checks == nil {
+			out.Checks = []doctorCheck{}
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(stdout)
+	}
 	if anyFail {
 		fmt.Fprintln(stderr, "doctor: one or more checks FAILed — see above")
 		return errors.New("doctor reported failures")
@@ -3623,14 +3839,45 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func reportPKFPath(report func(level, label, msg string)) {
+type doctorCheck struct {
+	Level   string `json:"level"`
+	Label   string `json:"label"`
+	Message string `json:"message"`
+}
+
+type doctorFix struct {
+	Label   string `json:"label"`
+	Action  string `json:"action"`
+	Path    string `json:"path"`
+	Source  string `json:"source"`
+	Backup  string `json:"backup,omitempty"`
+	Message string `json:"message"`
+	Applied bool   `json:"applied"`
+	DryRun  bool   `json:"dryRun"`
+}
+
+type doctorJSON struct {
+	Version string        `json:"version"`
+	Checks  []doctorCheck `json:"checks"`
+	Fixes   []doctorFix   `json:"fixes,omitempty"`
+}
+
+type pkfPathStatus struct {
+	Path        string
+	PathVersion string
+	Current     string
+	NeedsFix    bool
+}
+
+func reportPKFPath(report func(level, label, msg string)) pkfPathStatus {
 	pathPkf, err := exec.LookPath("pkf")
 	if err != nil {
 		report("WARN", "pkf-path", "pkf is not in PATH; git hooks and shell aliases may fail")
-		return
+		return pkfPathStatus{}
 	}
 	pathVer, verErr := pkfVersion(pathPkf)
 	exe, exeErr := os.Executable()
+	status := pkfPathStatus{Path: pathPkf, PathVersion: pathVer, Current: exe}
 	current := exe
 	if exeErr != nil {
 		current = "(current executable unknown: " + exeErr.Error() + ")"
@@ -3638,20 +3885,116 @@ func reportPKFPath(report func(level, label, msg string)) {
 	if exeErr == nil && sameExecutable(pathPkf, exe) {
 		if verErr != nil {
 			report("WARN", "pkf-path", fmt.Sprintf("%s is the current executable but `pkf version` failed: %v", pathPkf, verErr))
-			return
+			return status
 		}
 		report("OK", "pkf-path", fmt.Sprintf("%s at %s (current executable)", pathVer, pathPkf))
-		return
+		return status
 	}
 	if verErr != nil {
 		report("WARN", "pkf-path", fmt.Sprintf("PATH resolves to %s, but `pkf version` failed: %v; doctor is running %s", pathPkf, verErr, current))
-		return
+		status.NeedsFix = exeErr == nil
+		return status
 	}
 	if version != "dev" && pathVer == version {
 		report("OK", "pkf-path", fmt.Sprintf("PATH resolves to %s (%s); doctor is running %s", pathPkf, pathVer, current))
-		return
+		return status
 	}
+	status.NeedsFix = exeErr == nil
 	report("WARN", "pkf-path", fmt.Sprintf("PATH resolves to %s (%s), but doctor is running pkf %s at %s; hooks may use the PATH binary", pathPkf, pathVer, version, current))
+	return status
+}
+
+func fixPKFPath(status pkfPathStatus, dryRun bool) (doctorFix, bool, error) {
+	if !status.NeedsFix || status.Path == "" || status.Current == "" {
+		return doctorFix{}, false, nil
+	}
+	fix := doctorFix{
+		Label:   "pkf-path",
+		Action:  "replace-path-pkf",
+		Path:    status.Path,
+		Source:  status.Current,
+		Applied: !dryRun,
+		DryRun:  dryRun,
+	}
+	if dryRun {
+		fix.Message = fmt.Sprintf("would replace %s with the current binary %s", status.Path, status.Current)
+		return fix, true, nil
+	}
+	backup, err := replacePKFBinary(status.Current, status.Path)
+	if err != nil {
+		return doctorFix{}, false, err
+	}
+	fix.Backup = backup
+	fix.Message = fmt.Sprintf("replaced %s with the current binary; backup at %s", status.Path, backup)
+	return fix, true, nil
+}
+
+func replacePKFBinary(src, dst string) (string, error) {
+	if src == "" || dst == "" {
+		return "", errors.New("source and destination are required")
+	}
+	if sameExecutable(src, dst) {
+		return "", fmt.Errorf("%s already resolves to %s", dst, src)
+	}
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat current binary %s: %w", src, err)
+	}
+	if srcInfo.IsDir() {
+		return "", fmt.Errorf("current binary %s is a directory", src)
+	}
+	if _, err := os.Lstat(dst); err != nil {
+		return "", fmt.Errorf("stat PATH pkf %s: %w", dst, err)
+	}
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, ".pkf-install-*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	in, err := os.Open(src)
+	if err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if _, err := io.Copy(tmp, in); err != nil {
+		_ = in.Close()
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := in.Close(); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	mode := srcInfo.Mode().Perm()
+	if mode&0o111 == 0 {
+		mode |= 0o755
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+
+	backup := dst + ".bak-" + time.Now().Format("20060102150405")
+	if err := os.Rename(dst, backup); err != nil {
+		return "", fmt.Errorf("backup old pkf: %w", err)
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Rename(backup, dst)
+		return "", fmt.Errorf("install new pkf: %w", err)
+	}
+	cleanupTmp = false
+	return backup, nil
 }
 
 func pkfVersion(path string) (string, error) {

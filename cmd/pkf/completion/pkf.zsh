@@ -51,14 +51,19 @@ _pkf() {
         _values 'lint option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
-          '--json[emit machine-readable output]'
+          '--json[emit machine-readable output]' \
+          '--fix[apply safe fixes]' \
+          '--dry-run[show fixes without writing files]'
       fi
       ;;
     doctor)
       if [[ "${words[$CURRENT]}" == -* ]]; then
         _values 'doctor option' \
           '-f[path to Taskfile.pkl]' \
-          '--file[path to Taskfile.pkl]'
+          '--file[path to Taskfile.pkl]' \
+          '--json[emit machine-readable output]' \
+          '--fix[apply safe fixes]' \
+          '--dry-run[show fixes without writing files]'
       fi
       ;;
     run|affected|clean|up)

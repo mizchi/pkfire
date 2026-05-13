@@ -711,6 +711,102 @@ func TestDoctorWarnsWhenPathPkfDiffersFromCurrentBinary(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONEmitsStructuredChecks(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDoctor([]string{"-f", basicTaskfile(t), "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDoctor --json: %v\n%s", err, stdout.String())
+	}
+	var got struct {
+		Version string `json:"version"`
+		Checks  []struct {
+			Level   string `json:"level"`
+			Label   string `json:"label"`
+			Message string `json:"message"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("doctor --json did not emit JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Version == "" {
+		t.Fatalf("doctor JSON missing version: %#v", got)
+	}
+	labels := map[string]bool{}
+	for _, check := range got.Checks {
+		labels[check.Label] = true
+		if check.Level == "" || check.Message == "" {
+			t.Fatalf("doctor JSON has incomplete check: %#v", check)
+		}
+	}
+	for _, want := range []string{"pkf-path", "pkl", "cache", "remote", "taskfile"} {
+		if !labels[want] {
+			t.Fatalf("doctor JSON missing %q check: %#v", want, got.Checks)
+		}
+	}
+}
+
+func TestDoctorFixDryRunPlansPathReplacement(t *testing.T) {
+	requirePkl(t)
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "pkf")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho 0.7.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prev := version
+	version = "dev"
+	t.Cleanup(func() { version = prev })
+
+	var stdout, stderr bytes.Buffer
+	if err := cmdDoctor([]string{"-f", basicTaskfile(t), "--fix", "--dry-run"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDoctor --fix --dry-run: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"PLAN", "pkf-path", "would replace", fake} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor fix dry-run output missing %q:\n%s", want, out)
+		}
+	}
+	body, err := os.ReadFile(fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "0.7.0") {
+		t.Fatalf("dry-run should not rewrite fake pkf, got:\n%s", body)
+	}
+}
+
+func TestReplacePKFBinaryBacksUpAndCopiesCurrentBinary(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "new-pkf")
+	dst := filepath.Join(dir, "pkf")
+	if err := os.WriteFile(src, []byte("new binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	backup, err := replacePKFBinary(src, dst)
+	if err != nil {
+		t.Fatalf("replacePKFBinary: %v", err)
+	}
+	gotDst, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDst) != "new binary" {
+		t.Fatalf("destination was not replaced: %q", gotDst)
+	}
+	gotBackup, err := os.ReadFile(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotBackup) != "old binary" {
+		t.Fatalf("backup did not preserve old binary: %q", gotBackup)
+	}
+}
+
 func TestLintDetectsUnlistedLocalTask(t *testing.T) {
 	requirePkl(t)
 	taskfile := taskfileWithLocalSchema(t, `
@@ -759,6 +855,71 @@ tasks { used }
 	finding := got.Findings[0]
 	if finding.Path == "" || finding.Line == 0 || !strings.Contains(finding.Message, "not included in tasks") {
 		t.Fatalf("unexpected JSON finding: %#v", finding)
+	}
+}
+
+func TestLintFixAddsCacheFalseForOutputsWithoutInputs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "mkdir -p bin && echo app > bin/app"
+  outputs { "bin/app" }
+}
+tasks { build }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdLint([]string{"-f", taskfile, "--fix"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdLint --fix: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `fixed task "build"`) {
+		t.Fatalf("lint --fix output missing fix summary:\n%s", out)
+	}
+	body, err := os.ReadFile(taskfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "cache = false") {
+		t.Fatalf("lint --fix did not add cache = false:\n%s", body)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("fixed Taskfile should lint clean: %v\n%s", err, stdout.String())
+	}
+}
+
+func TestLintFixDryRunDoesNotModifyTaskfile(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "mkdir -p bin && echo app > bin/app"
+  outputs { "bin/app" }
+}
+tasks { build }
+`)
+	before, err := os.ReadFile(taskfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = cmdLint([]string{"-f", taskfile, "--fix", "--dry-run"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("dry-run should still report the original lint finding")
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `would fix task "build"`) {
+		t.Fatalf("lint --fix --dry-run output missing plan:\n%s", out)
+	}
+	after, err := os.ReadFile(taskfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("dry-run modified Taskfile:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
 

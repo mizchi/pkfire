@@ -24,6 +24,12 @@ Action version all move together — there is one tag per release
 - `pkf lint --json` emits structured findings for editor/CI consumers.
 - `pkf doctor` now checks whether `pkf` on `PATH` differs from the
   currently running binary, which helps catch stale hook installations.
+- `pkf doctor --json` emits structured setup checks, and
+  `pkf doctor --fix --dry-run` previews replacing a stale `pkf` on
+  `PATH` with the currently running binary. Without `--dry-run`, the
+  old binary is backed up before replacement.
+- `pkf lint --fix` safely adds `cache = false` to tasks that declare
+  outputs but no inputs; other lint findings remain suggestions.
 
 ## [0.8.0] - 2026-05-13
 
