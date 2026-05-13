@@ -1,4 +1,4 @@
-import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl" as schema
+import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl" as schema
 
 import "../shared/sources.pkl" as sources
 import "../shared/toolchain.pkl" as toolchain

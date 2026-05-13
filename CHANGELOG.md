@@ -10,6 +10,10 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Changed
+
+- Examples now amend the published `pkfire@0.10.0` Pkl package.
+
 ## [0.10.0] - 2026-05-14
 
 ### Added
