@@ -83,7 +83,7 @@ local testPkl: Task = new {
 /// test` + the CI matrix already.
 local testExamples: Task = new {
   name = "test:examples"
-  description = "pkl eval every published example Taskfile"
+  description = "pkl eval every published example Taskfile and example contract tests"
   cmd =
     #"""
     set -euo pipefail
@@ -91,6 +91,7 @@ local testExamples: Task = new {
       echo "  eval $f"
       pkl eval "$f" >/dev/null
     done
+    pkl test examples/split-import/Taskfile.test.pkl
     """#
   inputs {
     "pkl/Taskfile.pkl"

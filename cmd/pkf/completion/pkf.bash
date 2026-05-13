@@ -13,7 +13,7 @@ _pkf() {
 
   # First positional = subcommand.
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "init list run up doctor lint format hooks affected clean cache completion graph version help" -- "$cur"))
+    COMPREPLY=($(compgen -W "init list run up doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
     return
   fi
 
@@ -80,6 +80,27 @@ _pkf() {
         COMPREPLY=($(compgen -W "dot mermaid tree json" -- "$cur"))
       elif [[ "$cur" == -* ]]; then
         COMPREPLY=($(compgen -W "-f --file --format --json --target --all --unsorted --source-order --depth" -- "$cur"))
+      fi
+      ;;
+    explain)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --diff" -- "$cur"))
+        return
+      fi
+      local tasks
+      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+      ;;
+    migrate)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --to --dry-run --skip-verify" -- "$cur"))
+      fi
+      ;;
+    pkl-cache)
+      if [ "$COMP_CWORD" -eq 2 ]; then
+        COMPREPLY=($(compgen -W "warm" -- "$cur"))
+      elif [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
       fi
       ;;
   esac

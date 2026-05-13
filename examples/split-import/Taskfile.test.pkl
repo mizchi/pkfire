@@ -1,0 +1,37 @@
+/// Contract tests for the split/import example. These import the actual
+/// fragments so the documented convention stays executable.
+amends "pkl:test"
+
+import "Taskfile.pkl" as Root
+import "tasks/build.pkl" as Build
+import "tasks/test.pkl" as Test
+
+local rootTaskNames = Root.tasks.toList().map((t) -> t.name)
+local buildTaskNames = Build.tasks.toList().map((t) -> t.name)
+local testTaskNames = Test.tasks.toList().map((t) -> t.name)
+
+facts {
+  ["build fragment exports build"] {
+    Build.build.name == "build"
+      && buildTaskNames == List("build")
+      && Build.build.outputs.toList().first == "dist/index.js"
+  }
+
+  ["test fragment depends on build across files"] {
+    Test.test.name == "test"
+      && testTaskNames == List("test")
+      && Test.test.deps.toList().first.name == "build"
+      && Test.test.deps.toList().first.cmd == Build.build.cmd
+  }
+
+  ["root spreads imported fragments in runner order"] {
+    rootTaskNames == List("build", "test", "ci")
+  }
+
+  ["root aggregate is deps-only and typed"] {
+    let (ci = Root.tasks.toList().last)
+      ci.name == "ci"
+        && ci.cmd == null
+        && ci.deps.toList().first.name == "test"
+  }
+}

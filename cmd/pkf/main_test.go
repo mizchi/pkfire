@@ -1456,6 +1456,71 @@ func TestCompletionEmitsFishScript(t *testing.T) {
 	}
 }
 
+func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
+	tests := []struct {
+		shell string
+		want  []string
+	}{
+		{
+			shell: "bash",
+			want: []string{
+				"explain migrate pkl-cache",
+				"explain)",
+				"--diff",
+				"migrate)",
+				"--to --dry-run --skip-verify",
+				"pkl-cache)",
+				"warm",
+			},
+		},
+		{
+			shell: "zsh",
+			want: []string{
+				"'explain:dump or compare inputs to the action key'",
+				"'migrate:rewrite Taskfile schema version'",
+				"'pkl-cache:warm the local Pkl package cache'",
+				"explain)",
+				"--diff[compare against another Taskfile.pkl]",
+				"migrate)",
+				"--to[target schema version]",
+				"--skip-verify[skip post-migration pkl eval]",
+				"pkl-cache)",
+				"_values 'pkl-cache subcommand' warm",
+			},
+		},
+		{
+			shell: "fish",
+			want: []string{
+				"-a explain   -d 'dump or compare inputs to the action key'",
+				"-a migrate   -d 'rewrite Taskfile schema version'",
+				"-a pkl-cache -d 'warm the local Pkl package cache'",
+				"__fish_seen_subcommand_from explain",
+				"-l diff -d 'compare against another Taskfile.pkl'",
+				"__fish_seen_subcommand_from migrate",
+				"-l to -d 'target schema version'",
+				"-l skip-verify -d 'skip post-migration pkl eval'",
+				"__fish_seen_subcommand_from pkl-cache",
+				"-a warm -d 'pre-evaluate Pkl files'",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.shell, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := cmdCompletion([]string{tt.shell}, &buf, &bytes.Buffer{}); err != nil {
+				t.Fatalf("cmdCompletion %s: %v", tt.shell, err)
+			}
+			out := buf.String()
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s completion missing %q", tt.shell, want)
+				}
+			}
+		})
+	}
+}
+
 func TestCompletionRejectsUnknownShell(t *testing.T) {
 	err := cmdCompletion([]string{"powershell"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "unknown shell") {

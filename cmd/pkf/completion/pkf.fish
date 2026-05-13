@@ -19,11 +19,14 @@ complete -c pkf -f -n '__fish_use_subcommand' -a clean     -d 'remove declared o
 complete -c pkf -f -n '__fish_use_subcommand' -a cache     -d 'inspect / clean the local CAS'
 complete -c pkf -f -n '__fish_use_subcommand' -a completion -d 'emit shell completion script'
 complete -c pkf -f -n '__fish_use_subcommand' -a graph     -d 'emit DAG (dot / mermaid / tree / json)'
+complete -c pkf -f -n '__fish_use_subcommand' -a explain   -d 'dump or compare inputs to the action key'
+complete -c pkf -f -n '__fish_use_subcommand' -a migrate   -d 'rewrite Taskfile schema version'
+complete -c pkf -f -n '__fish_use_subcommand' -a pkl-cache -d 'warm the local Pkl package cache'
 complete -c pkf -f -n '__fish_use_subcommand' -a version   -d 'print pkf version'
 complete -c pkf -f -n '__fish_use_subcommand' -a help      -d 'show usage'
 
 # Dynamic task names for the subcommands that take them.
-complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up' -a '(__pkf_tasks)'
+complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up explain' -a '(__pkf_tasks)'
 
 # Nested subcommand completions.
 complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
@@ -77,3 +80,12 @@ complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l all -d 'include int
 complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l unsorted -d 'use declaration order'
 complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l source-order -d 'use declaration order'
 complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l depth -d 'limit dependency traversal'
+
+complete -c pkf -f -n '__fish_seen_subcommand_from explain' -s f -l file -d 'path to Taskfile.pkl'
+complete -c pkf -f -n '__fish_seen_subcommand_from explain' -l diff -d 'compare against another Taskfile.pkl'
+complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -s f -l file -d 'path to Taskfile.pkl'
+complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l to -d 'target schema version'
+complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l dry-run -d 'preview rewrite without writing'
+complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l skip-verify -d 'skip post-migration pkl eval'
+complete -c pkf -f -n '__fish_seen_subcommand_from pkl-cache' -a warm -d 'pre-evaluate Pkl files'
+complete -c pkf -f -n '__fish_seen_subcommand_from pkl-cache' -s f -l file -d 'path to Taskfile.pkl'

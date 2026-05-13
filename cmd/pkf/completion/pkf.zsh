@@ -19,6 +19,9 @@ _pkf() {
     'cache:inspect / clean the local CAS'
     'completion:emit shell completion script'
     'graph:emit DAG (dot / mermaid / tree / json)'
+    'explain:dump or compare inputs to the action key'
+    'migrate:rewrite Taskfile schema version'
+    'pkl-cache:warm the local Pkl package cache'
     'version:print pkf version'
     'help:show usage'
   )
@@ -150,6 +153,37 @@ _pkf() {
           '--unsorted[use declaration order]' \
           '--source-order[use declaration order]' \
           '--depth[limit dependency traversal]'
+      fi
+      ;;
+    explain)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'explain option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--diff[compare against another Taskfile.pkl]'
+      else
+        local -a tasks
+        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+        _describe 'task' tasks
+      fi
+      ;;
+    migrate)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'migrate option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--to[target schema version]' \
+          '--dry-run[preview rewrite without writing]' \
+          '--skip-verify[skip post-migration pkl eval]'
+      fi
+      ;;
+    pkl-cache)
+      if (( CURRENT == 3 )); then
+        _values 'pkl-cache subcommand' warm
+      elif [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'pkl-cache option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]'
       fi
       ;;
   esac
