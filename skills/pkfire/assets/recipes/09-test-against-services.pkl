@@ -12,7 +12,7 @@
 ///   - 09 (`pkf run` + `services { ... }`): services exist *for*
 ///     a body command (test runner, smoke script, migration);
 ///     pkfire owns their full lifecycle.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.7.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.8.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.ts"

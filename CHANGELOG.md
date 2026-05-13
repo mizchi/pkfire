@@ -10,6 +10,8 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-13
+
 ### Added
 
 - `Task.cmd` can be omitted for deps-only umbrella tasks. The
@@ -492,7 +494,8 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.7.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.8.0...HEAD
+[0.8.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.8.0
 [0.7.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.7.0
 [0.6.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.6.0
 [0.5.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.5.0
