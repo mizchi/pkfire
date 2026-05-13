@@ -5,6 +5,9 @@
 
 > Typed task runner with Bazel-style incremental caching, configured in [Pkl](https://pkl-lang.org/).
 
+The name `pkfire` comes from "Pkl task fire": define tasks in Pkl,
+then fire them through the `pkf` CLI.
+
 `pkfire` (CLI: `pkf`) replaces hand-written `justfile`s with a typed,
 composable Pkl schema. Tasks declare their inputs, outputs, and
 dependencies; `pkf` builds a DAG and executes only the steps whose
