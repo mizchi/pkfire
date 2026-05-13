@@ -10,6 +10,20 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- `Task.cmd` can be omitted for deps-only umbrella tasks. The
+  rendered task succeeds after its dependencies complete without
+  spawning a shell, so `ci` / `all` aggregators no longer need
+  `cmd = ":"`.
+- `Task.shellFlags` configures the arguments passed before `cmd`
+  (default `List("-c")`). This keeps existing shell behavior while
+  allowing strict bash flags or runtimes such as Node via
+  `shellFlags = List("-e")`.
+- `Task.quiet = true` suppresses pkfire's per-task diagnostic lines
+  for that task while preserving the task's own stdout/stderr and the
+  final run summary.
+
 ## [0.7.0] - 2026-05-13
 
 ### Added

@@ -153,17 +153,14 @@ func ComputeKey(task *config.Task, defaults *config.Defaults, root string, confi
 	if err != nil {
 		return [32]byte{}, err
 	}
-	shell := task.Shell
 	var defEnv map[string]string
 	if defaults != nil {
-		if shell == "" {
-			shell = defaults.Shell
-		}
 		defEnv = defaults.Env
 	}
 	a := &hash.Action{
 		Cmd:        task.Cmd,
-		Shell:      shell,
+		Shell:      config.ResolveShell(task, defaults),
+		ShellFlags: config.ResolveShellFlags(task, defaults),
 		Env:        hash.MergeEnv(defEnv, task.Env),
 		Tools:      task.Tools,
 		Inputs:     entries,
@@ -256,7 +253,7 @@ func (o *Orchestrator) Execute(ctx context.Context, p *Plan) ([]Result, error) {
 					if !*depOK[d] {
 						*depOK[name] = false
 						results[idx[name]] = Result{Name: name, Outcome: OutcomeSkipped}
-						o.logLine(&ioMu, "[pkf] %s: skipped (dep %q failed)\n", name, d)
+						o.logTaskLine(&ioMu, task, "[pkf] %s: skipped (dep %q failed)\n", name, d)
 						return
 					}
 				case <-ctx.Done():
@@ -318,7 +315,7 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 			wrapped := fmt.Errorf("cache restore for %q: %w", name, err)
 			return Result{Name: name, Key: key, Duration: time.Since(start), Err: wrapped}, wrapped
 		}
-		o.logLine(ioMu, "[pkf] %s: hit %s\n", name, short)
+		o.logTaskLine(ioMu, task, "[pkf] %s: hit %s\n", name, short)
 		return Result{Name: name, Key: key, Outcome: OutcomeHit, Duration: time.Since(start)}, nil
 	}
 
@@ -363,7 +360,7 @@ func (o *Orchestrator) executeOne(ctx context.Context, name string, task *config
 			return Result{Name: name, Key: key, Duration: time.Since(start), Err: wrapped}, wrapped
 		}
 	}
-	o.logLine(ioMu, "[pkf] %s: %s %s\n", name, outcome, short)
+	o.logTaskLine(ioMu, task, "[pkf] %s: %s %s\n", name, outcome, short)
 	return Result{Name: name, Key: key, Outcome: outcome, Duration: time.Since(start)}, nil
 }
 
@@ -525,4 +522,11 @@ func (o *Orchestrator) logLine(mu *sync.Mutex, format string, args ...any) {
 	mu.Lock()
 	defer mu.Unlock()
 	fmt.Fprintf(o.stderr, format, args...)
+}
+
+func (o *Orchestrator) logTaskLine(mu *sync.Mutex, task *config.Task, format string, args ...any) {
+	if task != nil && task.Quiet {
+		return
+	}
+	o.logLine(mu, format, args...)
 }

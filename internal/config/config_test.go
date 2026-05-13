@@ -82,3 +82,45 @@ tasks { z; a }
 		t.Fatalf("a.Visibility = %q, want public", got)
 	}
 }
+
+func TestLoadDecodesShellFlagsQuietAndOmittedCmd(t *testing.T) {
+	requirePkl(t)
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	taskfile := filepath.Join(dir, "Taskfile.pkl")
+	body := `amends "` + filepath.ToSlash(filepath.Join(repoRoot, "pkl/Taskfile.pkl")) + `"
+
+local build = new Task {
+  name = "build"
+  shell = "node"
+  shellFlags = List("-e")
+  quiet = true
+  cmd = "console.log('build')"
+}
+local ci = new Task { name = "ci"; deps { build } }
+tasks { build; ci }
+`
+	if err := os.WriteFile(taskfile, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tf, err := config.Load(context.Background(), taskfile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	build := tf.Tasks["build"]
+	if got := build.ShellFlags; len(got) != 1 || got[0] != "-e" {
+		t.Fatalf("build.ShellFlags = %v, want [-e]", got)
+	}
+	if !build.Quiet {
+		t.Fatal("build.Quiet = false, want true")
+	}
+	if got := tf.Tasks["ci"].Cmd; got != "" {
+		t.Fatalf("ci.Cmd = %q, want empty string sentinel for omitted cmd", got)
+	}
+	if got := tf.Defaults.ShellFlags; len(got) != 1 || got[0] != "-c" {
+		t.Fatalf("defaults.ShellFlags = %v, want [-c]", got)
+	}
+}

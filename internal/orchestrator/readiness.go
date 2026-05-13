@@ -51,15 +51,10 @@ func probeReady(ctx context.Context, t *config.Task, defaults *config.Defaults) 
 		_ = c.Close()
 	}
 	if t.ReadyCmd != "" {
-		shell := t.Shell
-		if shell == "" {
-			if defaults != nil && defaults.Shell != "" {
-				shell = defaults.Shell
-			} else {
-				shell = "bash"
-			}
-		}
-		cmd := exec.CommandContext(ctx, shell, "-c", t.ReadyCmd)
+		shell := config.ResolveShell(t, defaults)
+		cmdArgs := config.ResolveShellFlags(t, defaults)
+		cmdArgs = append(cmdArgs, t.ReadyCmd)
+		cmd := exec.CommandContext(ctx, shell, cmdArgs...)
 		// Probe runs with a minimal env — don't leak the runner's
 		// merged env into a shell snippet whose only purpose is to
 		// answer "is the service ready".

@@ -1,9 +1,9 @@
 // Package hash computes Bazel-style action keys for tasks.
 //
 // The action key is a BLAKE3 digest over a deterministic, line-oriented
-// description of what the task is going to do: shell + cmd + sorted env +
-// sorted tools + sorted (path, content-hash) pairs for declared inputs +
-// the Pkl module's canonical form.
+// description of what the task is going to do: shell + shell flags + cmd +
+// sorted env + sorted tools + sorted (path, content-hash) pairs for declared
+// inputs + the Pkl module's canonical form.
 //
 // Two task invocations with the same action key are guaranteed to produce
 // the same outputs (assuming the user's `inputs` declaration is honest).
@@ -44,6 +44,7 @@ type FileEntry struct {
 type Action struct {
 	Cmd        string
 	Shell      string
+	ShellFlags []string
 	Env        map[string]string
 	Tools      map[string]string
 	Inputs     []FileEntry
@@ -58,6 +59,9 @@ func (a *Action) Key() [32]byte {
 	h := blake3.New()
 	fmt.Fprintf(h, "cmd:%s\n", a.Cmd)
 	fmt.Fprintf(h, "shell:%s\n", a.Shell)
+	for i, v := range a.ShellFlags {
+		fmt.Fprintf(h, "shell-flag:%d:%s\n", i, v)
+	}
 	writeMap(h, "env", a.Env)
 	writeMap(h, "tools", a.Tools)
 	entries := append([]FileEntry(nil), a.Inputs...)

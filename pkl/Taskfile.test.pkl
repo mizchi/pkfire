@@ -33,6 +33,21 @@ facts {
     build.shell == "bash"
   }
 
+  ["defaults: shellFlags is -c"] {
+    build.shellFlags == List("-c")
+  }
+
+  ["shellFlags round-trips"] {
+    (
+      new Schema.Task {
+        name = "node"
+        shell = "node"
+        shellFlags = List("-e")
+        cmd = "console.log(1)"
+      }
+    ).shellFlags == List("-e")
+  }
+
   ["defaults: service is false"] {
     build.service == false
   }
@@ -76,6 +91,10 @@ facts {
     test.deps.toList().first.name == "build"
   }
 
+  ["cmd can be omitted for deps-only umbrella tasks"] {
+    (new Schema.Task { name = "ci"; deps { build } }).cmd == null
+  }
+
   ["empty cmd is rejected"] {
     module.catch(() -> (new Schema.Task { name = "x"; cmd = "" }).cmd) != null
   }
@@ -107,6 +126,14 @@ facts {
 
   ["visibility defaults to public"] {
     build.visibility == "public"
+  }
+
+  ["quiet defaults to false"] {
+    build.quiet == false
+  }
+
+  ["quiet can be enabled"] {
+    (new Schema.Task { name = "wrapper"; cmd = "echo wrapper"; quiet = true }).quiet == true
   }
 
   ["visibility can be internal"] {

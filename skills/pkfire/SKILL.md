@@ -28,11 +28,12 @@ declares one `local Task` per unit of work, then lists them in
 the tasks whose **action key** changed, and restores the cached
 outputs of every other task from a CAS.
 
-**Action key** = BLAKE3 over (`cmd`, `shell`, sorted env, sorted tools,
-sorted input file digests, the Pkl module's canonical form, **plus**
-any resolved CLI params and tail args when the task is the invocation
-target). Two invocations with the same key are guaranteed to produce
-the same outputs (assuming honest `inputs` declarations).
+**Action key** = BLAKE3 over (`cmd`, `shell`, `shellFlags`, sorted env,
+sorted tools, sorted input file digests, the Pkl module's canonical
+form, **plus** any resolved CLI params and tail args when the task is
+the invocation target). Two invocations with the same key are
+guaranteed to produce the same outputs (assuming honest `inputs`
+declarations).
 
 Above the pure run-it-once DAG, pkfire grows three orthogonal layers:
 
@@ -65,8 +66,9 @@ base "one cached task per change" model is unchanged.
 ```pkl
 class Task {
   name: String                                    // required, regex-checked
-  cmd: String(length > 0)                         // required
+  cmd: String(length > 0)? = null                 // null = deps-only umbrella task
   shell: String = "bash"
+  shellFlags: List<String> = List("-c")           // args before cmd, e.g. bash -c or node -e
   inputs: Listing<String>  = new {}               // glob; missing files silently ignored
   outputs: Listing<String> = new {}               // restored on cache hit
   deps: Listing<Task>      = new {}               // direct references
@@ -76,6 +78,7 @@ class Task {
   workdir: String?     = null                     // relative to Taskfile dir
   description: String? = null
   visibility: "public"|"internal" = "public"      // hidden from list/graph unless --all
+  quiet: Boolean = false                          // suppress pkfire per-task diagnostic lines
   service: Boolean = false                        // long-running, supervised by `pkf up`
   shutdownTimeoutSeconds: Int = 5                 // SIGTERM grace before SIGKILL
   services: Listing<Task> = new {}                // services to bring up while this task runs

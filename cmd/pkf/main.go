@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -333,7 +334,17 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		if taskVisibility(t) == "internal" {
 			fmt.Fprintf(stdout, "  visibility: internal\n")
 		}
-		fmt.Fprintf(stdout, "  cmd:  %s\n", t.Cmd)
+		if t.Cmd == "" {
+			fmt.Fprintf(stdout, "  cmd:  <none>\n")
+		} else {
+			fmt.Fprintf(stdout, "  cmd:  %s\n", t.Cmd)
+		}
+		if !slices.Equal(t.ShellFlags, []string{"-c"}) {
+			fmt.Fprintf(stdout, "  shellFlags: %s\n", strings.Join(t.ShellFlags, " "))
+		}
+		if t.Quiet {
+			fmt.Fprintf(stdout, "  quiet: true\n")
+		}
 		if len(t.Deps) > 0 {
 			fmt.Fprintf(stdout, "  deps: %s\n", strings.Join(t.Deps, ", "))
 		}
@@ -717,12 +728,14 @@ type listTaskJSON struct {
 	Visibility  string          `json:"visibility"`
 	Cmd         string          `json:"cmd"`
 	Shell       string          `json:"shell,omitempty"`
+	ShellFlags  []string        `json:"shellFlags,omitempty"`
 	Deps        []string        `json:"deps,omitempty"`
 	Inputs      []string        `json:"inputs,omitempty"`
 	Outputs     []string        `json:"outputs,omitempty"`
 	Workdir     string          `json:"workdir,omitempty"`
 	Cache       bool            `json:"cache"`
 	Service     bool            `json:"service"`
+	Quiet       bool            `json:"quiet"`
 	Services    []string        `json:"services,omitempty"`
 	AcceptsArgs bool            `json:"acceptsArgs"`
 	InheritEnv  bool            `json:"inheritEnv"`
@@ -742,11 +755,13 @@ func printListJSON(stdout io.Writer, tf *config.Taskfile, names []string) error 
 			Cmd:         t.Cmd,
 			Visibility:  taskVisibility(t),
 			Shell:       t.Shell,
+			ShellFlags:  t.ShellFlags,
 			Deps:        t.Deps,
 			Inputs:      t.Inputs,
 			Outputs:     t.Outputs,
 			Cache:       t.Cache,
 			Service:     t.Service,
+			Quiet:       t.Quiet,
 			Services:    t.Services,
 			AcceptsArgs: t.AcceptsArgs,
 			InheritEnv:  t.InheritEnv,
@@ -1861,12 +1876,8 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 
 	// Re-derive the same things ComputeKey computes, but expose them
 	// at every layer (not just the final BLAKE3 digest).
-	shell := task.Shell
 	var defEnv map[string]string
 	if tf.Defaults != nil {
-		if shell == "" {
-			shell = tf.Defaults.Shell
-		}
 		defEnv = tf.Defaults.Env
 	}
 	env := hash.MergeEnv(defEnv, task.Env)
@@ -1876,7 +1887,8 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 	}
 	action := &hash.Action{
 		Cmd:        task.Cmd,
-		Shell:      shell,
+		Shell:      config.ResolveShell(task, tf.Defaults),
+		ShellFlags: config.ResolveShellFlags(task, tf.Defaults),
 		Env:        env,
 		Tools:      task.Tools,
 		Inputs:     entries,
@@ -1893,9 +1905,14 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "workdir:     %s  (Taskfile dir)\n", taskRoot)
 	}
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "cmd:\n  %s\n", strings.ReplaceAll(task.Cmd, "\n", "\n  "))
+	if task.Cmd == "" {
+		fmt.Fprintf(stdout, "cmd:\n  <none>\n")
+	} else {
+		fmt.Fprintf(stdout, "cmd:\n  %s\n", strings.ReplaceAll(task.Cmd, "\n", "\n  "))
+	}
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "shell:       %s\n", shell)
+	fmt.Fprintf(stdout, "shell:       %s\n", action.Shell)
+	fmt.Fprintf(stdout, "shell flags: %s\n", strings.Join(action.ShellFlags, " "))
 	fmt.Fprintln(stdout)
 
 	fmt.Fprintf(stdout, "env (%d):\n", len(env))
@@ -3641,7 +3658,11 @@ func printDryRun(stdout io.Writer, root string, tf *config.Taskfile, order []str
 			taskInv = inv
 		}
 
-		r := row{name: name, cmd: oneLine(t.Cmd)}
+		cmd := oneLine(t.Cmd)
+		if cmd == "" {
+			cmd = "<none>"
+		}
+		r := row{name: name, cmd: cmd}
 
 		switch {
 		case t.Service:

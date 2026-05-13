@@ -89,12 +89,13 @@ tasks { install; db; api; web; dev }
 // Notes on the `cmd = "exec ..."` pattern
 // ---------------------------------------------------------------
 //
-// pkfire runs `cmd` via `<shell> -c <cmd>`. Without `exec`, the shell
-// stays as the parent process and the real server is its child. The
-// runner sets the shell as a process-group leader and signals the
-// whole group on shutdown, so even non-`exec` cmds get reaped — but
-// `exec` lets the server replace the shell and receive signals
-// directly, which gives cleaner logs and one fewer pid in `ps`.
+// pkfire runs `cmd` via `<shell> <shellFlags...> <cmd>` (`bash -c` by
+// default). Without `exec`, the shell stays as the parent process and
+// the real server is its child. The runner sets the shell as a
+// process-group leader and signals the whole group on shutdown, so
+// even non-`exec` cmds get reaped — but `exec` lets the server replace
+// the shell and receive signals directly, which gives cleaner logs and
+// one fewer pid in `ps`.
 //
 // `cmd = "trap 'kill 0' EXIT INT TERM; node server.js & wait"` is the
 // fallback if your shell doesn't support `exec` or you need a

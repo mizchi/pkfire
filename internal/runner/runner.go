@@ -1,8 +1,8 @@
 // Package runner executes resolved tasks via the system shell.
 //
 // Phase 1 only does serial execution with no caching: deps -> dependents,
-// each task runs as `<shell> -c <cmd>` with merged env. Caching, parallelism,
-// and output capture come in later phases.
+// each task runs as `<shell> <shellFlags...> <cmd>` with merged env.
+// Caching, parallelism, and output capture come in later phases.
 package runner
 
 import (
@@ -85,24 +85,23 @@ func (r *Runner) Run(ctx context.Context, name string, task *config.Task, defaul
 // is equivalent to an empty Invocation, used for non-target tasks where
 // arg/param passthrough doesn't apply.
 func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, defaults *config.Defaults, inv *Invocation, stdout, stderr io.Writer) error {
-	shell := task.Shell
-	if shell == "" {
-		if defaults != nil && defaults.Shell != "" {
-			shell = defaults.Shell
-		} else {
-			shell = "bash"
-		}
-	}
-
-	// `bash -c '<script>' arg0 arg1 arg2 ...` makes arg1, arg2, ... show
-	// up as `$1`, `$2`, ..., and `$@` in the script. We use "pkf" as the
-	// `$0` slot so error messages from the shell label the source
-	// usefully.
-	cmdArgs := []string{"-c", task.Cmd, "pkf"}
 	if inv != nil && len(inv.Args) > 0 {
 		if !task.AcceptsArgs {
 			return fmt.Errorf("task %q does not accept positional args (set acceptsArgs = true)", name)
 		}
+	}
+
+	if task.Cmd == "" {
+		return nil
+	}
+
+	shell := config.ResolveShell(task, defaults)
+	// `bash -c '<script>' arg0 arg1 arg2 ...` makes arg1, arg2, ... show
+	// up as `$1`, `$2`, ..., and `$@` in the script. We use "pkf" as the
+	// `$0` slot so error messages from the shell label the source usefully.
+	cmdArgs := config.ResolveShellFlags(task, defaults)
+	cmdArgs = append(cmdArgs, task.Cmd, "pkf")
+	if inv != nil && len(inv.Args) > 0 {
 		cmdArgs = append(cmdArgs, inv.Args...)
 	}
 	cmd := exec.Command(shell, cmdArgs...)
@@ -144,7 +143,7 @@ func (r *Runner) RunWithIO(ctx context.Context, name string, task *config.Task, 
 	// reap bash but leave node holding ports). See sysattr_unix.go.
 	setProcessGroup(cmd)
 
-	if !r.opts.Quiet {
+	if !r.opts.Quiet && !task.Quiet {
 		fmt.Fprintf(stderr, "[pkf] %s: %s\n", name, task.Cmd)
 	}
 	if err := cmd.Start(); err != nil {

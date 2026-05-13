@@ -968,6 +968,46 @@ tasks { foo }
 	}
 }
 
+func TestRunTaskQuietSuppressesOnlyThatTaskLogs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local foo = new Task { name = "foo"; cmd = "echo foo"; cache = false; quiet = true }
+tasks { foo }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "foo"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun: %v", err)
+	}
+	if strings.TrimSpace(stdout.String()) != "foo" {
+		t.Fatalf("stdout = %q, want foo", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "[pkf] foo:") {
+		t.Errorf("quiet task should suppress per-task pkf logs:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[pkf] done:") {
+		t.Errorf("end-of-run summary should still print:\n%s", stderr.String())
+	}
+}
+
+func TestRunDepsOnlyTaskCanOmitCmd(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local leaf = new Task { name = "leaf"; cmd = "echo leaf"; cache = false }
+local ci = new Task { name = "ci"; deps { leaf }; cache = false }
+tasks { leaf; ci }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "ci"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun: %v\n%s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "leaf" {
+		t.Fatalf("stdout = %q, want leaf", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "[pkf] ci: :") {
+		t.Errorf("deps-only task should not need a ':' shell command:\n%s", stderr.String())
+	}
+}
+
 func TestExpandPatternsExpandsGlobs(t *testing.T) {
 	tasks := map[string]*config.Task{
 		"test:unit":        {},

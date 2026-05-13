@@ -17,6 +17,7 @@ import (
 type Task struct {
 	Cmd                    string            `pkl:"cmd"`
 	Shell                  string            `pkl:"shell"`
+	ShellFlags             []string          `pkl:"shellFlags"`
 	Inputs                 []string          `pkl:"inputs"`
 	Outputs                []string          `pkl:"outputs"`
 	Deps                   []string          `pkl:"deps"`
@@ -26,6 +27,7 @@ type Task struct {
 	Workdir                *string           `pkl:"workdir"`
 	Description            *string           `pkl:"description"`
 	Visibility             string            `pkl:"visibility"`
+	Quiet                  bool              `pkl:"quiet"`
 	Service                bool              `pkl:"service"`
 	ShutdownTimeoutSeconds int               `pkl:"shutdownTimeoutSeconds"`
 	Services               []string          `pkl:"services"`
@@ -49,8 +51,9 @@ type Param struct {
 
 // Defaults mirrors `pkfire.Taskfile#Defaults`.
 type Defaults struct {
-	Shell string            `pkl:"shell"`
-	Env   map[string]string `pkl:"env"`
+	Shell      string            `pkl:"shell"`
+	ShellFlags []string          `pkl:"shellFlags"`
+	Env        map[string]string `pkl:"env"`
 }
 
 // Taskfile is the decoded top-level module.
@@ -108,4 +111,29 @@ func Load(ctx context.Context, path string) (*Taskfile, error) {
 	}
 	tf.Canonical = canonical
 	return tf, nil
+}
+
+// ResolveShell returns the shell binary a task should use after applying
+// Go-side fallbacks for hand-constructed Task values in tests and tools.
+func ResolveShell(task *Task, defaults *Defaults) string {
+	if task != nil && task.Shell != "" {
+		return task.Shell
+	}
+	if defaults != nil && defaults.Shell != "" {
+		return defaults.Shell
+	}
+	return "bash"
+}
+
+// ResolveShellFlags returns a copy of the flags passed before the script
+// argument. Empty means "unspecified" in Go structs, so it falls back to
+// defaults and then to the schema-compatible `-c`.
+func ResolveShellFlags(task *Task, defaults *Defaults) []string {
+	if task != nil && len(task.ShellFlags) > 0 {
+		return append([]string(nil), task.ShellFlags...)
+	}
+	if defaults != nil && len(defaults.ShellFlags) > 0 {
+		return append([]string(nil), defaults.ShellFlags...)
+	}
+	return []string{"-c"}
 }

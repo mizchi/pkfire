@@ -57,6 +57,34 @@ func TestRunReportsFailure(t *testing.T) {
 	}
 }
 
+func TestRunWithIOUsesShellFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.RunWithIO(context.Background(), "strict", &config.Task{
+		Cmd:        "false | true",
+		Shell:      "bash",
+		ShellFlags: []string{"-eu", "-o", "pipefail", "-c"},
+	}, nil, nil, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected bash pipefail shellFlags to fail the pipeline")
+	}
+}
+
+func TestRunWithIOOmittedCmdIsNoop(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.RunWithIO(context.Background(), "umbrella", &config.Task{
+		Cmd:   "",
+		Shell: "definitely-not-a-real-shell",
+	}, nil, nil, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("omitted cmd should be a no-op: %v", err)
+	}
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf("noop task should not emit output, stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestRunInjectsPkfEnvVars(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr, Workdir: "/tmp"})
@@ -73,6 +101,25 @@ func TestRunInjectsPkfEnvVars(t *testing.T) {
 	}
 	if !strings.Contains(got, "|/tmp|") || !strings.HasSuffix(got, "|/tmp") {
 		t.Errorf("PKF_TASK_ROOT / PKF_WORKSPACE_ROOT not set to expected /tmp: got %q", got)
+	}
+}
+
+func TestRunWithIOTaskQuietSuppressesHeader(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := runner.New(runner.Options{Stdout: &stdout, Stderr: &stderr})
+	err := r.RunWithIO(context.Background(), "wrapper", &config.Task{
+		Cmd:   "echo payload",
+		Shell: "bash",
+		Quiet: true,
+	}, nil, nil, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "payload" {
+		t.Fatalf("stdout = %q, want payload", got)
+	}
+	if strings.Contains(stderr.String(), "[pkf] wrapper:") {
+		t.Fatalf("quiet task should suppress runner header, stderr=%q", stderr.String())
 	}
 }
 

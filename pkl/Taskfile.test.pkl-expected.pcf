@@ -4,6 +4,7 @@ examples {
       name = "build"
       cmd = "go build ./..."
       shell = "bash"
+      shellFlags = List("-c")
       inputs {
         "**/*.go"
         "go.mod"
@@ -18,6 +19,7 @@ examples {
       workdir = null
       description = null
       visibility = "public"
+      quiet = false
       service = false
       shutdownTimeoutSeconds = 5
       services {}

@@ -61,6 +61,7 @@ func TestKeyChangesWhenAnyComponentChanges(t *testing.T) {
 
 	mutate("cmd", func(a *hash.Action) { a.Cmd = "echo bye" })
 	mutate("shell", func(a *hash.Action) { a.Shell = "zsh" })
+	mutate("shell-flags", func(a *hash.Action) { a.ShellFlags = []string{"-eu", "-o", "pipefail", "-c"} })
 	mutate("env", func(a *hash.Action) { a.Env["A"] = "2" })
 	mutate("tools", func(a *hash.Action) { a.Tools["go"] = "1.27" })
 	mutate("input-content", func(a *hash.Action) { a.Inputs[0].Hash = []byte{0xbb} })

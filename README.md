@@ -167,6 +167,38 @@ undefined task fails at Pkl evaluation time with a name-resolution
 error, before the runner ever starts. Renaming a task in one place
 updates every reference automatically.
 
+Tasks that only aggregate dependencies can omit `cmd`:
+
+```pkl
+local ci = new Task {
+  name = "ci"
+  deps { build; test }
+}
+```
+
+`cmd` runs as `<shell> <shellFlags...> <cmd>`. The default is
+`shell = "bash"` and `shellFlags = List("-c")`; override
+`shellFlags` for strict mode or non-`-c` runtimes:
+
+```pkl
+local strict = new Task {
+  name = "strict"
+  shellFlags = List("-eu", "-o", "pipefail", "-c")
+  cmd = "pkl format --check ."
+}
+
+local nodeSnippet = new Task {
+  name = "node-snippet"
+  shell = "node"
+  shellFlags = List("-e")
+  cmd = "console.log(process.argv.slice(2))"
+}
+```
+
+For wrapper tasks whose stdout/stderr is the product, set
+`quiet = true` to suppress pkfire's per-task diagnostic lines without
+hiding the command's own output.
+
 When `-f` is not supplied, `pkf` walks up from the current directory
 to find the nearest `Taskfile.pkl` (the same discovery rule git uses
 for `.git/`), so any of these works the same:
@@ -429,7 +461,7 @@ Open a PR to add yours.
 | 0 | Pkl schema, `pkl test` baseline, CLI skeleton | ✅ |
 | 1 | Load `Taskfile.pkl` via `pkl-go`, build DAG, run serially | ✅ |
 | 2 | Parallel execution honoring `deps` (per-task IO capture) | ✅ |
-| 3 | Action key (BLAKE3 over cmd / env / inputs / tools / config) | ✅ |
+| 3 | Action key (BLAKE3 over cmd / shell flags / env / inputs / tools / config) | ✅ |
 | 4 | Local CAS, hit/miss, output restore | ✅ |
 | 5 | Watch mode (`pkf run --watch`) | ✅ |
 | 6 | Remote cache (HTTP backend + reference Cloudflare Worker) | ✅ |

@@ -62,15 +62,22 @@ class Task {
   /// structure when one task per directory is the natural decomposition.
   name: String(matches(Regex(#"^[a-zA-Z][a-zA-Z0-9_:./-]*$"#)))
 
-  /// Shell command to execute. Run via `<shell> -c <cmd>`.
+  /// Shell command to execute. Run via `<shell> <shellFlags...> <cmd>`.
+  /// Null means this is a deps-only umbrella task: dependencies run, then
+  /// this task succeeds without spawning a process.
   ///
   /// When `acceptsArgs = true`, positional args after `--` on the
   /// pkf command line show up as `$1` ... `$@`. When `params` is
   /// non-empty, each declared param is exposed as `$NAME` (uppercased).
-  cmd: String(length > 0)
+  cmd: String(length > 0)? = null
 
   /// Shell binary used to run `cmd`. Defaults to `bash`.
   shell: String = "bash"
+
+  /// Arguments passed to `shell` before `cmd`. Defaults to `List("-c")`
+  /// for POSIX shells and Python-style script evaluation. Override for
+  /// shells that use a different script flag, e.g. `List("-e")` for Node.
+  shellFlags: List<String> = List("-c")
 
   /// Glob patterns of input files. Their content hash feeds the action key.
   ///
@@ -118,6 +125,10 @@ class Task {
   /// up in `pkf list` / `pkf graph` by default; `internal` tasks stay
   /// runnable by name but are hidden unless those commands receive `--all`.
   visibility: "public" | "internal" = "public"
+
+  /// Suppress pkfire's per-task diagnostic lines for this task. The task's
+  /// own stdout/stderr still pass through unchanged.
+  quiet: Boolean = false
 
   /// When true, this task is a long-running service. It is started by
   /// `pkf up` and supervised until the up session ends (Ctrl+C or a
@@ -196,6 +207,7 @@ class Task {
 /// Project-level defaults shared by all tasks unless overridden.
 class Defaults {
   shell: String = "bash"
+  shellFlags: List<String> = List("-c")
   env: Mapping<String, String> = new {}
 }
 
@@ -214,6 +226,7 @@ class RenderedParam {
 class RenderedTask {
   cmd: String
   shell: String
+  shellFlags: List<String>
   inputs: Listing<String>
   outputs: Listing<String>
   deps: Listing<String>
@@ -223,6 +236,7 @@ class RenderedTask {
   workdir: String?
   description: String?
   visibility: String
+  quiet: Boolean
   service: Boolean
   shutdownTimeoutSeconds: Int
   services: Listing<String>
@@ -266,8 +280,9 @@ local duplicateNames: List<String> =
 local rendered: Mapping<String, RenderedTask> = new Mapping {
   for (t in tasks) {
     [t.name] = new RenderedTask {
-      cmd = t.cmd
+      cmd = if (t.cmd == null) "" else t.cmd
       shell = t.shell
+      shellFlags = t.shellFlags
       inputs = t.inputs
       outputs = t.outputs
       deps = new Listing { for (d in t.deps) { d.name } }
@@ -277,6 +292,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       workdir = t.workdir
       description = t.description
       visibility = t.visibility
+      quiet = t.quiet
       service = t.service
       shutdownTimeoutSeconds = t.shutdownTimeoutSeconds
       services = new Listing { for (s in t.services) { s.name } }
