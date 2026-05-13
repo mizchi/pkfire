@@ -1,5 +1,5 @@
 /// Minimal example consumed by smoke tests.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.7.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.8.0#/Taskfile.pkl"
 
 local hello = new Task {
   name = "hello"
