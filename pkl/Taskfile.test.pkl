@@ -182,6 +182,20 @@ facts {
   ["unknown param type is rejected"] {
     module.catch(() -> (new Schema.Param { name = "x"; type = "float" }).type) != null
   }
+
+  ["workflow test round-trips changed files, direct tasks, and plan"] {
+    let (
+      wt = new Schema.WorkflowTest {
+        name = "go source"
+        changed { "src/main.go" }
+        direct { "build" }
+        tasks { "build"; "test" }
+      }
+    )
+      wt.changed.toList().first == "src/main.go"
+        && wt.direct.toList().first == "build"
+        && wt.tasks.toList().last == "test"
+  }
 }
 
 examples {

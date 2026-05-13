@@ -97,6 +97,13 @@ class Param {
   default: String?                 // null = required; "10" for int, "true"/"false" for bool
   description: String?
 }
+
+class WorkflowTest {
+  name: String
+  changed: Listing<String>         // repo-relative files to simulate
+  tasks: Listing<String>           // expected affected run plan, in order
+  direct: Listing<String> = new {} // optional: direct input matches
+}
 ```
 
 ## Authoring template (always start from this)
@@ -752,6 +759,8 @@ the actual work is minimal.
 pkf affected --since=origin/main           # everything affected by the PR
 pkf affected --since=origin/main test:unit # filter to specific targets (exact names)
 pkf affected --since=HEAD~1 --dry-run      # preview without running
+pkf affected --files src/main.go --explain --dry-run  # check file -> task matching
+pkf affected --check                       # run workflowTests from Taskfile.pkl
 ```
 
 Default `--since` chain: `origin/main` → `origin/master` → `HEAD~1`.
@@ -759,6 +768,10 @@ Tasks with empty `inputs` are never affected by file changes (they
 explicitly declared no file dependencies). Tasks with `cache = false`
 are still subject to the same affected-set test — they don't get
 auto-pulled in just because they're always-run.
+
+Use `workflowTests { ... }` next to the tasks when authoring a new
+Taskfile or changing `inputs` / `deps`; it is the Taskfile-level
+equivalent of a unit test for the affected workflow.
 
 ## CLI tools
 
@@ -776,6 +789,8 @@ pkf graph                      # Graphviz DOT
 pkf graph --format mermaid     # GitHub-renderable
 pkf graph --format tree        # terminal-readable dependency tree
 pkf graph --target build       # only the subgraph rooted at `build`
+pkf affected --files PATH --explain --dry-run  # show matching inputs + affected closure
+pkf affected --check           # verify workflowTests
 pkf lint                       # dead local tasks + suspicious task definitions
 pkf lint --json                # structured findings for editor / CI tooling
 pkf lint --fix --dry-run       # preview safe edits; currently cache=false for outputs-without-inputs

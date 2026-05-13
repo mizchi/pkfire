@@ -220,6 +220,33 @@ class RenderedParam {
   description: String?
 }
 
+/// A test case for the file-change → affected-task workflow.
+///
+/// These are intentionally authored in the Taskfile so `inputs` and `deps`
+/// can be tested next to the task definitions they describe. Run with:
+///
+///     pkf affected --check
+///
+/// `changed` is a list of repo-relative file paths to simulate. `tasks`
+/// is the expected final run plan in topological order, after direct input
+/// matches have expanded through dependents and each affected task's own
+/// dependencies have been added. `direct` is optional; when non-empty, pkf
+/// also asserts the tasks whose `inputs` matched directly.
+class WorkflowTest {
+  name: String(length > 0)
+  changed: Listing<String>
+  tasks: Listing<String>
+  direct: Listing<String> = new {}
+}
+
+/// Wire format mirror of `WorkflowTest` consumed by the Go runner.
+class RenderedWorkflowTest {
+  name: String
+  changed: Listing<String>
+  tasks: Listing<String>
+  direct: Listing<String>
+}
+
 /// Wire format consumed by the Go runner. `name` is lifted to the Mapping
 /// key in `Rendered.tasks`; `deps` is projected from `Listing<Task>` to
 /// `Listing<String>` so the runner can deserialize without recursion.
@@ -254,6 +281,7 @@ class Rendered {
   defaults: Defaults
   taskOrder: Listing<String>
   tasks: Mapping<String, RenderedTask>
+  workflowTests: Listing<RenderedWorkflowTest>
 }
 
 defaults: Defaults = new {}
@@ -271,6 +299,11 @@ defaults: Defaults = new {}
 /// each task must be listed explicitly. Duplicate names in the listing
 /// raise an error before output is rendered (see `output.value` below).
 tasks: Listing<Task> = new {}
+
+/// File-change workflow checks. These let a Taskfile pin expectations like
+/// "changing services/api/src/foo.ts should run build:api and test:api" in
+/// the same spirit as unit tests.
+workflowTests: Listing<WorkflowTest> = new {}
 
 local taskNames: List<String> = tasks.toList().map((t) -> t.name)
 
@@ -320,6 +353,16 @@ output {
   value = new Rendered {
     defaults = module.defaults
     taskOrder = new Listing { for (t in module.tasks) { t.name } }
+    workflowTests = new Listing {
+      for (wt in module.workflowTests) {
+        new RenderedWorkflowTest {
+          name = wt.name
+          changed = wt.changed
+          tasks = wt.tasks
+          direct = wt.direct
+        }
+      }
+    }
     tasks =
       if (duplicateNames.isEmpty)
         rendered

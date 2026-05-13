@@ -47,6 +47,22 @@ var runGlobalBoolFlags = map[string]bool{
 	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true, "remote-only": true,
 }
 
+type stringListFlag []string
+
+func (f *stringListFlag) Set(value string) error {
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			*f = append(*f, filepath.ToSlash(part))
+		}
+	}
+	return nil
+}
+
+func (f *stringListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
 // version is overridden at link time via `-ldflags "-X main.version=…"`.
 var version = "dev"
 
@@ -141,8 +157,8 @@ commands:
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   hooks <install|uninstall|list> [-f FILE] [--force]
                                         manage .git/hooks shims that delegate to pkf run
-  affected [--since=<ref>] [--dry-run] [task...]
-                                        run only tasks whose inputs changed since <ref> (and their dependents)
+  affected [--since=<ref>|--files=PATH] [--explain] [--dry-run] [task...]
+                                        run only tasks whose inputs changed (and their dependents); --check runs workflowTests
   clean [-f FILE] [--dry-run] [task...] remove tasks' declared outputs (no arg = every task with outputs)
   cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
   completion <bash|zsh|fish>            emit a shell-completion script to stdout
@@ -158,6 +174,9 @@ flags:
   -j, --jobs N           max concurrent tasks (default: NumCPU)
       --watch            re-run on input changes (Ctrl+C to stop)
       --dry-run          print the plan and exit (run/affected/clean/migrate/doctor/lint)
+      --files PATH       (affected only) simulate changed file(s); repeat or comma-separate
+      --explain          (affected only) show which input patterns matched
+      --check            (affected only) run Taskfile workflowTests
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
       --refresh          skip cache lookup but still store results (re-baseline)
@@ -2261,6 +2280,7 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 type explainSnapshot struct {
 	Source     string
 	Target     string
+	Taskfile   *config.Taskfile
 	Task       *config.Task
 	TaskRoot   string
 	Action     *hash.Action
@@ -2303,6 +2323,7 @@ func explainSnapshotFor(path, target string) (*explainSnapshot, error) {
 	return &explainSnapshot{
 		Source:     path,
 		Target:     target,
+		Taskfile:   tf,
 		Task:       task,
 		TaskRoot:   taskRoot,
 		Action:     action,
@@ -2322,6 +2343,17 @@ func printExplainSnapshot(stdout io.Writer, s *explainSnapshot) {
 		fmt.Fprintf(stdout, "workdir:     %s  (absolute: %s)\n", *task.Workdir, s.TaskRoot)
 	} else {
 		fmt.Fprintf(stdout, "workdir:     %s  (Taskfile dir)\n", s.TaskRoot)
+	}
+	if len(task.Deps) == 0 {
+		fmt.Fprintln(stdout, "deps:        (none)")
+	} else {
+		fmt.Fprintf(stdout, "deps:        %s\n", strings.Join(task.Deps, ", "))
+	}
+	dependents := directDependents(s.Taskfile, s.Target)
+	if len(dependents) == 0 {
+		fmt.Fprintln(stdout, "dependents:  (none)")
+	} else {
+		fmt.Fprintf(stdout, "dependents:  %s\n", strings.Join(dependents, ", "))
 	}
 	fmt.Fprintln(stdout)
 	if task.Cmd == "" {
@@ -2362,6 +2394,15 @@ func printExplainSnapshot(stdout io.Writer, s *explainSnapshot) {
 	}
 	fmt.Fprintln(stdout)
 
+	fmt.Fprintf(stdout, "input patterns (%d):\n", len(task.Inputs))
+	for _, pat := range task.Inputs {
+		fmt.Fprintf(stdout, "  %s\n", pat)
+	}
+	if len(task.Inputs) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	}
+	fmt.Fprintln(stdout)
+
 	fmt.Fprintf(stdout, "inputs (%d files):\n", len(s.Inputs))
 	for _, e := range s.Inputs {
 		fmt.Fprintf(stdout, "  %x  %s\n", e.Hash[:6], e.Path)
@@ -2369,6 +2410,18 @@ func printExplainSnapshot(stdout io.Writer, s *explainSnapshot) {
 	if len(s.Inputs) == 0 {
 		fmt.Fprintln(stdout, "  (none — glob expansion matched zero files)")
 	}
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintf(stdout, "declared outputs (%d):\n", len(task.Outputs))
+	for _, out := range task.Outputs {
+		fmt.Fprintf(stdout, "  %s\n", out)
+	}
+	if len(task.Outputs) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	}
+	fmt.Fprintln(stdout)
+
+	printAffectedTriggerPatterns(stdout, s.Taskfile, s.Target)
 	fmt.Fprintln(stdout)
 
 	fmt.Fprintf(stdout, "config hash: %x  (sha-256-ish prefix of pkl/Taskfile.pkl canonical form)\n", s.ConfigHash[:8])
@@ -2386,6 +2439,53 @@ func printExplainSnapshot(stdout io.Writer, s *explainSnapshot) {
 			fmt.Fprintf(stdout, "    --%s (%s) %s\n", p.Name, p.Type, def)
 		}
 		fmt.Fprintln(stdout, "  these contribute to the action key only when supplied on the cmd line")
+	}
+}
+
+func directDependents(tf *config.Taskfile, target string) []string {
+	var out []string
+	for name, task := range tf.Tasks {
+		for _, dep := range task.Deps {
+			if dep == target {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func printAffectedTriggerPatterns(stdout io.Writer, tf *config.Taskfile, target string) {
+	fmt.Fprintln(stdout, "affected trigger patterns:")
+	g, err := buildGraph(tf)
+	if err != nil {
+		fmt.Fprintf(stdout, "  (graph error: %v)\n", err)
+		return
+	}
+	tasks, err := g.Subgraph(target)
+	if err != nil {
+		fmt.Fprintf(stdout, "  (unknown task: %s)\n", target)
+		return
+	}
+	wrote := false
+	for _, name := range tasks {
+		task := tf.Tasks[name]
+		if len(task.Inputs) == 0 {
+			continue
+		}
+		wrote = true
+		fmt.Fprintf(stdout, "  %s:\n", name)
+		for _, pat := range task.Inputs {
+			if task.Workdir != nil && *task.Workdir != "" {
+				fmt.Fprintf(stdout, "    %s/%s\n", filepath.ToSlash(*task.Workdir), pat)
+			} else {
+				fmt.Fprintf(stdout, "    %s\n", pat)
+			}
+		}
+	}
+	if !wrote {
+		fmt.Fprintln(stdout, "  (none)")
 	}
 }
 
@@ -2988,6 +3088,8 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	file := newFileFlag(fs)
 	since := fs.String("since", "", "git ref to diff against (default: origin/main, fallback HEAD~1)")
 	dryRun := fs.Bool("dry-run", false, "print the affected plan and exit")
+	explain := fs.Bool("explain", false, "show changed files, matching input patterns, and affected closure")
+	check := fs.Bool("check", false, "run workflowTests declared in the Taskfile")
 	noCache := fs.Bool("no-cache", false, "disable cache for this run")
 	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results")
 	timing := fs.Bool("timing", false, "print per-task duration at end of run")
@@ -2995,6 +3097,8 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	keepGoing := fs.Bool("keep-going", false, "don't stop on first failure; run independent subgraphs to completion")
 	profile := fs.String("profile", "", "profile name passed as $PKF_PROFILE and folded into action keys")
 	watch := fs.Bool("watch", false, "re-evaluate affected set + re-run on input change (Ctrl+C to stop)")
+	var files stringListFlag
+	fs.Var(&files, "files", "simulate changed file(s); repeat or comma-separate")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
@@ -3012,75 +3116,68 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	}
 	root := filepath.Dir(abs)
 
+	if *check {
+		if len(files) > 0 {
+			return fmt.Errorf("--check cannot be combined with --files")
+		}
+		if len(fs.Args()) > 0 {
+			return fmt.Errorf("--check takes no task filters")
+		}
+		return runWorkflowTests(stdout, tf, root)
+	}
+	if *watch && len(files) > 0 {
+		return fmt.Errorf("--watch cannot be combined with --files")
+	}
+
+	var changed []string
 	sinceRef := *since
-	if sinceRef == "" {
+	switch {
+	case len(files) > 0:
+		if sinceRef != "" {
+			return fmt.Errorf("--since and --files are mutually exclusive")
+		}
+		changed = append([]string(nil), files...)
+	case sinceRef != "":
+		var err error
+		changed, err = gitChangedFiles(root, sinceRef)
+		if err != nil {
+			return fmt.Errorf("compute changed files: %w", err)
+		}
+	default:
 		sinceRef = defaultAffectedRef(root)
 		fmt.Fprintf(stderr, "[pkf] affected: using --since=%s (no explicit ref given)\n", sinceRef)
-	}
-	changed, err := gitChangedFiles(root, sinceRef)
-	if err != nil {
-		return fmt.Errorf("compute changed files: %w", err)
+		var err error
+		changed, err = gitChangedFiles(root, sinceRef)
+		if err != nil {
+			return fmt.Errorf("compute changed files: %w", err)
+		}
 	}
 	if len(changed) == 0 {
 		fmt.Fprintln(stderr, "[pkf] affected: no changed files — nothing to do")
 		return nil
 	}
 
-	direct := tasksMatchingChanges(tf, root, changed)
-	affectedSet := expandToDependents(tf, direct)
-	if len(affectedSet) == 0 {
+	analysis, err := computeAffectedPlan(tf, root, changed, fs.Args())
+	if err != nil {
+		return err
+	}
+	if *explain {
+		printAffectedExplanation(stdout, analysis)
+	}
+	if len(analysis.Affected) == 0 {
 		fmt.Fprintln(stderr, "[pkf] affected: changes don't intersect any task's inputs — nothing to do")
 		return nil
 	}
-
-	// Filter to user-supplied targets if any. Glob-shaped names
-	// (`test:*`) expand against the task list first so
-	// `pkf affected --since=X 'test:*'` selects every test:*
-	// task that the diff actually affected.
-	if posArgs := fs.Args(); len(posArgs) > 0 {
-		if expanded := expandPatterns(posArgs, tf.Tasks); expanded != nil {
-			posArgs = expanded
-		}
-		filter := make(map[string]bool, len(posArgs))
-		for _, n := range posArgs {
-			if _, ok := tf.Tasks[n]; !ok {
-				return fmt.Errorf("unknown task: %q (no glob pattern matched)", n)
-			}
-			filter[n] = true
-		}
-		for name := range affectedSet {
-			if !filter[name] {
-				delete(affectedSet, name)
-			}
-		}
-		if len(affectedSet) == 0 {
-			fmt.Fprintln(stderr, "[pkf] affected: none of the named tasks are in the affected set")
-			return nil
-		}
-	}
-
-	g, err := buildGraph(tf)
-	if err != nil {
-		return err
-	}
-	// Build the plan as the union of subgraphs rooted at each
-	// affected task. This brings in each affected task's own deps so
-	// the runtime DAG stays self-consistent (dep order honored).
-	roots := make([]string, 0, len(affectedSet))
-	for n := range affectedSet {
-		roots = append(roots, n)
-	}
-	sort.Strings(roots)
-	order, err := unionSubgraph(g, roots)
-	if err != nil {
-		return err
+	if len(analysis.Order) == 0 {
+		fmt.Fprintln(stderr, "[pkf] affected: none of the named tasks are in the affected set")
+		return nil
 	}
 
 	if *noCache && *refresh {
 		return fmt.Errorf("--no-cache and --refresh are mutually exclusive")
 	}
 	if *dryRun {
-		return printDryRun(stdout, root, tf, order, "", nil, *noCache || *refresh, *profile)
+		return printDryRun(stdout, root, tf, analysis.Order, "affected", nil, *noCache || *refresh, *profile)
 	}
 
 	var backend cache.Backend
@@ -3100,7 +3197,7 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	r := runner.New(runner.Options{Workdir: root, Quiet: *quiet, Profile: *profile})
 	orch := orchestrator.New(backend, r, stdout, stderr, orchestrator.Options{Parallelism: *jobs, Quiet: *quiet, KeepGoing: *keepGoing})
 	plan := &orchestrator.Plan{
-		Order:      order,
+		Order:      analysis.Order,
 		Tasks:      tf.Tasks,
 		Defaults:   tf.Defaults,
 		Root:       root,
@@ -3299,7 +3396,96 @@ func gitChangedFiles(repoRoot, since string) ([]string, error) {
 // declared file dependencies; `pkf affected` doesn't speculate).
 func tasksMatchingChanges(tf *config.Taskfile, root string, changed []string) map[string]bool {
 	out := make(map[string]bool)
-	for name, task := range tf.Tasks {
+	for _, m := range inputMatches(tf, root, changed) {
+		out[m.Task] = true
+	}
+	return out
+}
+
+type inputMatch struct {
+	Task    string
+	File    string
+	Pattern string
+}
+
+type affectedAnalysis struct {
+	Changed  []string
+	Matches  []inputMatch
+	Direct   map[string]bool
+	Affected map[string]bool
+	Order    []string
+}
+
+func computeAffectedPlan(tf *config.Taskfile, root string, changed []string, filters []string) (*affectedAnalysis, error) {
+	normalized := make([]string, 0, len(changed))
+	for _, f := range changed {
+		f = strings.TrimSpace(filepath.ToSlash(f))
+		if f != "" {
+			normalized = append(normalized, f)
+		}
+	}
+	matches := inputMatches(tf, root, normalized)
+	direct := make(map[string]bool)
+	for _, m := range matches {
+		direct[m.Task] = true
+	}
+	affected := expandToDependents(tf, direct)
+	if len(affected) == 0 {
+		return &affectedAnalysis{
+			Changed:  normalized,
+			Matches:  matches,
+			Direct:   direct,
+			Affected: affected,
+		}, nil
+	}
+
+	roots := setKeys(affected)
+	if len(filters) > 0 {
+		expanded := filters
+		if e := expandPatterns(filters, tf.Tasks); e != nil {
+			expanded = e
+		}
+		keep := make(map[string]bool, len(expanded))
+		for _, n := range expanded {
+			if _, ok := tf.Tasks[n]; !ok {
+				return nil, fmt.Errorf("unknown task: %q (no glob pattern matched)", n)
+			}
+			keep[n] = true
+		}
+		filtered := make(map[string]bool)
+		for name := range affected {
+			if keep[name] {
+				filtered[name] = true
+			}
+		}
+		roots = setKeys(filtered)
+	}
+
+	var order []string
+	if len(roots) > 0 {
+		g, err := buildGraph(tf)
+		if err != nil {
+			return nil, err
+		}
+		var orderErr error
+		order, orderErr = unionSubgraph(g, roots)
+		if orderErr != nil {
+			return nil, orderErr
+		}
+	}
+	return &affectedAnalysis{
+		Changed:  normalized,
+		Matches:  matches,
+		Direct:   direct,
+		Affected: affected,
+		Order:    order,
+	}, nil
+}
+
+func inputMatches(tf *config.Taskfile, root string, changed []string) []inputMatch {
+	var out []inputMatch
+	for _, name := range orderedTaskNames(tf, true) {
+		task := tf.Tasks[name]
 		if len(task.Inputs) == 0 {
 			continue
 		}
@@ -3316,24 +3502,129 @@ func tasksMatchingChanges(tf *config.Taskfile, root string, changed []string) ma
 		}
 		for _, file := range changed {
 			file = filepath.ToSlash(file)
+			matchFile := file
 			if prefix != "" {
-				if !strings.HasPrefix(file, prefix) {
+				if !strings.HasPrefix(matchFile, prefix) {
 					continue
 				}
-				file = strings.TrimPrefix(file, prefix)
+				matchFile = strings.TrimPrefix(matchFile, prefix)
 			}
 			for _, pat := range task.Inputs {
-				if ok, _ := doublestar.PathMatch(pat, file); ok {
-					out[name] = true
-					break
+				if ok, _ := doublestar.PathMatch(pat, matchFile); ok {
+					out = append(out, inputMatch{Task: name, File: file, Pattern: pat})
 				}
-			}
-			if out[name] {
-				break
 			}
 		}
 	}
 	return out
+}
+
+func setKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func printAffectedExplanation(stdout io.Writer, a *affectedAnalysis) {
+	fmt.Fprintln(stdout, "changed files:")
+	for _, f := range a.Changed {
+		fmt.Fprintf(stdout, "  %s\n", f)
+	}
+	if len(a.Changed) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	}
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintln(stdout, "direct input matches:")
+	if len(a.Matches) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	} else {
+		for _, m := range a.Matches {
+			fmt.Fprintf(stdout, "  %s: %s matches %q\n", m.Task, m.File, m.Pattern)
+		}
+	}
+	fmt.Fprintln(stdout)
+
+	fmt.Fprintln(stdout, "affected tasks:")
+	names := setKeys(a.Affected)
+	if len(names) == 0 {
+		fmt.Fprintln(stdout, "  (none)")
+	} else {
+		for _, n := range names {
+			kind := "dependent"
+			if a.Direct[n] {
+				kind = "direct"
+			}
+			fmt.Fprintf(stdout, "  %s (%s)\n", n, kind)
+		}
+	}
+	fmt.Fprintln(stdout)
+}
+
+func runWorkflowTests(stdout io.Writer, tf *config.Taskfile, root string) error {
+	if len(tf.WorkflowTests) == 0 {
+		fmt.Fprintln(stdout, "no workflow tests declared")
+		return nil
+	}
+
+	failures := 0
+	for _, tc := range tf.WorkflowTests {
+		if tc == nil {
+			continue
+		}
+		analysis, err := computeAffectedPlan(tf, root, tc.Changed, nil)
+		if err != nil {
+			fmt.Fprintf(stdout, "FAIL %s\n  %v\n", tc.Name, err)
+			failures++
+			continue
+		}
+		gotTasks := analysis.Order
+		gotDirect := setKeys(analysis.Direct)
+
+		var problems []string
+		if !slices.Equal(gotTasks, tc.Tasks) {
+			problems = append(problems, fmt.Sprintf("tasks: got %s, want %s", formatList(gotTasks), formatList(tc.Tasks)))
+		}
+		if len(tc.Direct) > 0 && !sameStringSet(gotDirect, tc.Direct) {
+			problems = append(problems, fmt.Sprintf("direct: got %s, want %s", formatList(gotDirect), formatList(tc.Direct)))
+		}
+		if len(problems) > 0 {
+			fmt.Fprintf(stdout, "FAIL %s\n", tc.Name)
+			fmt.Fprintf(stdout, "  changed: %s\n", formatList(tc.Changed))
+			for _, p := range problems {
+				fmt.Fprintf(stdout, "  %s\n", p)
+			}
+			failures++
+			continue
+		}
+		fmt.Fprintf(stdout, "PASS %s\n", tc.Name)
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d workflow test(s) failed", failures)
+	}
+	fmt.Fprintf(stdout, "%d workflow test(s) passed\n", len(tf.WorkflowTests))
+	return nil
+}
+
+func formatList(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	return "[" + strings.Join(values, ", ") + "]"
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aa := append([]string(nil), a...)
+	bb := append([]string(nil), b...)
+	sort.Strings(aa)
+	sort.Strings(bb)
+	return slices.Equal(aa, bb)
 }
 
 // expandToDependents takes a set of directly-affected task names and

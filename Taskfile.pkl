@@ -23,6 +23,7 @@ amends "pkl/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "cmd/**/*.go"
+  "cmd/pkf/completion/*"
   "internal/**/*.go"
   "go.mod"
   "go.sum"
@@ -105,6 +106,18 @@ local lintTaskfile: Task = new {
   name = "lint:taskfile"
   description = "Detect local Task definitions omitted from tasks"
   cmd = "go run ./cmd/pkf lint"
+  cache = false
+  inputs {
+    ...sources
+    "Taskfile.pkl"
+    "pkl/Taskfile.pkl"
+  }
+}
+
+local testWorkflow: Task = new {
+  name = "test:workflow"
+  description = "Verify Taskfile workflowTests"
+  cmd = "go run ./cmd/pkf affected --check"
   cache = false
   inputs {
     ...sources
@@ -202,6 +215,7 @@ local preflight: Task = new {
     testPkl
     testExamples
     lintTaskfile
+    testWorkflow
     checkVersion
     testReleaseNotes
     fmtCheck
@@ -232,6 +246,28 @@ local preCommit: Task = new {
   deps { preflight }
 }
 
+workflowTests {
+  new {
+    name = "Go source changes run the developer gate"
+    changed { "cmd/pkf/main.go" }
+    direct { "vet"; "test:go"; "test:race"; "lint:taskfile"; "test:workflow" }
+    tasks {
+      "lint:taskfile"
+      "check-version"
+      "fmt:check"
+      "test:examples"
+      "test:go"
+      "test:pkl"
+      "test:release-notes"
+      "test:workflow"
+      "vet"
+      "preflight"
+      "pre-commit"
+      "test:race"
+    }
+  }
+}
+
 tasks {
   vet
   testGo
@@ -239,6 +275,7 @@ tasks {
   testPkl
   testExamples
   lintTaskfile
+  testWorkflow
   testReleaseNotes
   checkVersion
   fmt

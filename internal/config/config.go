@@ -49,6 +49,15 @@ type Param struct {
 	Description *string  `pkl:"description"`
 }
 
+// WorkflowTest mirrors `pkfire.Taskfile#WorkflowTest`. It lets a Taskfile
+// assert how simulated changed files should map to an affected run plan.
+type WorkflowTest struct {
+	Name    string   `pkl:"name"`
+	Changed []string `pkl:"changed"`
+	Tasks   []string `pkl:"tasks"`
+	Direct  []string `pkl:"direct"`
+}
+
 // Defaults mirrors `pkfire.Taskfile#Defaults`.
 type Defaults struct {
 	Shell      string            `pkl:"shell"`
@@ -63,10 +72,11 @@ type Defaults struct {
 // skips it. Phase 3 hashes this as part of the task action key so any
 // change to the underlying Pkl invalidates caches.
 type Taskfile struct {
-	Defaults  *Defaults        `pkl:"defaults"`
-	TaskOrder []string         `pkl:"taskOrder"`
-	Tasks     map[string]*Task `pkl:"tasks"`
-	Canonical []byte           `pkl:"-"`
+	Defaults      *Defaults        `pkl:"defaults"`
+	TaskOrder     []string         `pkl:"taskOrder"`
+	Tasks         map[string]*Task `pkl:"tasks"`
+	WorkflowTests []*WorkflowTest  `pkl:"workflowTests"`
+	Canonical     []byte           `pkl:"-"`
 }
 
 // pkl-go decodes typed Pkl values into Go structs by class-name lookup;
@@ -77,6 +87,7 @@ func init() {
 	pkl.RegisterMapping("pkfire.Taskfile#Defaults", Defaults{})
 	pkl.RegisterMapping("pkfire.Taskfile#RenderedTask", Task{})
 	pkl.RegisterMapping("pkfire.Taskfile#RenderedParam", Param{})
+	pkl.RegisterMapping("pkfire.Taskfile#RenderedWorkflowTest", WorkflowTest{})
 }
 
 // Load evaluates the Pkl module at `path` and decodes it into a Taskfile.

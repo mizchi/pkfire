@@ -238,6 +238,8 @@ pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatt
 pkf hooks install              # write .git/hooks/<event> shims for matching tasks
 pkf hooks list                 # show which hook events are wired
 pkf affected --since=origin/main test  # run only tasks affected by the PR diff
+pkf affected --files src/main.go --explain --dry-run  # inspect file -> task matches
+pkf affected --check           # run workflowTests declared in Taskfile.pkl
 pkf run a b c                  # run multiple targets in one go (topological union)
 pkf run                        # no args = the `default` task (errors if absent)
 pkf run -- a b c               # forward args to the `default` task when it accepts args
@@ -289,6 +291,46 @@ pkf graph | dot -Tsvg -o tasks.svg
 pkf graph --format mermaid > tasks.mmd
 pkf graph --format tree --target test
 ```
+
+### Testing affected workflows
+
+When you first write `inputs`, `outputs`, and `deps`, pin the expected
+file-change workflow next to the tasks:
+
+```pkl
+local build = new Task {
+  name = "build"
+  cmd = "go build ./..."
+  inputs { "src/**/*.go"; "go.mod" }
+  outputs { "bin/app" }
+}
+
+local test = new Task {
+  name = "test"
+  cmd = "go test ./..."
+  inputs { "tests/**/*.go" }
+  deps { build }
+}
+
+tasks { build; test }
+
+workflowTests {
+  new {
+    name = "source edit rebuilds and retests"
+    changed { "src/main.go" }
+    direct { "build" }
+    tasks { "build"; "test" }
+  }
+}
+```
+
+`pkf affected --check` runs those cases without executing task
+commands. For ad-hoc debugging, use
+`pkf affected --files src/main.go --explain --dry-run` to see which
+input pattern matched and which tasks would be in the run plan. The
+reverse view is `pkf explain test`: it now prints declared deps,
+dependents, input patterns, outputs, and the upstream input patterns
+that can make the task affected.
 
 ## Environment, args, and the action key
 

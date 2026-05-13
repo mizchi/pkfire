@@ -36,7 +36,16 @@ _pkf() {
         COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
       fi
       ;;
-    run|affected|clean|up)
+    affected)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --since --files --explain --check --dry-run --no-cache --refresh --timing --quiet --keep-going --profile --watch -j --jobs" -- "$cur"))
+        return
+      fi
+      local tasks
+      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+      ;;
+    run|clean|up)
       if [[ "$cur" == -* ]]; then return; fi
       local tasks
       tasks=$(pkf list 2>/dev/null | awk '{print $1}')

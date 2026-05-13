@@ -66,7 +66,32 @@ _pkf() {
           '--dry-run[show fixes without writing files]'
       fi
       ;;
-    run|affected|clean|up)
+    affected)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'affected option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--since[git ref to diff against]' \
+          '--files[simulate changed file paths]' \
+          '--explain[show matching input patterns]' \
+          '--check[run workflowTests]' \
+          '--dry-run[preview plan without running]' \
+          '--no-cache[disable cache for this run]' \
+          '--refresh[skip lookup but store outputs]' \
+          '--timing[print task durations]' \
+          '--quiet[suppress per-task log lines]' \
+          '--keep-going[do not stop on first failure]' \
+          '--profile[profile name for cache keys]' \
+          '--watch[recompute affected set on change]' \
+          '-j[max concurrent tasks]' \
+          '--jobs[max concurrent tasks]'
+      else
+        local -a tasks
+        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+        _describe 'task' tasks
+      fi
+      ;;
+    run|clean|up)
       local -a tasks
       tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
       _describe 'task' tasks

@@ -1143,6 +1143,45 @@ func TestCmdExplainShowsKeyComponents(t *testing.T) {
 	}
 }
 
+func TestCmdExplainShowsWorkflowTriggersAndOutputs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "go build"
+  inputs { "src/**/*.go" }
+  outputs { "bin/app" }
+}
+local test = new Task {
+  name = "test"
+  cmd = "go test"
+  inputs { "tests/**/*.go" }
+  deps { build }
+}
+tasks { build; test }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdExplain([]string{"-f", taskfile, "test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdExplain: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"deps:        build",
+		"declared outputs (0):",
+		"input patterns (1):",
+		"tests/**/*.go",
+		"affected trigger patterns:",
+		"build:",
+		"src/**/*.go",
+		"test:",
+		"tests/**/*.go",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("explain output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCmdExplainDiffShowsChangedKeyComponents(t *testing.T) {
 	requirePkl(t)
 	oldTaskfile := taskfileWithLocalSchema(t, `
@@ -2210,5 +2249,118 @@ tasks { gen; build; test }
 		if !strings.Contains(out, want) {
 			t.Errorf("dependent expansion lost %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestCmdAffectedFilesDryRunExplainsMatches(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "echo build"
+  cache = false
+  inputs { "src/**/*.go" }
+}
+local test = new Task {
+  name = "test"
+  cmd = "echo test"
+  cache = false
+  deps { build }
+}
+tasks { build; test }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdAffected(
+		[]string{"-f", taskfile, "--files", "src/main.go", "--explain", "--dry-run"},
+		&stdout, &stderr,
+	); err != nil {
+		t.Fatalf("cmdAffected --files: %v\n%s", err, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"changed files:",
+		"src/main.go",
+		"direct input matches:",
+		`build: src/main.go matches "src/**/*.go"`,
+		"affected tasks:",
+		"build (direct)",
+		"test (dependent)",
+		"plan for \"affected\"",
+		"build",
+		"test",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("affected explanation missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdAffectedCheckRunsWorkflowTests(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "echo build"
+  cache = false
+  inputs { "src/**/*.go" }
+}
+local test = new Task {
+  name = "test"
+  cmd = "echo test"
+  cache = false
+  deps { build }
+}
+tasks { build; test }
+
+workflowTests {
+  new {
+    name = "go source runs build and test"
+    changed { "src/main.go" }
+    direct { "build" }
+    tasks { "build"; "test" }
+  }
+}
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdAffected([]string{"-f", taskfile, "--check"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdAffected --check: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"PASS go source runs build and test",
+		"1 workflow test(s) passed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("workflow test output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdAffectedCheckFailsOnUnexpectedPlan(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "echo build"
+  cache = false
+  inputs { "src/**/*.go" }
+}
+tasks { build }
+
+workflowTests {
+  new {
+    name = "bad expectation"
+    changed { "src/main.go" }
+    tasks { "missing" }
+  }
+}
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdAffected([]string{"-f", taskfile, "--check"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected failing workflow test, stdout:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "FAIL bad expectation") {
+		t.Errorf("expected failing test output, got:\n%s", stdout.String())
 	}
 }

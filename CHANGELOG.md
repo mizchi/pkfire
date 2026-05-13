@@ -10,6 +10,18 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- `pkf affected --files <path>` simulates changed files without
+  consulting git, and `--explain` reports the matching input patterns
+  plus direct/dependent affected tasks.
+- Taskfiles can declare `workflowTests { ... }`; `pkf affected --check`
+  validates file-change expectations against the affected run plan.
+- `pkf explain <task>` now includes declared deps, dependents, input
+  patterns, outputs, and upstream affected trigger patterns.
+- The repo's own `preflight` now runs `test:workflow` to dogfood
+  `workflowTests`.
+
 ### Changed
 
 - Examples now amend the published `pkfire@0.9.0` Pkl package.
