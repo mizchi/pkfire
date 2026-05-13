@@ -223,12 +223,14 @@ pkf run -j 8 test              # cap parallelism at 8
 pkf run --watch test           # re-run on input changes (Ctrl+C to stop)
 pkf run --dry-run test         # preview: per-task hit/will-run/uncached status + cmd
 pkf run --print-hash test      # print action keys, do not execute
+pkf run --explain-cache test   # explain cache hit/miss/forced-run decisions
 pkf run --no-cache test        # bypass cache lookup AND store for this run
 pkf run --refresh test         # bypass cache lookup but DO re-store (re-baseline)
 pkf up dev                     # start every service:true task in dev's subgraph
 pkf up --watch dev             # same, plus restart-on-change
 pkf graph                      # emit Graphviz DOT for the full DAG
 pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
+pkf graph --json               # machine-readable graph (tasks + edges)
 pkf graph --target test        # only the subgraph rooted at `test`
 pkf doctor                     # diagnose pkf PATH, pkl/cache/remote/taskfile setup
 pkf doctor --json              # emit structured setup checks
@@ -265,7 +267,7 @@ pkf affected --watch           # re-evaluate affected set on every file change
 pkf graph --target build --depth=1   # show only direct deps (one hop)
 pkf graph --format tree        # terminal-readable dependency tree (roots only when no target)
 pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
-pkf lint                       # detect dead local tasks and suspicious task definitions
+pkf lint                       # detect dead local tasks, cache footguns, and suspicious task definitions
 pkf lint --json                # emit machine-readable findings for CI/editor tooling
 pkf lint --fix                 # safely add cache = false for outputs-without-inputs findings
 pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
@@ -284,6 +286,11 @@ reference their own context without hardcoding paths:
 These are NOT part of the action key — they're constants of the
 task definition, already implicit in the hash via cmd / env / inputs.
 
+For cache debugging, `pkf run --explain-cache <task>` prints each task's
+action key, cache decision, declared outputs, matched input file count,
+and input patterns that matched no files. Use `pkf explain <task>` when
+you need the full component-by-component action-key dump.
+
 Visualizing a Taskfile is a single pipeline:
 
 ```sh
@@ -291,6 +298,55 @@ pkf graph | dot -Tsvg -o tasks.svg
 pkf graph --format mermaid > tasks.mmd
 pkf graph --format tree --target test
 ```
+
+### Machine-readable introspection
+
+Use `pkf list --json` when tooling needs the task inventory, and
+`pkf graph --json` when it also needs dependency edges. Both commands
+respect visibility by default; pass `--all` to include internal tasks
+and `--unsorted` to preserve Taskfile declaration order.
+
+`pkf list --json` emits:
+
+```json
+{
+  "tasks": [
+    {
+      "name": "build",
+      "description": "Compile the app",
+      "visibility": "public",
+      "cmd": "go build -o bin/app ./cmd/app",
+      "deps": [],
+      "inputs": ["**/*.go", "go.mod", "go.sum"],
+      "outputs": ["bin/app"],
+      "cache": true,
+      "workdir": "services/api",
+      "service": false,
+      "services": [],
+      "acceptsArgs": false,
+      "inheritEnv": true
+    }
+  ]
+}
+```
+
+`pkf graph --json` emits the same task metadata, plus `kind` and
+`edges`:
+
+```json
+{
+  "tasks": [
+    { "name": "build", "kind": "task", "deps": [], "cache": true },
+    { "name": "ci", "kind": "aggregate", "deps": ["build"], "cache": true }
+  ],
+  "edges": [
+    { "from": "build", "to": "ci" }
+  ]
+}
+```
+
+Task `kind` is one of `task`, `aggregate`, `service`, or `noop`.
+Graph `edges` point from dependency to dependent.
 
 ### Testing affected workflows
 
@@ -480,10 +536,10 @@ If you author Pkl tasks with help from a Claude Code agent (or any
 similar tool that consumes APM-style skills), point it at
 [`skills/pkfire/SKILL.md`](./skills/pkfire/SKILL.md). It documents the
 schema, the typed-`deps` model, the cache semantics, and the common
-pitfalls, plus five copy-paste recipes under
+pitfalls, plus copy-paste recipes under
 [`skills/pkfire/assets/recipes/`](./skills/pkfire/assets/recipes/) for
-build/test, cross-compile matrix, monorepo, dev/watch, and remote
-cache.
+build/test, split/import, services, hooks, diagnostics, and cache
+workflows.
 
 ## Used by
 
@@ -503,6 +559,7 @@ Open a PR to add yours.
 | [`examples/rust`](./examples/rust/) | Single-binary Rust crate driven through `cargo` (fmt + clippy + test + build) |
 | [`examples/monorepo`](./examples/monorepo/) | pnpm workspaces with one Task generated per package via a `Package` template |
 | [`examples/diagnostics`](./examples/diagnostics/) | `list --long`, `lint --json/--fix`, `doctor --json/--fix`, internal tasks, quiet output, strict shell flags |
+| [`examples/split-import`](./examples/split-import/) | Single entry Taskfile with task fragments under `tasks/`, shared constants, and typed cross-file deps |
 | [`examples/dogfood`](./examples/dogfood/Taskfile.pkl) | pkfire builds itself: cross-compile matrix + checksum + integration |
 | [`examples/remote-cache-worker`](./examples/remote-cache-worker/) | Cloudflare Worker that backs the remote-cache protocol with R2 |
 
@@ -563,7 +620,8 @@ git push origin main "pkfire@<new-version>"
 perl -i -pe 's/pkfire\@<old>/pkfire\@<new-version>/g' \
   examples/basic/Taskfile.pkl examples/node/Taskfile.pkl \
   examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl \
-  examples/diagnostics/Taskfile.pkl
+  examples/diagnostics/Taskfile.pkl examples/split-import/Taskfile.pkl \
+  examples/split-import/tasks/*.pkl
 git commit -am "examples: bump amends URI to pkfire@<new-version>"
 git push
 ```

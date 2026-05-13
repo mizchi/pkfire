@@ -18,7 +18,7 @@ _pkf() {
     'clean:remove declared outputs'
     'cache:inspect / clean the local CAS'
     'completion:emit shell completion script'
-    'graph:emit DAG (dot / mermaid / tree)'
+    'graph:emit DAG (dot / mermaid / tree / json)'
     'version:print pkf version'
     'help:show usage'
   )
@@ -91,7 +91,32 @@ _pkf() {
         _describe 'task' tasks
       fi
       ;;
-    run|clean|up)
+    run)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'run option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--watch[re-run on input changes]' \
+          '--dry-run[preview plan without running]' \
+          '--print-hash[print action keys and exit]' \
+          '--explain-cache[explain cache decisions and exit]' \
+          '--no-cache[disable cache for this run]' \
+          '--refresh[skip lookup but store outputs]' \
+          '--timing[print task durations]' \
+          '--quiet[suppress per-task log lines]' \
+          '--keep-going[do not stop on first failure]' \
+          '--profile[profile name for cache keys]' \
+          '--on-fail[action on task failure]' \
+          '--remote-only[consult only remote cache]' \
+          '-j[max concurrent tasks]' \
+          '--jobs[max concurrent tasks]'
+      else
+        local -a tasks
+        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+        _describe 'task' tasks
+      fi
+      ;;
+    clean|up)
       local -a tasks
       tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
       _describe 'task' tasks
@@ -113,7 +138,18 @@ _pkf() {
       ;;
     graph)
       if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
-        _values 'format' dot mermaid tree
+        _values 'format' dot mermaid tree json
+      elif [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'graph option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--format[output format]' \
+          '--json[emit machine-readable output]' \
+          '--target[render only one task subgraph]' \
+          '--all[include internal tasks]' \
+          '--unsorted[use declaration order]' \
+          '--source-order[use declaration order]' \
+          '--depth[limit dependency traversal]'
       fi
       ;;
   esac

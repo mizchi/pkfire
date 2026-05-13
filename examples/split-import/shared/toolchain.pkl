@@ -1,0 +1,4 @@
+/// Tool versions that should contribute to task action keys.
+versions: Mapping<String, String> = new {
+  ["node"] = "24"
+}

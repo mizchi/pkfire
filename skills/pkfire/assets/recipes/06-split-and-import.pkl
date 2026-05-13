@@ -1,5 +1,9 @@
 /// Recipe 06: split definitions into helper files; root has one entry.
 ///
+/// A complete, evaluating version of this layout lives at
+/// `examples/split-import/` in the pkfire repository. This recipe is the
+/// copy-paste skeleton.
+///
 /// Layout this Taskfile expects:
 ///
 ///   project/
@@ -14,10 +18,10 @@
 /// Cross-file Task references work: `tasks/test.pkl` can `import
 /// "build.pkl" as bt` and write `deps { bt.build }` for a typed link.
 ///
-/// This recipe ships as a documentation skeleton — the import lines
-/// are kept in comments so the file evaluates standalone. To use,
-/// uncomment the imports / spreads and create the four fragments
-/// under `tasks/` and `shared/`.
+/// This recipe ships as a documentation skeleton — the import lines are
+/// kept in comments so the file evaluates standalone. To use, uncomment
+/// the imports / spreads and create the fragments under `tasks/` and
+/// `shared/`.
 amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl"
 
 // import "tasks/build.pkl" as bt
@@ -32,7 +36,7 @@ tasks {
 // tasks/build.pkl  (sketch)
 // ---------------------------------------------------------------
 //
-//   import "https://.../Taskfile.pkl" as schema
+//   import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl" as schema
 //   import "../shared/sources.pkl"   as src
 //   import "../shared/toolchain.pkl" as tc
 //
@@ -49,7 +53,7 @@ tasks {
 // tasks/test.pkl  (sketch)
 // ---------------------------------------------------------------
 //
-//   import "https://.../Taskfile.pkl" as schema
+//   import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl" as schema
 //   import "../shared/sources.pkl"   as src
 //   import "build.pkl"               as bt
 //
@@ -61,3 +65,14 @@ tasks {
 //   }
 //
 //   tasks: Listing<schema.Task> = new { test }
+//
+// ---------------------------------------------------------------
+// root aggregate task (optional)
+// ---------------------------------------------------------------
+//
+//   local ci = new Task {
+//     name = "ci"
+//     deps { tt.test }
+//   }
+//
+//   tasks { ...bt.tasks; ...tt.tasks; ci }

@@ -44,7 +44,7 @@ var runGlobalValueFlags = map[string]bool{
 	"f": true, "file": true, "j": true, "jobs": true, "profile": true, "on-fail": true,
 }
 var runGlobalBoolFlags = map[string]bool{
-	"watch": true, "dry-run": true, "print-hash": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true, "remote-only": true,
+	"watch": true, "dry-run": true, "print-hash": true, "explain-cache": true, "no-cache": true, "refresh": true, "quiet": true, "timing": true, "keep-going": true, "remote-only": true,
 }
 
 type stringListFlag []string
@@ -144,14 +144,14 @@ usage:
 
 commands:
   init [-f FILE] [--force]              write a starter Taskfile.pkl
-  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash] [--no-cache|--refresh] [--timing] [task...]
+  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash|--explain-cache] [--no-cache|--refresh] [--timing] [task...]
                                         run one or more tasks (no arg = the default task); multi-target runs the union
   up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
                                         Ctrl+C releases the whole process tree
   list [-f FILE] [-v|--long|--json] [--all] [--unsorted] [--color=auto|always|never]
                                         list declared public tasks (-v: detail; --long: audit table; --json: machine-readable)
-  graph [-f FILE] [--format FMT] [--target TASK] [--all] [--unsorted]
-                                        emit DAG (formats: dot, mermaid, tree)
+  graph [-f FILE] [--format FMT|--json] [--target TASK] [--all] [--unsorted]
+                                        emit DAG (formats: dot, mermaid, tree, json)
   doctor [-f FILE] [--json] [--fix]     diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
   lint [-f FILE] [--json] [--fix]       detect Taskfile dead code and suspicious task definitions
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
@@ -178,9 +178,10 @@ flags:
       --explain          (affected only) show which input patterns matched
       --check            (affected only) run Taskfile workflowTests
       --print-hash       print action keys for the target subgraph and exit
+      --explain-cache    explain per-task cache hit/miss/forced-run decisions and exit
       --no-cache         disable cache lookup and store for this run
       --refresh          skip cache lookup but still store results (re-baseline)
-      --json             (list/doctor/lint) machine-readable output
+      --json             (list/graph/doctor/lint) machine-readable output
       --fix              (doctor/lint) apply safe fixes
       --long             (list only) compact audit table
       --all              (list/graph) include internal tasks
@@ -641,6 +642,7 @@ func taskVisibility(t *config.Task) string {
 type lintFinding struct {
 	Path       string `json:"path"`
 	Line       int    `json:"line"`
+	Level      string `json:"level"`
 	Kind       string `json:"kind"`
 	Task       string `json:"task,omitempty"`
 	Message    string `json:"message"`
@@ -672,10 +674,15 @@ type lintFix struct {
 }
 
 const (
-	lintKindDeadLocal       = "dead-local-task"
-	lintKindOutputsNoInputs = "outputs-without-inputs"
-	lintKindServiceNoProbe  = "service-without-readiness"
-	lintKindNoopTask        = "noop-task"
+	lintLevelError   = "error"
+	lintLevelWarning = "warning"
+
+	lintKindDeadLocal           = "dead-local-task"
+	lintKindOutputsNoInputs     = "outputs-without-inputs"
+	lintKindServiceNoProbe      = "service-without-readiness"
+	lintKindNoopTask            = "noop-task"
+	lintKindInputsWithoutCache  = "inputs-without-cache"
+	lintKindBuildWithoutOutputs = "build-without-outputs"
 )
 
 func cmdLint(args []string, stdout, _ io.Writer) error {
@@ -742,8 +749,8 @@ func cmdLint(args []string, stdout, _ io.Writer) error {
 		if err := enc.Encode(out); err != nil {
 			return err
 		}
-		if len(findings) > 0 {
-			return fmt.Errorf("lint found %d issue%s", len(findings), plural(len(findings)))
+		if errorCount := countLintErrors(findings); errorCount > 0 {
+			return fmt.Errorf("lint found %d error%s", errorCount, plural(errorCount))
 		}
 		return nil
 	}
@@ -752,12 +759,33 @@ func cmdLint(args []string, stdout, _ io.Writer) error {
 		return nil
 	}
 	for _, f := range findings {
-		fmt.Fprintf(stdout, "%s:%d: %s\n", f.Path, f.Line, f.Message)
+		fmt.Fprintf(stdout, "%s:%d: %s: %s\n", f.Path, f.Line, lintLevel(f), f.Message)
 		if f.Suggestion != "" {
 			fmt.Fprintf(stdout, "  suggestion: %s\n", f.Suggestion)
 		}
 	}
-	return fmt.Errorf("lint found %d issue%s", len(findings), plural(len(findings)))
+	if errorCount := countLintErrors(findings); errorCount > 0 {
+		return fmt.Errorf("lint found %d error%s", errorCount, plural(errorCount))
+	}
+	fmt.Fprintf(stdout, "ok: %d warning%s\n", len(findings), plural(len(findings)))
+	return nil
+}
+
+func lintLevel(f lintFinding) string {
+	if f.Level == "" {
+		return lintLevelError
+	}
+	return f.Level
+}
+
+func countLintErrors(findings []lintFinding) int {
+	var count int
+	for _, f := range findings {
+		if lintLevel(f) == lintLevelError {
+			count++
+		}
+	}
+	return count
 }
 
 func lintFindings(path string, data []byte, tf *config.Taskfile) []lintFinding {
@@ -786,6 +814,7 @@ func lintDeadLocalTasks(path string, data []byte, tf *config.Taskfile) []lintFin
 			findings = append(findings, lintFinding{
 				Path:       path,
 				Line:       decl.Line,
+				Level:      lintLevelError,
 				Kind:       lintKindDeadLocal,
 				Task:       decl.TaskName,
 				Suggestion: fmt.Sprintf("remove local task %q or include it in tasks { ... }", decl.VarName),
@@ -816,6 +845,7 @@ func lintRenderedTasks(path string, data []byte, tf *config.Taskfile) []lintFind
 			findings = append(findings, lintFinding{
 				Path:       path,
 				Line:       line,
+				Level:      lintLevelError,
 				Kind:       lintKindNoopTask,
 				Task:       name,
 				Message:    fmt.Sprintf("task %q has neither cmd nor deps; it is a no-op task", name),
@@ -826,6 +856,7 @@ func lintRenderedTasks(path string, data []byte, tf *config.Taskfile) []lintFind
 			findings = append(findings, lintFinding{
 				Path:       path,
 				Line:       line,
+				Level:      lintLevelError,
 				Kind:       lintKindOutputsNoInputs,
 				Task:       name,
 				Message:    fmt.Sprintf("task %q declares outputs but no inputs; cache can go stale because only config changes invalidate it", name),
@@ -837,14 +868,80 @@ func lintRenderedTasks(path string, data []byte, tf *config.Taskfile) []lintFind
 			findings = append(findings, lintFinding{
 				Path:       path,
 				Line:       line,
+				Level:      lintLevelError,
 				Kind:       lintKindServiceNoProbe,
 				Task:       name,
 				Message:    fmt.Sprintf("task %q has service=true but no readiness probe; add readyPort or readyCmd so dependents do not race startup", name),
 				Suggestion: "add readyPort when the service opens a TCP port, otherwise add readyCmd",
 			})
 		}
+		if !t.Service && !t.Cache && t.Cmd != "" && len(t.Inputs) > 0 {
+			findings = append(findings, lintFinding{
+				Path:       path,
+				Line:       line,
+				Level:      lintLevelWarning,
+				Kind:       lintKindInputsWithoutCache,
+				Task:       name,
+				Message:    fmt.Sprintf("task %q declares inputs but cache=false, so input hashes only help affected/watch and cannot produce cache hits", name),
+				Suggestion: "remove cache = false once the task is deterministic, or remove inputs if they are only decorative",
+			})
+		}
+		if buildLikeTaskWithoutOutputs(name, t) {
+			findings = append(findings, lintFinding{
+				Path:       path,
+				Line:       line,
+				Level:      lintLevelWarning,
+				Kind:       lintKindBuildWithoutOutputs,
+				Task:       name,
+				Message:    fmt.Sprintf("task %q looks like it produces build artifacts but declares no outputs", name),
+				Suggestion: "declare the artifact paths in outputs so cache hits can restore them, or set cache = false if the command should always run",
+			})
+		}
 	}
 	return findings
+}
+
+func buildLikeTaskWithoutOutputs(name string, t *config.Task) bool {
+	if t == nil || t.Service || !t.Cache || t.Cmd == "" || len(t.Outputs) > 0 {
+		return false
+	}
+	lowerCmd := strings.ToLower(t.Cmd)
+	buildCommands := []string{
+		"go build",
+		"cargo build",
+		"npm run build",
+		"pnpm build",
+		"pnpm run build",
+		"yarn build",
+		"yarn run build",
+		"bun build",
+		"bun run build",
+		"vite build",
+		"next build",
+		"tsc",
+		"webpack",
+		"rollup",
+		"esbuild",
+	}
+	for _, needle := range buildCommands {
+		if commandContainsWordish(lowerCmd, needle) {
+			return true
+		}
+	}
+	lowerName := strings.ToLower(name)
+	return strings.Contains(lowerName, "build") && commandContainsWordish(lowerCmd, "build")
+}
+
+func commandContainsWordish(cmd, needle string) bool {
+	if cmd == needle || strings.HasPrefix(cmd, needle+" ") {
+		return true
+	}
+	return strings.Contains(cmd, " "+needle+" ") ||
+		strings.Contains(cmd, " "+needle+"\n") ||
+		strings.Contains(cmd, "\n"+needle+" ") ||
+		strings.Contains(cmd, "("+needle+" ") ||
+		strings.Contains(cmd, "&& "+needle+" ") ||
+		strings.Contains(cmd, "; "+needle+" ")
 }
 
 func taskNameLineMap(data []byte) map[string]int {
@@ -1140,48 +1237,51 @@ type listJSON struct {
 func printListJSON(stdout io.Writer, tf *config.Taskfile, names []string) error {
 	out := listJSON{Tasks: make([]listTaskJSON, 0, len(names))}
 	for _, n := range names {
-		t := tf.Tasks[n]
-		entry := listTaskJSON{
-			Name:        n,
-			Cmd:         t.Cmd,
-			Visibility:  taskVisibility(t),
-			Shell:       t.Shell,
-			ShellFlags:  t.ShellFlags,
-			Deps:        t.Deps,
-			Inputs:      t.Inputs,
-			Outputs:     t.Outputs,
-			Cache:       t.Cache,
-			Service:     t.Service,
-			Quiet:       t.Quiet,
-			Services:    t.Services,
-			AcceptsArgs: t.AcceptsArgs,
-			InheritEnv:  t.InheritEnv,
-		}
-		if t.Description != nil {
-			entry.Description = *t.Description
-		}
-		if t.Workdir != nil {
-			entry.Workdir = *t.Workdir
-		}
-		for _, p := range t.Params {
-			entry.Params = append(entry.Params, listParamJSON{
-				Name:    p.Name,
-				Type:    p.Type,
-				Choices: p.Choices,
-				Default: p.Default,
-				Description: func() string {
-					if p.Description != nil {
-						return *p.Description
-					}
-					return ""
-				}(),
-			})
-		}
-		out.Tasks = append(out.Tasks, entry)
+		out.Tasks = append(out.Tasks, listTaskJSONFor(n, tf.Tasks[n]))
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+func listTaskJSONFor(name string, t *config.Task) listTaskJSON {
+	entry := listTaskJSON{
+		Name:        name,
+		Cmd:         t.Cmd,
+		Visibility:  taskVisibility(t),
+		Shell:       t.Shell,
+		ShellFlags:  t.ShellFlags,
+		Deps:        append([]string(nil), t.Deps...),
+		Inputs:      append([]string(nil), t.Inputs...),
+		Outputs:     append([]string(nil), t.Outputs...),
+		Cache:       t.Cache,
+		Service:     t.Service,
+		Quiet:       t.Quiet,
+		Services:    append([]string(nil), t.Services...),
+		AcceptsArgs: t.AcceptsArgs,
+		InheritEnv:  t.InheritEnv,
+	}
+	if t.Description != nil {
+		entry.Description = *t.Description
+	}
+	if t.Workdir != nil {
+		entry.Workdir = *t.Workdir
+	}
+	for _, p := range t.Params {
+		entry.Params = append(entry.Params, listParamJSON{
+			Name:    p.Name,
+			Type:    p.Type,
+			Choices: append([]string(nil), p.Choices...),
+			Default: p.Default,
+			Description: func() string {
+				if p.Description != nil {
+					return *p.Description
+				}
+				return ""
+			}(),
+		})
+	}
+	return entry
 }
 
 type optionalIntFlag struct {
@@ -1207,8 +1307,9 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("pkf graph", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
-	format := fs.String("format", "dot", "output format: dot, mermaid, or tree")
+	format := fs.String("format", "dot", "output format: dot, mermaid, tree, or json")
 	target := fs.String("target", "", "render only the subgraph rooted at this task")
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	all := fs.Bool("all", false, "include internal tasks")
 	unsorted := fs.Bool("unsorted", false, "use Taskfile declaration order")
 	fs.BoolVar(unsorted, "source-order", false, "use Taskfile declaration order")
@@ -1219,6 +1320,12 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 	}
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("graph takes no positional args, got %v", fs.Args())
+	}
+	if *asJSON {
+		if *format != "dot" && *format != "json" {
+			return fmt.Errorf("--json cannot be combined with --format=%s", *format)
+		}
+		*format = "json"
 	}
 	if depth.set && depth.value < 0 {
 		return fmt.Errorf("--depth must be >= 0")
@@ -1285,8 +1392,10 @@ func cmdGraph(args []string, stdout, _ io.Writer) error {
 			roots = rootTaskNames(tf, ordered, *all)
 		}
 		return writeTree(stdout, tf, roots, *all, treeDepth)
+	case "json":
+		return writeGraphJSON(stdout, tf, nodes, keep)
 	default:
-		return fmt.Errorf("unknown format %q (want: dot, mermaid, tree)", *format)
+		return fmt.Errorf("unknown format %q (want: dot, mermaid, tree, json)", *format)
 	}
 }
 
@@ -1363,6 +1472,74 @@ func writeDOT(w io.Writer, tf *config.Taskfile, nodes []string, keep map[string]
 	}
 	fmt.Fprintln(w, "}")
 	return nil
+}
+
+type graphTaskJSON struct {
+	listTaskJSON
+	Kind string `json:"kind"`
+}
+
+type graphEdgeJSON struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type graphJSON struct {
+	Tasks []graphTaskJSON `json:"tasks"`
+	Edges []graphEdgeJSON `json:"edges"`
+}
+
+func writeGraphJSON(w io.Writer, tf *config.Taskfile, nodes []string, keep map[string]bool) error {
+	out := graphJSON{
+		Tasks: make([]graphTaskJSON, 0, len(nodes)),
+		Edges: []graphEdgeJSON{},
+	}
+	for _, n := range nodes {
+		t := tf.Tasks[n]
+		entry := graphTaskJSON{
+			listTaskJSON: listTaskJSONFor(n, t),
+			Kind:         taskKind(t),
+		}
+		entry.Deps = filterGraphRefs(entry.Deps, keep)
+		entry.Services = filterGraphRefs(entry.Services, keep)
+		out.Tasks = append(out.Tasks, entry)
+	}
+	for _, n := range nodes {
+		for _, d := range tf.Tasks[n].Deps {
+			if keep[d] {
+				out.Edges = append(out.Edges, graphEdgeJSON{From: d, To: n})
+			}
+		}
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func taskKind(t *config.Task) string {
+	switch {
+	case t.Service:
+		return "service"
+	case t.Cmd == "" && len(t.Deps) > 0:
+		return "aggregate"
+	case t.Cmd == "":
+		return "noop"
+	default:
+		return "task"
+	}
+}
+
+func filterGraphRefs(refs []string, keep map[string]bool) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if keep[ref] {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // mermaidIDReplacer turns task names into Mermaid-safe node IDs. The set
@@ -1497,6 +1674,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
 	printHash := fs.Bool("print-hash", false, "print action keys and exit")
+	explainCache := fs.Bool("explain-cache", false, "explain cache hit/miss decisions and exit")
 	dryRun := fs.Bool("dry-run", false, "print the execution plan and exit")
 	noCache := fs.Bool("no-cache", false, "disable cache lookup AND store for this run")
 	refresh := fs.Bool("refresh", false, "skip cache lookup but still store results (re-baseline)")
@@ -1546,6 +1724,13 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		targets = expanded
 	}
 
+	if stripped, found, err := extractPostTaskBoolFlag(postArgs, "explain-cache"); err != nil {
+		return err
+	} else if found {
+		*explainCache = true
+		postArgs = stripped
+	}
+
 	// Multiple targets are unambiguous for non-overlay flags, but
 	// `--param=value` and `-- tail args` can't be safely routed to two
 	// different tasks. Reject the combination early.
@@ -1582,14 +1767,27 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	switch {
 	case *dryRun && *printHash:
 		return fmt.Errorf("--dry-run and --print-hash are mutually exclusive")
+	case *explainCache && (*dryRun || *printHash):
+		return fmt.Errorf("--explain-cache is mutually exclusive with --dry-run / --print-hash")
 	case *noCache && *refresh:
 		return fmt.Errorf("--no-cache and --refresh are mutually exclusive (--refresh stores; --no-cache does not)")
-	case *watch && (*dryRun || *printHash):
-		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash")
+	case *watch && (*dryRun || *printHash || *explainCache):
+		return fmt.Errorf("--watch is incompatible with --dry-run / --print-hash / --explain-cache")
 	case *dryRun:
 		return printDryRun(stdout, root, tf, order, invTarget, inv, *noCache || *refresh, *profile)
 	case *printHash:
 		return printHashes(stdout, root, tf, order, invTarget, inv, *profile)
+	case *explainCache:
+		explainTarget := invTarget
+		if explainTarget == "" {
+			explainTarget = strings.Join(targets, ", ")
+		}
+		return printExplainCache(stdout, root, tf, order, explainTarget, inv, cacheExplainOptions{
+			NoCache:    *noCache,
+			Refresh:    *refresh,
+			RemoteOnly: *remoteOnly,
+			Profile:    *profile,
+		})
 	}
 
 	var backend cache.Backend
@@ -1840,6 +2038,31 @@ func splitRunArgs(args []string) (globalArgs []string, taskNames []string, taskA
 	return
 }
 
+func extractPostTaskBoolFlag(args []string, name string) ([]string, bool, error) {
+	if len(args) == 0 {
+		return args, false, nil
+	}
+	flagName := "--" + name
+	out := make([]string, 0, len(args))
+	found := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		switch {
+		case a == flagName:
+			found = true
+		case strings.HasPrefix(a, flagName+"="):
+			return nil, false, fmt.Errorf("%s is a boolean flag and does not take a value", flagName)
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, found, nil
+}
+
 // resolveInvocation reads `postArgs` (everything after the task name on
 // `pkf run`'s command line) against the task's declared params and
 // `--` tail-args contract. Returns nil when the task declares neither
@@ -2073,6 +2296,175 @@ func printHashes(stdout io.Writer, root string, tf *config.Taskfile, order []str
 		fmt.Fprintf(stdout, "%s\t%s\n", name, hash.FormatKey(key))
 	}
 	return nil
+}
+
+type cacheExplainOptions struct {
+	NoCache    bool
+	Refresh    bool
+	RemoteOnly bool
+	Profile    string
+}
+
+func printExplainCache(stdout io.Writer, root string, tf *config.Taskfile, order []string, target string, inv *runner.Invocation, opts cacheExplainOptions) error {
+	configHash := hash.HashBytes(tf.Canonical)
+	fmt.Fprintf(stdout, "cache explanation for %q (%d task%s):\n\n", target, len(order), plural(len(order)))
+
+	var local *cache.Cache
+	var cacheDir string
+	if !opts.NoCache && !opts.Refresh && !opts.RemoteOnly {
+		dir, err := cache.DefaultDir()
+		if err != nil {
+			return fmt.Errorf("resolve cache dir: %w", err)
+		}
+		cacheDir = dir
+		local = cache.New(dir)
+	}
+
+	for i, name := range order {
+		if i > 0 {
+			fmt.Fprintln(stdout)
+		}
+		task := tf.Tasks[name]
+		var taskInv *runner.Invocation
+		if name == target {
+			taskInv = inv
+		}
+		if err := printTaskCacheExplanation(stdout, root, tf.Defaults, configHash, cacheDir, local, name, task, taskInv, opts); err != nil {
+			return err
+		}
+	}
+	if remote := os.Getenv("PKFIRE_REMOTE_CACHE"); remote != "" {
+		fmt.Fprintf(stdout, "\nremote cache: %s (not probed by --explain-cache)\n", remote)
+	}
+	return nil
+}
+
+func printTaskCacheExplanation(stdout io.Writer, root string, defaults *config.Defaults, configHash []byte, cacheDir string, local *cache.Cache, name string, task *config.Task, inv *runner.Invocation, opts cacheExplainOptions) error {
+	fmt.Fprintf(stdout, "task: %s\n", name)
+	fmt.Fprintf(stdout, "  cmd: %s\n", explainCmd(task.Cmd))
+	fmt.Fprintf(stdout, "  cache: %v\n", task.Cache)
+
+	if task.Service {
+		fmt.Fprintln(stdout, "  decision: service")
+		fmt.Fprintln(stdout, "  reason: service=true tasks are supervised by `pkf up`; run cache lookup is not used")
+		return nil
+	}
+
+	taskRoot := orchestrator.TaskRoot(task, root)
+	key, err := orchestrator.ComputeKey(task, defaults, taskRoot, configHash, inv, opts.Profile)
+	if err != nil {
+		return fmt.Errorf("compute key for %q: %w", name, err)
+	}
+	fmt.Fprintf(stdout, "  action key: %s\n", hash.FormatKey(key))
+	if opts.Profile != "" {
+		fmt.Fprintf(stdout, "  profile: %s\n", opts.Profile)
+	}
+	fmt.Fprintf(stdout, "  workdir: %s\n", taskRoot)
+	fmt.Fprintf(stdout, "  inputs: %d pattern%s%s\n", len(task.Inputs), plural(len(task.Inputs)), explainListSuffix(task.Inputs))
+	inputStats, err := explainInputPatterns(taskRoot, task.Inputs)
+	if err != nil {
+		return fmt.Errorf("explain inputs for %q: %w", name, err)
+	}
+	fmt.Fprintf(stdout, "  matched inputs: %d file%s\n", inputStats.MatchedFiles, plural(inputStats.MatchedFiles))
+	if len(inputStats.UnmatchedPatterns) > 0 {
+		fmt.Fprintf(stdout, "  unmatched input patterns: %s\n", strings.Join(inputStats.UnmatchedPatterns, ", "))
+	}
+	if len(inputStats.BroadPatterns) > 0 {
+		fmt.Fprintf(stdout, "  broad input patterns: %s\n", strings.Join(inputStats.BroadPatterns, ", "))
+	}
+	fmt.Fprintf(stdout, "  outputs: %s\n", explainOutputs(task.Outputs))
+	if inv != nil && (len(inv.Args) > 0 || len(inv.Params) > 0) {
+		fmt.Fprintf(stdout, "  invocation: %s\n", invocationSummary(inv))
+	}
+
+	switch {
+	case !task.Cache:
+		fmt.Fprintln(stdout, "  decision: uncached")
+		fmt.Fprintln(stdout, "  reason: cache=false")
+	case opts.NoCache:
+		fmt.Fprintln(stdout, "  decision: forced-run")
+		fmt.Fprintln(stdout, "  reason: --no-cache disables cache lookup and store")
+	case opts.Refresh:
+		fmt.Fprintln(stdout, "  decision: forced-run")
+		fmt.Fprintln(stdout, "  reason: --refresh skips lookup but stores outputs after a successful run")
+	case opts.RemoteOnly:
+		fmt.Fprintln(stdout, "  decision: remote-only")
+		fmt.Fprintln(stdout, "  reason: --remote-only skips local lookup; remote cache is not probed by --explain-cache")
+	case local != nil && local.Has(key):
+		fmt.Fprintln(stdout, "  decision: hit")
+		fmt.Fprintf(stdout, "  reason: local cache entry found at %s\n", local.ArchivePath(key))
+	case local != nil:
+		fmt.Fprintln(stdout, "  decision: miss")
+		fmt.Fprintf(stdout, "  reason: local cache entry not found in %s\n", cacheDir)
+	default:
+		fmt.Fprintln(stdout, "  decision: unknown")
+		fmt.Fprintln(stdout, "  reason: local cache was not opened")
+	}
+	if task.Cache && len(task.Outputs) == 0 {
+		fmt.Fprintln(stdout, "  note: no outputs declared; a cache hit skips the command but restores no files")
+	}
+	return nil
+}
+
+type inputPatternExplanation struct {
+	MatchedFiles      int
+	UnmatchedPatterns []string
+	BroadPatterns     []string
+}
+
+func explainInputPatterns(root string, patterns []string) (inputPatternExplanation, error) {
+	var out inputPatternExplanation
+	matched, err := hash.ExpandInputs(root, patterns)
+	if err != nil {
+		return out, err
+	}
+	out.MatchedFiles = len(matched)
+	for _, pattern := range patterns {
+		rels, err := hash.ExpandInputs(root, []string{pattern})
+		if err != nil {
+			return out, err
+		}
+		if len(rels) == 0 {
+			out.UnmatchedPatterns = append(out.UnmatchedPatterns, pattern)
+		}
+		if broadInputPattern(pattern) {
+			out.BroadPatterns = append(out.BroadPatterns, pattern)
+		}
+	}
+	return out, nil
+}
+
+func broadInputPattern(pattern string) bool {
+	p := filepath.ToSlash(strings.TrimSpace(pattern))
+	p = strings.TrimPrefix(p, "./")
+	switch p {
+	case ".", "*", "**", "**/*", "**/**":
+		return true
+	default:
+		return false
+	}
+}
+
+func explainCmd(cmd string) string {
+	out := oneLine(cmd)
+	if out == "" {
+		return "<none>"
+	}
+	return out
+}
+
+func explainListSuffix(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(items, ", ")
+}
+
+func explainOutputs(outputs []string) string {
+	if len(outputs) == 0 {
+		return "(none)"
+	}
+	return strings.Join(outputs, ", ")
 }
 
 // gitHookEvents is the set of git client-side hook names that pkfire

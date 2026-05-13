@@ -178,6 +178,42 @@ func TestGraphMermaid(t *testing.T) {
 	}
 }
 
+func TestGraphJSONEmitsStructuredOutput(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", basicTaskfile(t), "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph --json: %v", err)
+	}
+	var got graphJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if len(got.Tasks) == 0 {
+		t.Fatal("expected at least one task in output")
+	}
+	names := map[string]bool{}
+	for _, task := range got.Tasks {
+		names[task.Name] = true
+		if task.Kind == "" {
+			t.Fatalf("task %q missing kind: %#v", task.Name, task)
+		}
+	}
+	for _, want := range []string{"build", "test"} {
+		if !names[want] {
+			t.Errorf("expected task %q in graph json output, got %+v", want, names)
+		}
+	}
+	var foundEdge bool
+	for _, edge := range got.Edges {
+		if edge.From == "build" && edge.To == "test" {
+			foundEdge = true
+		}
+	}
+	if !foundEdge {
+		t.Fatalf("expected build->test edge in graph json output: %#v", got.Edges)
+	}
+}
+
 func TestGraphTargetSubgraph(t *testing.T) {
 	requirePkl(t)
 	var stdout, stderr bytes.Buffer
@@ -191,6 +227,43 @@ func TestGraphTargetSubgraph(t *testing.T) {
 	}
 	if !strings.Contains(out, `"build"`) {
 		t.Errorf("--target build should include `build` node:\n%s", out)
+	}
+}
+
+func TestGraphJSONSupportsTargetAllAndAggregateKind(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local setup = new Task { name = "setup"; cmd = "echo setup"; visibility = "internal" }
+local test = new Task { name = "test"; cmd = "echo test"; deps { setup } }
+local ci = new Task { name = "ci"; deps { test } }
+tasks { setup; test; ci }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdGraph([]string{"-f", taskfile, "--json", "--target", "ci", "--all"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdGraph --json --target ci --all: %v", err)
+	}
+	var got graphJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	kinds := map[string]string{}
+	for _, task := range got.Tasks {
+		kinds[task.Name] = task.Kind
+	}
+	if kinds["ci"] != "aggregate" {
+		t.Fatalf("ci kind = %q, want aggregate; all kinds: %#v", kinds["ci"], kinds)
+	}
+	for _, want := range []graphEdgeJSON{{From: "setup", To: "test"}, {From: "test", To: "ci"}} {
+		var found bool
+		for _, edge := range got.Edges {
+			if edge == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected edge %#v in graph json output: %#v", want, got.Edges)
+		}
 	}
 }
 
@@ -855,6 +928,89 @@ tasks { used }
 	finding := got.Findings[0]
 	if finding.Path == "" || finding.Line == 0 || !strings.Contains(finding.Message, "not included in tasks") {
 		t.Fatalf("unexpected JSON finding: %#v", finding)
+	}
+}
+
+func TestLintWarnsOnUncachedTaskWithInputs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local test = new Task {
+  name = "test"
+  cmd = "go test ./..."
+  cache = false
+  inputs { "**/*.go"; "go.mod" }
+}
+tasks { test }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("warning-only lint should not fail: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"warning", "test", "declares inputs but cache=false"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("lint output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestLintWarnsOnBuildLikeTaskWithoutOutputs(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "go build -o bin/app ./cmd/app"
+  inputs { "**/*.go"; "go.mod" }
+}
+tasks { build }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
+		t.Fatalf("warning-only lint should not fail: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"warning", "build", "looks like it produces build artifacts", "outputs"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("lint output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestLintJSONIncludesCacheDiagnosticWarnings(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local test = new Task {
+  name = "test"
+  cmd = "go test ./..."
+  cache = false
+  inputs { "**/*.go" }
+}
+local build = new Task {
+  name = "build"
+  cmd = "npm run build"
+  inputs { "src/**/*.ts"; "package.json" }
+}
+tasks { test; build }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdLint([]string{"-f", taskfile, "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("warning-only lint --json should not fail: %v\n%s", err, stdout.String())
+	}
+	var got lintJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("lint --json did not emit JSON: %v\n%s", err, stdout.String())
+	}
+	seen := map[string]bool{}
+	for _, finding := range got.Findings {
+		if finding.Level != "warning" {
+			t.Fatalf("cache diagnostic should be warning, got %#v", finding)
+		}
+		seen[finding.Kind] = true
+	}
+	for _, want := range []string{lintKindInputsWithoutCache, lintKindBuildWithoutOutputs} {
+		if !seen[want] {
+			t.Fatalf("missing %q warning in JSON findings: %#v", want, got.Findings)
+		}
 	}
 }
 
@@ -1729,6 +1885,111 @@ func TestRunDryRunNoCacheForcesAllWillRun(t *testing.T) {
 		if strings.HasPrefix(line, "  hit ") {
 			t.Errorf("--no-cache dry-run reported a hit row, expected none:\n%s", out)
 			break
+		}
+	}
+}
+
+func TestRunExplainCacheReportsMissReason(t *testing.T) {
+	requirePkl(t)
+	t.Setenv("PKFIRE_CACHE_DIR", t.TempDir())
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "mkdir -p bin && echo app > bin/app"
+  inputs { "src/**/*.go" }
+  outputs { "bin/app" }
+}
+tasks { build }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "build", "--explain-cache"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun --explain-cache: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		`cache explanation for "build"`,
+		"task: build",
+		"decision: miss",
+		"reason: local cache entry not found",
+		"action key:",
+		"inputs: 1 pattern",
+		"matched inputs: 0 files",
+		"unmatched input patterns: src/**/*.go",
+		"outputs: bin/app",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("explain-cache output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunExplainCacheReportsUncachedReason(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local test = new Task {
+  name = "test"
+  cmd = "go test ./..."
+  cache = false
+  inputs { "**/*.go" }
+}
+tasks { test }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "--explain-cache", "test"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun --explain-cache: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"task: test",
+		"decision: uncached",
+		"reason: cache=false",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("explain-cache output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunExplainCacheNoCacheExplainsForcedRun(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "go build ./..."
+  inputs { "**/*.go" }
+}
+tasks { build }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", taskfile, "--no-cache", "--explain-cache", "build"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun --no-cache --explain-cache: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"task: build",
+		"decision: forced-run",
+		"reason: --no-cache disables cache lookup and store",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("explain-cache output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestBroadInputPatternHeuristic(t *testing.T) {
+	cases := []struct {
+		pattern string
+		want    bool
+	}{
+		{"**/*", true},
+		{"./**/*", true},
+		{"*", true},
+		{"src/**/*", false},
+		{"**/*.go", false},
+	}
+	for _, tc := range cases {
+		if got := broadInputPattern(tc.pattern); got != tc.want {
+			t.Fatalf("broadInputPattern(%q) = %v, want %v", tc.pattern, got, tc.want)
 		}
 	}
 }

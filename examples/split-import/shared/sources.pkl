@@ -1,0 +1,10 @@
+/// Shared source sets consumed by task fragments.
+appSources: Listing<String> = new {
+  "src/**/*.js"
+  "package.json"
+}
+
+testSources: Listing<String> = new {
+  "src/**/*.js"
+  "package.json"
+}

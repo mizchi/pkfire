@@ -1,0 +1,14 @@
+import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl" as schema
+
+import "../shared/sources.pkl" as sources
+import "build.pkl" as buildTasks
+
+test: schema.Task = new {
+  name = "test"
+  description = "Run Node's built-in test runner"
+  cmd = "node --test src/index.test.js"
+  inputs = sources.testSources
+  deps { buildTasks.build }
+}
+
+tasks: Listing<schema.Task> = new { test }

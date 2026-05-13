@@ -45,7 +45,16 @@ _pkf() {
       tasks=$(pkf list 2>/dev/null | awk '{print $1}')
       COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
       ;;
-    run|clean|up)
+    run)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --watch --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --on-fail --remote-only -j --jobs" -- "$cur"))
+        return
+      fi
+      local tasks
+      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+      ;;
+    clean|up)
       if [[ "$cur" == -* ]]; then return; fi
       local tasks
       tasks=$(pkf list 2>/dev/null | awk '{print $1}')
@@ -68,7 +77,9 @@ _pkf() {
       ;;
     graph)
       if [[ "$prev" == "--format" ]]; then
-        COMPREPLY=($(compgen -W "dot mermaid tree" -- "$cur"))
+        COMPREPLY=($(compgen -W "dot mermaid tree json" -- "$cur"))
+      elif [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --format --json --target --all --unsorted --source-order --depth" -- "$cur"))
       fi
       ;;
   esac

@@ -1,0 +1,15 @@
+import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl" as schema
+
+import "../shared/sources.pkl" as sources
+import "../shared/toolchain.pkl" as toolchain
+
+build: schema.Task = new {
+  name = "build"
+  description = "Copy the example module into dist"
+  cmd = "mkdir -p dist && cp src/index.js dist/index.js"
+  inputs = sources.appSources
+  outputs { "dist/index.js" }
+  tools = toolchain.versions
+}
+
+tasks: Listing<schema.Task> = new { build }

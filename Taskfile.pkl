@@ -87,7 +87,7 @@ local testExamples: Task = new {
   cmd =
     #"""
     set -euo pipefail
-    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl examples/diagnostics/Taskfile.pkl; do
+    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl examples/diagnostics/Taskfile.pkl examples/split-import/Taskfile.pkl; do
       echo "  eval $f"
       pkl eval "$f" >/dev/null
     done
@@ -99,6 +99,7 @@ local testExamples: Task = new {
     "examples/rust/Taskfile.pkl"
     "examples/monorepo/Taskfile.pkl"
     "examples/diagnostics/Taskfile.pkl"
+    "examples/split-import/**/*.pkl"
   }
 }
 
@@ -106,7 +107,6 @@ local lintTaskfile: Task = new {
   name = "lint:taskfile"
   description = "Detect local Task definitions omitted from tasks"
   cmd = "go run ./cmd/pkf lint"
-  cache = false
   inputs {
     ...sources
     "Taskfile.pkl"
@@ -118,7 +118,6 @@ local testWorkflow: Task = new {
   name = "test:workflow"
   description = "Verify Taskfile workflowTests"
   cmd = "go run ./cmd/pkf affected --check"
-  cache = false
   inputs {
     ...sources
     "Taskfile.pkl"
@@ -138,19 +137,12 @@ local fmt: Task = new {
   description = "Format all Pkl files in the repo"
   cmd = "pkl format -w Taskfile.pkl pkl examples skills"
   cache = false
-  inputs {
-    "Taskfile.pkl"
-    "pkl/**/*.pkl"
-    "examples/**/*.pkl"
-    "skills/**/*.pkl"
-  }
 }
 
 local fmtCheck: Task = new {
   name = "fmt:check"
   description = "Check Pkl formatting without writing changes"
   cmd = "pkl format --diff-name-only Taskfile.pkl pkl examples skills"
-  cache = false
   inputs {
     "Taskfile.pkl"
     "pkl/**/*.pkl"
@@ -207,8 +199,6 @@ local tag: Task = new {
 local preflight: Task = new {
   name = "preflight"
   description = "Pre-commit gate: vet + go-test + pkl-test + examples + version + format"
-  cmd = "echo preflight ok"
-  cache = false
   deps {
     vet
     testGo
@@ -235,14 +225,12 @@ local testReleaseNotes: Task = new {
 
 /// Git pre-commit hook target. `pkf hooks install` writes
 /// `.git/hooks/pre-commit` as a shim that calls `pkf run pre-commit`.
-/// The body just delegates to preflight — putting it behind its own
+/// This deps-only task delegates to preflight — putting it behind its own
 /// task name keeps the hooks layer (config: which task wires to
 /// which event) separate from the actual gate logic.
 local preCommit: Task = new {
   name = "pre-commit"
   description = "Git pre-commit hook target (delegates to preflight)"
-  cmd = "echo pre-commit ok"
-  cache = false
   deps { preflight }
 }
 
