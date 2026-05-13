@@ -457,6 +457,7 @@ Open a PR to add yours.
 | [`examples/node`](./examples/node/) | Node project using the built-in `node:test` runner; zero dev deps |
 | [`examples/rust`](./examples/rust/) | Single-binary Rust crate driven through `cargo` (fmt + clippy + test + build) |
 | [`examples/monorepo`](./examples/monorepo/) | pnpm workspaces with one Task generated per package via a `Package` template |
+| [`examples/diagnostics`](./examples/diagnostics/) | `list --long`, `lint --json/--fix`, `doctor --json/--fix`, internal tasks, quiet output, strict shell flags |
 | [`examples/dogfood`](./examples/dogfood/Taskfile.pkl) | pkfire builds itself: cross-compile matrix + checksum + integration |
 | [`examples/remote-cache-worker`](./examples/remote-cache-worker/) | Cloudflare Worker that backs the remote-cache protocol with R2 |
 
@@ -489,9 +490,10 @@ you'd install for any other project.
 go install ./cmd/pkf
 
 pkf list                                      # see all maintenance tasks
-pkf run preflight                             # vet + go-test + pkl-test + version consistency
+pkf run preflight                             # vet + go-test + pkl-test + examples + version + format
 pkf run test:race                             # go test -race ./...
-pkf run fmt                                   # pkl format -w on pkl/, examples/, skills/
+pkf run fmt                                   # pkl format -w on Taskfile.pkl, pkl/, examples/, skills/
+pkf run fmt:check                             # formatting check without writing
 pkf run -f examples/dogfood/Taskfile.pkl ci   # full release gate (cross-compile + integration)
 ```
 
@@ -515,7 +517,8 @@ git push origin main "pkfire@<new-version>"
 #    in a follow-up commit.
 perl -i -pe 's/pkfire\@<old>/pkfire\@<new-version>/g' \
   examples/basic/Taskfile.pkl examples/node/Taskfile.pkl \
-  examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl
+  examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl \
+  examples/diagnostics/Taskfile.pkl
 git commit -am "examples: bump amends URI to pkfire@<new-version>"
 git push
 ```

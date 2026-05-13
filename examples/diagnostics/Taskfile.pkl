@@ -1,0 +1,72 @@
+/// pkfire diagnostics example.
+///
+/// This Taskfile is intentionally small and lint-clean while still
+/// showing the fields and CLI commands that are easy to miss:
+///
+///   pkf list --long --all --color=never
+///   pkf lint --json
+///   pkf lint --fix --dry-run
+///   pkf doctor --json
+///   pkf doctor --fix --dry-run
+///   pkf explain --diff old/Taskfile.pkl ci
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.8.0#/Taskfile.pkl"
+
+local strictShellFlags: List<String> = List("-eu", "-o", "pipefail", "-c")
+
+local renderReport = new Task {
+  name = "render-report"
+  description = "Write a generated report; intentionally uncached"
+  cmd = "mkdir -p build && date -u > build/report.txt"
+  shellFlags = strictShellFlags
+  outputs { "build/report.txt" }
+
+  // A task with outputs but no inputs would be suspicious if cache
+  // were enabled. `pkf lint --fix` safely adds this exact line.
+  cache = false
+}
+
+local lintJson = new Task {
+  name = "lint:json"
+  description = "Emit machine-readable lint findings"
+  cmd = "pkf lint --json"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+}
+
+local doctorJson = new Task {
+  name = "doctor:json"
+  description = "Emit machine-readable environment checks"
+  cmd = "pkf doctor --json"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+}
+
+local auditList = new Task {
+  name = "audit:list"
+  description = "Show every task with cache/quiet/deps/io/shell columns"
+  cmd = "pkf list --long --all --color=never"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+  visibility = "internal"
+}
+
+local doctorFixPlan = new Task {
+  name = "doctor:fix-plan"
+  description = "Preview replacing a stale pkf on PATH"
+  cmd = "pkf doctor --fix --dry-run"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+  visibility = "internal"
+}
+
+local ci = new Task {
+  name = "ci"
+  description = "Deps-only umbrella task; no shell process is spawned"
+  deps { lintJson; doctorJson; auditList; renderReport }
+}
+
+tasks { lintJson; doctorJson; auditList; doctorFixPlan; renderReport; ci }

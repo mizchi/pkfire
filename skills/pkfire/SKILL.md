@@ -148,6 +148,7 @@ run, then caches the new package locally.
 | [`assets/recipes/12-task-library.pkl`](./assets/recipes/12-task-library.pkl) | Library-author skeleton: `abstract module` + `extends` polymorphism, `allTasks` export, runtime dispatch, release-tag scheme |
 | [`assets/recipes/13-git-hooks.pkl`](./assets/recipes/13-git-hooks.pkl) | `pkf hooks install`: tasks named after git events (`pre-commit`, `pre-push`, `commit-msg`) wired to `.git/hooks/<event>` shims |
 | [`assets/recipes/14-secretlint-pre-push.pkl`](./assets/recipes/14-secretlint-pre-push.pkl) | secretlint as a `pkf run pre-push` task (scans the outgoing diff, not every commit) — drops the prek dep for the "secretlint-only" hook case |
+| [`assets/recipes/15-diagnostics-and-lint.pkl`](./assets/recipes/15-diagnostics-and-lint.pkl) | `list --long`, `lint --json/--fix`, `doctor --json/--fix`, internal audit tasks, quiet wrappers, strict shell flags |
 
 ## Project layout
 
@@ -769,14 +770,29 @@ pkf list --unsorted            # Taskfile declaration order
 pkf list --all                 # include visibility = "internal" tasks
 pkf list --color=always        # force ANSI color (auto, always, never)
 pkf list -v                    # cmd preview + deps + cache status
+pkf list --long --all          # compact audit table: visibility, cache, quiet, deps, io, shell
 pkf list --json                # machine-readable; for editor / CI tooling
 pkf graph                      # Graphviz DOT
 pkf graph --format mermaid     # GitHub-renderable
 pkf graph --format tree        # terminal-readable dependency tree
 pkf graph --target build       # only the subgraph rooted at `build`
-pkf lint                       # detect local Task definitions omitted from tasks { ... }
-pkf doctor                     # diagnose pkl / cache / remote / Taskfile setup
+pkf lint                       # dead local tasks + suspicious task definitions
+pkf lint --json                # structured findings for editor / CI tooling
+pkf lint --fix --dry-run       # preview safe edits; currently cache=false for outputs-without-inputs
+pkf doctor                     # diagnose pkf PATH / pkl / cache / remote / Taskfile setup
+pkf doctor --json              # structured environment checks
+pkf doctor --fix --dry-run     # preview replacing a stale pkf on PATH
 ```
+
+`pkf lint --fix` is deliberately narrow. It only edits a task when
+the safe default is unambiguous: a cacheable task declares `outputs`
+but no `inputs`, so pkfire adds `cache = false`. Findings such as
+dead local tasks, no-op tasks, and services without readiness probes
+remain suggestions because automatic edits could change intent.
+
+`pkf doctor --fix` can replace the `pkf` binary found on `PATH` with
+the currently running binary, backing up the old file first. Always
+start with `--dry-run` and inspect the path before applying it.
 
 ### Execution preview
 

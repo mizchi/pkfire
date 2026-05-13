@@ -1,6 +1,6 @@
-/// Project-maintenance tasks for pkfire itself. The kinds of things
-/// you'd reach for a justfile or Makefile for in other repos —
-/// version bumps, the consistency check, formatter, pre-commit gate.
+/// Project-maintenance tasks for pkfire itself. This file is the
+/// repo's task runner entry point; do not add a separate justfile or
+/// Makefile for maintenance commands.
 ///
 /// Build/test of the `pkf` binary lives in
 /// `examples/dogfood/Taskfile.pkl` (cross-compile matrix + checksum
@@ -13,8 +13,8 @@
 ///   pkf run bump --to=0.5.0        sweep pkfire@<old> → pkfire@0.5.0
 ///   pkf run tag                    create the pkfire@<ver> tag locally
 ///
-/// Formatting is handled by the built-in `pkf format` subcommand
-/// (no Taskfile wrapper task — it would be a 1:1 redundant alias).
+/// Formatting is intentionally exposed as a Taskfile task too, so
+/// `pkf run fmt` works the same way as other maintenance commands.
 ///
 /// Relative `amends` so this file always tracks the in-tree schema
 /// (including unreleased changes). External examples use the
@@ -86,7 +86,7 @@ local testExamples: Task = new {
   cmd =
     #"""
     set -euo pipefail
-    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl; do
+    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl examples/diagnostics/Taskfile.pkl; do
       echo "  eval $f"
       pkl eval "$f" >/dev/null
     done
@@ -97,6 +97,7 @@ local testExamples: Task = new {
     "examples/node/Taskfile.pkl"
     "examples/rust/Taskfile.pkl"
     "examples/monorepo/Taskfile.pkl"
+    "examples/diagnostics/Taskfile.pkl"
   }
 }
 
@@ -117,6 +118,32 @@ local checkVersion: Task = new {
   description = "Verify every `pkfire@<ver>` reference matches pkl/PklProject"
   cmd = "scripts/check-version-consistency.sh"
   cache = false
+}
+
+local fmt: Task = new {
+  name = "fmt"
+  description = "Format all Pkl files in the repo"
+  cmd = "pkl format -w Taskfile.pkl pkl examples skills"
+  cache = false
+  inputs {
+    "Taskfile.pkl"
+    "pkl/**/*.pkl"
+    "examples/**/*.pkl"
+    "skills/**/*.pkl"
+  }
+}
+
+local fmtCheck: Task = new {
+  name = "fmt:check"
+  description = "Check Pkl formatting without writing changes"
+  cmd = "pkl format --diff-name-only Taskfile.pkl pkl examples skills"
+  cache = false
+  inputs {
+    "Taskfile.pkl"
+    "pkl/**/*.pkl"
+    "examples/**/*.pkl"
+    "skills/**/*.pkl"
+  }
 }
 
 /// `pkf run bump --to=0.5.0` sweeps every `pkfire@<old>` reference
@@ -167,13 +194,18 @@ local tag: Task = new {
 local preflight: Task = new {
   name = "preflight"
   description = "Pre-commit gate: vet + go-test + pkl-test + examples + version + format"
-  // Format check runs as the cmd (deps run first, then this). `pkl
-  // format --diff-name-only` exits 11 if any Pkl file is unformatted;
-  // that propagates as a task failure, so a misformatted file fails
-  // preflight just like a failing test would.
-  cmd = "pkl format --diff-name-only pkl examples skills"
+  cmd = "echo preflight ok"
   cache = false
-  deps { vet; testGo; testPkl; testExamples; lintTaskfile; checkVersion; testReleaseNotes }
+  deps {
+    vet
+    testGo
+    testPkl
+    testExamples
+    lintTaskfile
+    checkVersion
+    testReleaseNotes
+    fmtCheck
+  }
 }
 
 /// Verify the release-notes extractor stays correct. Catches
@@ -209,6 +241,8 @@ tasks {
   lintTaskfile
   testReleaseNotes
   checkVersion
+  fmt
+  fmtCheck
   bump
   tag
   preflight

@@ -1,0 +1,75 @@
+/// Recipe 15: diagnostics, machine-readable lint, and safe autofix.
+///
+/// Copy this when a project needs a self-auditing Taskfile. It keeps
+/// the authored tasks lint-clean while documenting the CLI commands
+/// operators should reach for when debugging cache misses, stale
+/// installed binaries, or suspicious task definitions.
+///
+/// Try:
+///   pkf list --long --all --color=never
+///   pkf lint --json
+///   pkf lint --fix --dry-run
+///   pkf doctor --json
+///   pkf doctor --fix --dry-run
+///   pkf explain --diff old/Taskfile.pkl ci
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.8.0#/Taskfile.pkl"
+
+local strictShellFlags: List<String> = List("-eu", "-o", "pipefail", "-c")
+
+local generatedReport = new Task {
+  name = "report:generate"
+  description = "Generate a report from external state"
+  cmd = "mkdir -p build && date -u > build/report.txt"
+  shellFlags = strictShellFlags
+  outputs { "build/report.txt" }
+
+  // `outputs` with no `inputs` is usually a cache footgun. If this
+  // line is omitted, `pkf lint --fix` adds it as the safe default.
+  cache = false
+}
+
+local lintJson = new Task {
+  name = "lint:json"
+  description = "Structured lint findings for CI/editor tooling"
+  cmd = "pkf lint --json"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+}
+
+local doctorJson = new Task {
+  name = "doctor:json"
+  description = "Structured setup checks"
+  cmd = "pkf doctor --json"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+}
+
+local auditList = new Task {
+  name = "audit:list"
+  description = "Human audit table, including internal tasks"
+  cmd = "pkf list --long --all --color=never"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+  visibility = "internal"
+}
+
+local fixPlan = new Task {
+  name = "doctor:fix-plan"
+  description = "Preview replacing the pkf binary found on PATH"
+  cmd = "pkf doctor --fix --dry-run"
+  shellFlags = strictShellFlags
+  cache = false
+  quiet = true
+  visibility = "internal"
+}
+
+local ci = new Task {
+  name = "ci"
+  description = "Deps-only umbrella task"
+  deps { lintJson; doctorJson; auditList; generatedReport }
+}
+
+tasks { lintJson; doctorJson; auditList; fixPlan; generatedReport; ci }

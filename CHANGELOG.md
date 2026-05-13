@@ -30,6 +30,11 @@ Action version all move together — there is one tag per release
   old binary is backed up before replacement.
 - `pkf lint --fix` safely adds `cache = false` to tasks that declare
   outputs but no inputs; other lint findings remain suggestions.
+- Added `examples/diagnostics` and recipe 15 to show diagnostics,
+  machine-readable lint/doctor output, safe fix previews, internal
+  audit tasks, quiet wrappers, and strict shell flags.
+- The repo's own `Taskfile.pkl` now exposes `fmt` and `fmt:check`
+  maintenance tasks, and `preflight` depends on the formatting check.
 
 ## [0.8.0] - 2026-05-13
 
