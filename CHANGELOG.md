@@ -10,6 +10,8 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-13
+
 ### Added
 
 - `pkf explain --diff OLD_TASKFILE <task>` compares the action-key
