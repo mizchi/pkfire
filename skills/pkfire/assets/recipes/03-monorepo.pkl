@@ -9,7 +9,7 @@
 /// every per-package `node_modules` so pkfire's CAS captures the
 /// symlink graph and `pkf run install` can hit cache after the first
 /// run (CAS preserves relative symlinks).
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.9.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
 
 local class Package {
   fullName: String

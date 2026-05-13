@@ -10,6 +10,8 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-14
+
 ### Added
 
 - `pkf affected --files <path>` simulates changed files without
@@ -19,12 +21,30 @@ Action version all move together — there is one tag per release
   validates file-change expectations against the affected run plan.
 - `pkf explain <task>` now includes declared deps, dependents, input
   patterns, outputs, and upstream affected trigger patterns.
+- `pkf list --json` and `pkf graph --json` emit machine-readable task
+  metadata, including aggregate/service kind, deps, inputs, outputs,
+  cache state, workdir, params, and service metadata.
+- `pkf run --explain-cache <task>` explains per-task action keys,
+  hit/miss/forced-run decisions, local cache lookup paths, matched
+  inputs, unmatched globs, broad input patterns, invocation overlays,
+  and no-output cache notes.
+- `pkf lint` now emits warning-level cache diagnostics for tasks with
+  inputs but `cache = false`, and for build-like cacheable tasks that
+  declare no outputs.
+- Added `examples/split-import`, showing a single root Taskfile that
+  imports task fragments under `tasks/`, shared constants under
+  `shared/`, typed cross-file deps, and a deps-only aggregate.
+- Added Pkl contract tests for the split/import example so the
+  documented fragment convention is imported and validated directly.
 - The repo's own `preflight` now runs `test:workflow` to dogfood
   `workflowTests`.
 
 ### Changed
 
 - Examples now amend the published `pkfire@0.9.0` Pkl package.
+- Shell completions now include the late-added `explain`, `migrate`,
+  and `pkl-cache` commands and their core options.
+- The repo's `test:examples` task now also runs example contract tests.
 
 ## [0.9.0] - 2026-05-13
 
@@ -538,7 +558,9 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.8.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.10.0...HEAD
+[0.10.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.10.0
+[0.9.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.9.0
 [0.8.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.8.0
 [0.7.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.7.0
 [0.6.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.6.0

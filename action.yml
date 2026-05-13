@@ -8,9 +8,9 @@ inputs:
   version:
     description: |
       pkfire release to install. Accepts the underlying release tag
-      `pkfire@0.9.0`, the action-friendly form `v0.5.0`, a bare semver
+      `pkfire@0.10.0`, the action-friendly form `v0.5.0`, a bare semver
       `0.4.0`, or the floating major `v0`. When empty, the action reads
-      its own ref (so pinning via `mizchi/pkfire@v0.9.0` or `@v0` just
+      its own ref (so pinning via `mizchi/pkfire@v0.10.0` or `@v0` just
       works) and falls back to the latest published release.
     required: false
     default: ""
