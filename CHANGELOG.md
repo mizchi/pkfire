@@ -10,6 +10,21 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- `pkf explain --diff OLD_TASKFILE <task>` compares the action-key
+  inputs for the current Taskfile against another Taskfile and reports
+  which component changed (`cmd`, `shell`, `shellFlags`, `env`,
+  `tools`, input file digests, or config hash).
+- `pkf lint` now also flags suspicious rendered tasks: cacheable
+  outputs with no inputs, services without a readiness probe, and
+  tasks that have neither `cmd` nor `deps`.
+- `pkf list --long` prints a compact audit table with visibility,
+  cache/quiet state, deps, input/output counts, shell, flags, and cmd.
+- `pkf lint --json` emits structured findings for editor/CI consumers.
+- `pkf doctor` now checks whether `pkf` on `PATH` differs from the
+  currently running binary, which helps catch stale hook installations.
+
 ## [0.8.0] - 2026-05-13
 
 ### Added

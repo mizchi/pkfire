@@ -114,6 +114,39 @@ func TestListVerboseShowsCmdAndDeps(t *testing.T) {
 	}
 }
 
+func TestListLongShowsAuditColumns(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local setup = new Task { name = "setup"; cmd = "echo setup" }
+local wrapper = new Task {
+  name = "wrapper"
+  cmd = "echo wrapper"
+  visibility = "internal"
+  workdir = "tools"
+  deps { setup }
+  inputs { "tools/**/*.go" }
+  outputs { "bin/wrapper" }
+  cache = false
+  quiet = true
+  shellFlags = List("-eu", "-o", "pipefail", "-c")
+}
+tasks { setup; wrapper }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdList([]string{"-f", taskfile, "--long", "--all", "--unsorted"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdList --long: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"task", "vis", "cache", "quiet", "workdir", "deps", "in", "out", "shell", "flags", "cmd",
+		"wrapper", "internal", "off", "yes", "tools", "setup", "1", "-eu -o pipefail -c", "echo wrapper",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("long list output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestGraphDOT(t *testing.T) {
 	requirePkl(t)
 	var stdout, stderr bytes.Buffer
@@ -654,6 +687,30 @@ func TestDoctorReportsTaskfileMetadata(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsWhenPathPkfDiffersFromCurrentBinary(t *testing.T) {
+	requirePkl(t)
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "pkf")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\ncase \"$1\" in\n  version|--version|-v) echo 0.7.0 ;;\n  *) echo fake pkf ;;\nesac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prev := version
+	version = "dev"
+	t.Cleanup(func() { version = prev })
+
+	var stdout, stderr bytes.Buffer
+	if err := cmdDoctor([]string{"-f", basicTaskfile(t)}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDoctor: %v\n%s", err, stdout.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"pkf-path", fake, "0.7.0", "PATH resolves"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestLintDetectsUnlistedLocalTask(t *testing.T) {
 	requirePkl(t)
 	taskfile := taskfileWithLocalSchema(t, `
@@ -671,6 +728,37 @@ tasks { used }
 		if !strings.Contains(out, want) {
 			t.Fatalf("lint output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestLintJSONEmitsStructuredFindings(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local used = new Task { name = "used"; cmd = "echo used" }
+local dead = new Task { name = "dead"; cmd = "echo dead" }
+tasks { used }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdLint([]string{"-f", taskfile, "--json"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected lint finding for unlisted local task")
+	}
+	var got struct {
+		Findings []struct {
+			Path    string `json:"path"`
+			Line    int    `json:"line"`
+			Message string `json:"message"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("lint --json did not emit JSON: %v\n%s", err, stdout.String())
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("expected one JSON finding, got %#v", got.Findings)
+	}
+	finding := got.Findings[0]
+	if finding.Path == "" || finding.Line == 0 || !strings.Contains(finding.Message, "not included in tasks") {
+		t.Fatalf("unexpected JSON finding: %#v", finding)
 	}
 }
 
@@ -701,6 +789,35 @@ tasks { live }
 	var stdout, stderr bytes.Buffer
 	if err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr); err != nil {
 		t.Fatalf("dynamic names should be skipped for now: %v\n%s", err, stdout.String())
+	}
+}
+
+func TestLintDetectsTaskDefinitionSmells(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "mkdir -p bin && echo app > bin/app"
+  outputs { "bin/app" }
+}
+local api = new Task { name = "api"; cmd = "node server.js"; service = true }
+local noop = new Task { name = "noop" }
+tasks { build; api; noop }
+`)
+	var stdout, stderr bytes.Buffer
+	err := cmdLint([]string{"-f", taskfile}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected lint findings")
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		`task "build" declares outputs but no inputs`,
+		`task "api" has service=true but no readiness probe`,
+		`task "noop" has neither cmd nor deps`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("lint output missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -861,6 +978,56 @@ func TestCmdExplainShowsKeyComponents(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("explain output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCmdExplainDiffShowsChangedKeyComponents(t *testing.T) {
+	requirePkl(t)
+	oldTaskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "cat file.txt"
+  inputs { "file.txt" }
+  env { ["MODE"] = "old" }
+}
+tasks { build }
+`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(oldTaskfile), "file.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newTaskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "cat file.txt && echo done"
+  inputs { "file.txt" }
+  env { ["MODE"] = "new" }
+}
+tasks { build }
+`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(newTaskfile), "file.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := cmdExplain([]string{"-f", newTaskfile, "--diff", oldTaskfile, "build"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdExplain --diff: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"task: build",
+		"action key:",
+		"cmd:",
+		"- cat file.txt",
+		"+ cat file.txt && echo done",
+		"env:",
+		"~ MODE:",
+		"inputs:",
+		"~ file.txt:",
+		"config hash:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("explain diff output missing %q:\n%s", want, out)
 		}
 	}
 }

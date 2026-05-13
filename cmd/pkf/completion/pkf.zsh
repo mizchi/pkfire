@@ -11,7 +11,7 @@ _pkf() {
     'run:run one or more tasks'
     'up:supervise long-running services'
     'doctor:diagnose pkfire setup'
-    'lint:detect Taskfile dead code patterns'
+    'lint:detect Taskfile issues'
     'format:pkl format -w wrapper'
     'hooks:manage .git/hooks shims'
     'affected:run tasks whose inputs changed since <ref>'
@@ -32,6 +32,33 @@ _pkf() {
     list)
       if [[ "${words[$((CURRENT-1))]}" == "--color" ]]; then
         _values 'color' auto always never
+      elif [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'list option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '-v[show cmd preview and deps]' \
+          '--verbose[show cmd preview and deps]' \
+          '--long[show compact audit table]' \
+          '--json[emit machine-readable output]' \
+          '--all[include internal tasks]' \
+          '--unsorted[use declaration order]' \
+          '--source-order[use declaration order]' \
+          '--color[when to color output]'
+      fi
+      ;;
+    lint)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'lint option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--json[emit machine-readable output]'
+      fi
+      ;;
+    doctor)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'doctor option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]'
       fi
       ;;
     run|affected|clean|up)

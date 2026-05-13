@@ -227,7 +227,7 @@ pkf up --watch dev             # same, plus restart-on-change
 pkf graph                      # emit Graphviz DOT for the full DAG
 pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
 pkf graph --target test        # only the subgraph rooted at `test`
-pkf doctor                     # diagnose pkl/cache/remote/taskfile setup
+pkf doctor                     # diagnose pkf PATH, pkl/cache/remote/taskfile setup
 pkf format                     # pkl format -w on the Taskfile's directory
 pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
 pkf hooks install              # write .git/hooks/<event> shims for matching tasks
@@ -248,7 +248,9 @@ pkf completion bash > ~/.bash_completion.d/pkf  # dynamic task-name completion
 pkf completion zsh > "${fpath[1]}/_pkf"
 pkf completion fish > ~/.config/fish/completions/pkf.fish
 pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
+pkf list --long                # audit task visibility/cache/quiet/deps/io/shell flags
 pkf explain build              # dump every input to the action key (cache-miss debug)
+pkf explain --diff old/Taskfile.pkl build  # compare action-key inputs against another Taskfile
 pkf run --profile=ci build     # tag the run; $PKF_PROFILE + cache splits per profile
 pkf run --on-fail=shell build  # drop into $SHELL in the failed task's workdir on error
 pkf run --remote-only build    # skip local cache, only consult remote (verify remote populated)
@@ -256,7 +258,8 @@ pkf affected --watch           # re-evaluate affected set on every file change
 pkf graph --target build --depth=1   # show only direct deps (one hop)
 pkf graph --format tree        # terminal-readable dependency tree (roots only when no target)
 pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
-pkf lint                       # detect local Task definitions omitted from tasks { ... }
+pkf lint                       # detect dead local tasks and suspicious task definitions
+pkf lint --json                # emit machine-readable findings for CI/editor tooling
 pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
 pkf pkl-cache warm             # pre-populate ~/.pkl/cache (CI prefetch step)
 pkf <plugin> <args>            # exec `pkf-<plugin>` on PATH (git-style fallthrough)

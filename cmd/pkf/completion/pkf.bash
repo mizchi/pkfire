@@ -22,6 +22,18 @@ _pkf() {
     list)
       if [[ "$prev" == "--color" ]]; then
         COMPREPLY=($(compgen -W "auto always never" -- "$cur"))
+      elif [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file -v --verbose --long --json --all --unsorted --source-order --color" -- "$cur"))
+      fi
+      ;;
+    lint)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
+      fi
+      ;;
+    doctor)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
       fi
       ;;
     run|affected|clean|up)

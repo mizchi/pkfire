@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -131,12 +132,12 @@ commands:
                                         run one or more tasks (no arg = the default task); multi-target runs the union
   up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
                                         Ctrl+C releases the whole process tree
-  list [-f FILE] [-v] [--json] [--all] [--unsorted] [--color=auto|always|never]
-                                        list declared public tasks (-v: cmd/deps; --json: machine-readable)
+  list [-f FILE] [-v|--long|--json] [--all] [--unsorted] [--color=auto|always|never]
+                                        list declared public tasks (-v: detail; --long: audit table; --json: machine-readable)
   graph [-f FILE] [--format FMT] [--target TASK] [--all] [--unsorted]
                                         emit DAG (formats: dot, mermaid, tree)
-  doctor [-f FILE]                      diagnose pkfire setup (pkl/cache/remote/taskfile)
-  lint [-f FILE]                        detect Taskfile dead code patterns
+  doctor [-f FILE]                      diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
+  lint [-f FILE] [--json]               detect Taskfile dead code and suspicious task definitions
   format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
   hooks <install|uninstall|list> [-f FILE] [--force]
                                         manage .git/hooks shims that delegate to pkf run
@@ -145,7 +146,7 @@ commands:
   clean [-f FILE] [--dry-run] [task...] remove tasks' declared outputs (no arg = every task with outputs)
   cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
   completion <bash|zsh|fish>            emit a shell-completion script to stdout
-  explain <task>                        dump every input to the task's action key (for cache-miss debugging)
+  explain [--diff OLD_FILE] <task>       dump or compare inputs to the task's action key
   migrate --to=<ver> [-f FILE] [--dry-run]
                                         rewrite Taskfile.pkl's amends URI; verify via pkl eval
   pkl-cache warm [-f FILE] [PATH...]    pre-evaluate Pkl files so ~/.pkl/cache is populated before parallel jobs
@@ -160,7 +161,8 @@ flags:
       --print-hash       print action keys for the target subgraph and exit
       --no-cache         disable cache lookup and store for this run
       --refresh          skip cache lookup but still store results (re-baseline)
-      --json             (list only) machine-readable output
+      --json             (list/lint) machine-readable output
+      --long             (list only) compact audit table
       --all              (list/graph) include internal tasks
       --unsorted         (list/graph) use declaration order instead of alphabetical
       --color MODE       (list only) auto, always, never (default: auto)
@@ -289,6 +291,7 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	file := newFileFlag(fs)
 	verbose := fs.Bool("v", false, "show cmd preview and deps")
 	fs.BoolVar(verbose, "verbose", false, "show cmd preview and deps")
+	long := fs.Bool("long", false, "show a compact audit table")
 	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	all := fs.Bool("all", false, "include internal tasks")
 	unsorted := fs.Bool("unsorted", false, "use Taskfile declaration order")
@@ -300,8 +303,11 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	if len(fs.Args()) > 0 {
 		return fmt.Errorf("list takes no positional args, got %v", fs.Args())
 	}
-	if *asJSON && *verbose {
-		return fmt.Errorf("--json subsumes -v (use one or the other)")
+	if *asJSON && (*verbose || *long) {
+		return fmt.Errorf("--json subsumes -v/--long (use one output mode)")
+	}
+	if *verbose && *long {
+		return fmt.Errorf("-v and --long are separate output modes (use one)")
 	}
 	color, err := listColorEnabled(*colorMode, stdout)
 	if err != nil {
@@ -318,6 +324,9 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 	names := filterVisibleTaskNames(tf, orderedTaskNames(tf, *unsorted), *all)
 	if *asJSON {
 		return printListJSON(stdout, tf, names)
+	}
+	if *long {
+		return printListLong(stdout, tf, names)
 	}
 	if !*verbose {
 		return printList(stdout, tf, names, *all, color)
@@ -353,6 +362,114 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		}
 	}
 	return nil
+}
+
+type listLongRow struct {
+	task    string
+	vis     string
+	cache   string
+	quiet   string
+	workdir string
+	deps    string
+	inputs  string
+	outputs string
+	shell   string
+	flags   string
+	cmd     string
+}
+
+func printListLong(stdout io.Writer, tf *config.Taskfile, names []string) error {
+	rows := make([]listLongRow, 0, len(names)+1)
+	rows = append(rows, listLongRow{
+		task:    "task",
+		vis:     "vis",
+		cache:   "cache",
+		quiet:   "quiet",
+		workdir: "workdir",
+		deps:    "deps",
+		inputs:  "in",
+		outputs: "out",
+		shell:   "shell",
+		flags:   "flags",
+		cmd:     "cmd",
+	})
+	for _, n := range names {
+		t := tf.Tasks[n]
+		cacheState := "on"
+		if !t.Cache {
+			cacheState = "off"
+		}
+		quietState := "-"
+		if t.Quiet {
+			quietState = "yes"
+		}
+		workdir := "."
+		if t.Workdir != nil && *t.Workdir != "" {
+			workdir = *t.Workdir
+		}
+		deps := "-"
+		if len(t.Deps) > 0 {
+			deps = strings.Join(t.Deps, ",")
+		}
+		flags := "-"
+		if len(t.ShellFlags) > 0 {
+			flags = strings.Join(t.ShellFlags, " ")
+		}
+		cmd := "<none>"
+		if strings.TrimSpace(t.Cmd) != "" {
+			cmd = oneLine(t.Cmd)
+		}
+		rows = append(rows, listLongRow{
+			task:    taskSignature(n, t),
+			vis:     taskVisibility(t),
+			cache:   cacheState,
+			quiet:   quietState,
+			workdir: workdir,
+			deps:    deps,
+			inputs:  strconv.Itoa(len(t.Inputs)),
+			outputs: strconv.Itoa(len(t.Outputs)),
+			shell:   t.Shell,
+			flags:   flags,
+			cmd:     cmd,
+		})
+	}
+
+	widths := listLongRow{}
+	for _, row := range rows {
+		widths.task = wider(widths.task, row.task)
+		widths.vis = wider(widths.vis, row.vis)
+		widths.cache = wider(widths.cache, row.cache)
+		widths.quiet = wider(widths.quiet, row.quiet)
+		widths.workdir = wider(widths.workdir, row.workdir)
+		widths.deps = wider(widths.deps, row.deps)
+		widths.inputs = wider(widths.inputs, row.inputs)
+		widths.outputs = wider(widths.outputs, row.outputs)
+		widths.shell = wider(widths.shell, row.shell)
+		widths.flags = wider(widths.flags, row.flags)
+	}
+	for _, row := range rows {
+		fmt.Fprintf(stdout, "%-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %*s  %*s  %-*s  %-*s  %s\n",
+			len(widths.task), row.task,
+			len(widths.vis), row.vis,
+			len(widths.cache), row.cache,
+			len(widths.quiet), row.quiet,
+			len(widths.workdir), row.workdir,
+			len(widths.deps), row.deps,
+			len(widths.inputs), row.inputs,
+			len(widths.outputs), row.outputs,
+			len(widths.shell), row.shell,
+			len(widths.flags), row.flags,
+			row.cmd,
+		)
+	}
+	return nil
+}
+
+func wider(current, next string) string {
+	if len(next) > len(current) {
+		return next
+	}
+	return current
 }
 
 type listRow struct {
@@ -502,9 +619,13 @@ func taskVisibility(t *config.Task) string {
 }
 
 type lintFinding struct {
-	Path    string
-	Line    int
-	Message string
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Message string `json:"message"`
+}
+
+type lintJSON struct {
+	Findings []lintFinding `json:"findings"`
 }
 
 type localTaskDecl struct {
@@ -517,6 +638,7 @@ func cmdLint(args []string, stdout, _ io.Writer) error {
 	fs := flag.NewFlagSet("pkf lint", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -536,6 +658,28 @@ func cmdLint(args []string, stdout, _ io.Writer) error {
 		return err
 	}
 	findings := lintDeadLocalTasks(abs, data, tf)
+	findings = append(findings, lintRenderedTasks(abs, data, tf)...)
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Line != findings[j].Line {
+			return findings[i].Line < findings[j].Line
+		}
+		return findings[i].Message < findings[j].Message
+	})
+	if *asJSON {
+		out := lintJSON{Findings: findings}
+		if out.Findings == nil {
+			out.Findings = []lintFinding{}
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			return err
+		}
+		if len(findings) > 0 {
+			return fmt.Errorf("lint found %d issue%s", len(findings), plural(len(findings)))
+		}
+		return nil
+	}
 	if len(findings) == 0 {
 		fmt.Fprintln(stdout, "ok: no lint findings")
 		return nil
@@ -566,6 +710,59 @@ func lintDeadLocalTasks(path string, data []byte, tf *config.Taskfile) []lintFin
 		}
 	}
 	return findings
+}
+
+func lintRenderedTasks(path string, data []byte, tf *config.Taskfile) []lintFinding {
+	lines := taskNameLineMap(data)
+	names := make([]string, 0, len(tf.Tasks))
+	for name := range tf.Tasks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var findings []lintFinding
+	for _, name := range names {
+		t := tf.Tasks[name]
+		line := lines[name]
+		if line == 0 {
+			line = 1
+		}
+		if t.Cmd == "" && len(t.Deps) == 0 {
+			findings = append(findings, lintFinding{
+				Path:    path,
+				Line:    line,
+				Message: fmt.Sprintf("task %q has neither cmd nor deps; it is a no-op task", name),
+			})
+		}
+		if t.Cache && len(t.Outputs) > 0 && len(t.Inputs) == 0 {
+			findings = append(findings, lintFinding{
+				Path:    path,
+				Line:    line,
+				Message: fmt.Sprintf("task %q declares outputs but no inputs; cache can go stale because only config changes invalidate it", name),
+			})
+		}
+		if t.Service && t.ReadyPort == 0 && t.ReadyCmd == "" {
+			findings = append(findings, lintFinding{
+				Path:    path,
+				Line:    line,
+				Message: fmt.Sprintf("task %q has service=true but no readiness probe; add readyPort or readyCmd so dependents do not race startup", name),
+			})
+		}
+	}
+	return findings
+}
+
+func taskNameLineMap(data []byte) map[string]int {
+	lines := make(map[string]int)
+	for _, decl := range scanLocalTaskDecls(data) {
+		if decl.TaskName == "" {
+			continue
+		}
+		if _, exists := lines[decl.TaskName]; !exists {
+			lines[decl.TaskName] = decl.Line
+		}
+	}
+	return lines
 }
 
 var localTaskDeclRE = regexp.MustCompile(`\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?:[A-Za-z_][A-Za-z0-9_.]*\.)?Task)?\s*=\s*new(?:\s+(?:[A-Za-z_][A-Za-z0-9_.]*\.)?Task)?\s*\{`)
@@ -1844,17 +2041,19 @@ func pklCacheWarm(stdout, stderr io.Writer, args []string) error {
 // can't figure out which component flipped.
 //
 // The output is grouped by component so you can diff two runs'
-// `pkf explain <task>` outputs and see exactly what moved.
+// `pkf explain --diff <old-taskfile> <task>` outputs and see exactly
+// what moved.
 func cmdExplain(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("pkf explain", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
+	diffFile := fs.String("diff", "", "compare against another Taskfile.pkl")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: pkf explain <task>")
+		return fmt.Errorf("usage: pkf explain [-f FILE] [--diff OLD_FILE] <task>")
 	}
 	target := rest[0]
 
@@ -1862,20 +2061,52 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	tf, err := config.Load(context.Background(), abs)
+	current, err := explainSnapshotFor(abs, target)
 	if err != nil {
 		return err
 	}
+
+	if *diffFile != "" {
+		otherAbs, err := filepath.Abs(*diffFile)
+		if err != nil {
+			return err
+		}
+		previous, err := explainSnapshotFor(otherAbs, target)
+		if err != nil {
+			return err
+		}
+		printExplainDiff(stdout, previous, current)
+		return nil
+	}
+
+	printExplainSnapshot(stdout, current)
+	return nil
+}
+
+type explainSnapshot struct {
+	Source     string
+	Target     string
+	Task       *config.Task
+	TaskRoot   string
+	Action     *hash.Action
+	Key        [32]byte
+	Env        map[string]string
+	Inputs     []hash.FileEntry
+	ConfigHash []byte
+}
+
+func explainSnapshotFor(path, target string) (*explainSnapshot, error) {
+	tf, err := config.Load(context.Background(), path)
+	if err != nil {
+		return nil, err
+	}
 	task, ok := tf.Tasks[target]
 	if !ok {
-		return fmt.Errorf("unknown task: %q", target)
+		return nil, fmt.Errorf("unknown task: %q", target)
 	}
-	root := filepath.Dir(abs)
+	root := filepath.Dir(path)
 	taskRoot := orchestrator.TaskRoot(task, root)
 	configHash := hash.HashBytes(tf.Canonical)
-
-	// Re-derive the same things ComputeKey computes, but expose them
-	// at every layer (not just the final BLAKE3 digest).
 	var defEnv map[string]string
 	if tf.Defaults != nil {
 		defEnv = tf.Defaults.Env
@@ -1883,7 +2114,7 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 	env := hash.MergeEnv(defEnv, task.Env)
 	entries, err := hash.HashInputs(taskRoot, task.Inputs)
 	if err != nil {
-		return fmt.Errorf("hash inputs for %q: %w", target, err)
+		return nil, fmt.Errorf("hash inputs for %q: %w", target, err)
 	}
 	action := &hash.Action{
 		Cmd:        task.Cmd,
@@ -1894,15 +2125,28 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 		Inputs:     entries,
 		ConfigHash: configHash,
 	}
-	key := action.Key()
+	return &explainSnapshot{
+		Source:     path,
+		Target:     target,
+		Task:       task,
+		TaskRoot:   taskRoot,
+		Action:     action,
+		Key:        action.Key(),
+		Env:        env,
+		Inputs:     entries,
+		ConfigHash: configHash,
+	}, nil
+}
 
-	fmt.Fprintf(stdout, "task:        %s\n", target)
-	fmt.Fprintf(stdout, "action key:  %s\n", hash.FormatKey(key))
+func printExplainSnapshot(stdout io.Writer, s *explainSnapshot) {
+	task := s.Task
+	fmt.Fprintf(stdout, "task:        %s\n", s.Target)
+	fmt.Fprintf(stdout, "action key:  %s\n", hash.FormatKey(s.Key))
 	fmt.Fprintf(stdout, "cache:       %v\n", task.Cache)
 	if task.Workdir != nil && *task.Workdir != "" {
-		fmt.Fprintf(stdout, "workdir:     %s  (absolute: %s)\n", *task.Workdir, taskRoot)
+		fmt.Fprintf(stdout, "workdir:     %s  (absolute: %s)\n", *task.Workdir, s.TaskRoot)
 	} else {
-		fmt.Fprintf(stdout, "workdir:     %s  (Taskfile dir)\n", taskRoot)
+		fmt.Fprintf(stdout, "workdir:     %s  (Taskfile dir)\n", s.TaskRoot)
 	}
 	fmt.Fprintln(stdout)
 	if task.Cmd == "" {
@@ -1911,20 +2155,20 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "cmd:\n  %s\n", strings.ReplaceAll(task.Cmd, "\n", "\n  "))
 	}
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "shell:       %s\n", action.Shell)
-	fmt.Fprintf(stdout, "shell flags: %s\n", strings.Join(action.ShellFlags, " "))
+	fmt.Fprintf(stdout, "shell:       %s\n", s.Action.Shell)
+	fmt.Fprintf(stdout, "shell flags: %s\n", strings.Join(s.Action.ShellFlags, " "))
 	fmt.Fprintln(stdout)
 
-	fmt.Fprintf(stdout, "env (%d):\n", len(env))
-	envKeys := make([]string, 0, len(env))
-	for k := range env {
+	fmt.Fprintf(stdout, "env (%d):\n", len(s.Env))
+	envKeys := make([]string, 0, len(s.Env))
+	for k := range s.Env {
 		envKeys = append(envKeys, k)
 	}
 	sort.Strings(envKeys)
 	for _, k := range envKeys {
-		fmt.Fprintf(stdout, "  %s=%s\n", k, env[k])
+		fmt.Fprintf(stdout, "  %s=%s\n", k, s.Env[k])
 	}
-	if len(env) == 0 {
+	if len(s.Env) == 0 {
 		fmt.Fprintln(stdout, "  (none)")
 	}
 	fmt.Fprintln(stdout)
@@ -1943,16 +2187,16 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stdout)
 
-	fmt.Fprintf(stdout, "inputs (%d files):\n", len(entries))
-	for _, e := range entries {
+	fmt.Fprintf(stdout, "inputs (%d files):\n", len(s.Inputs))
+	for _, e := range s.Inputs {
 		fmt.Fprintf(stdout, "  %x  %s\n", e.Hash[:6], e.Path)
 	}
-	if len(entries) == 0 {
+	if len(s.Inputs) == 0 {
 		fmt.Fprintln(stdout, "  (none — glob expansion matched zero files)")
 	}
 	fmt.Fprintln(stdout)
 
-	fmt.Fprintf(stdout, "config hash: %x  (sha-256-ish prefix of pkl/Taskfile.pkl canonical form)\n", configHash[:8])
+	fmt.Fprintf(stdout, "config hash: %x  (sha-256-ish prefix of pkl/Taskfile.pkl canonical form)\n", s.ConfigHash[:8])
 
 	if task.AcceptsArgs || len(task.Params) > 0 {
 		fmt.Fprintln(stdout)
@@ -1968,7 +2212,145 @@ func cmdExplain(args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintln(stdout, "  these contribute to the action key only when supplied on the cmd line")
 	}
-	return nil
+}
+
+func printExplainDiff(stdout io.Writer, old, current *explainSnapshot) {
+	fmt.Fprintf(stdout, "task: %s\n", current.Target)
+	fmt.Fprintf(stdout, "old:  %s\n", old.Source)
+	fmt.Fprintf(stdout, "new:  %s\n", current.Source)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "action key:")
+	fmt.Fprintf(stdout, "- %s\n", hash.FormatKey(old.Key))
+	fmt.Fprintf(stdout, "+ %s\n", hash.FormatKey(current.Key))
+
+	changed := false
+	changed = printStringDiff(stdout, "cmd", old.Action.Cmd, current.Action.Cmd) || changed
+	changed = printStringDiff(stdout, "shell", old.Action.Shell, current.Action.Shell) || changed
+	if !slices.Equal(old.Action.ShellFlags, current.Action.ShellFlags) {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "shell flags:")
+		fmt.Fprintf(stdout, "- %s\n", strings.Join(old.Action.ShellFlags, " "))
+		fmt.Fprintf(stdout, "+ %s\n", strings.Join(current.Action.ShellFlags, " "))
+		changed = true
+	}
+	changed = printMapDiff(stdout, "env", old.Env, current.Env) || changed
+	changed = printMapDiff(stdout, "tools", old.Task.Tools, current.Task.Tools) || changed
+	changed = printInputDiff(stdout, old.Inputs, current.Inputs) || changed
+	if !bytes.Equal(old.ConfigHash, current.ConfigHash) {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "config hash:")
+		fmt.Fprintf(stdout, "- %x\n", old.ConfigHash[:8])
+		fmt.Fprintf(stdout, "+ %x\n", current.ConfigHash[:8])
+		changed = true
+	}
+	if !changed {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "no action-key input differences")
+	}
+}
+
+func printStringDiff(stdout io.Writer, label, old, current string) bool {
+	if old == current {
+		return false
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "%s:\n", label)
+	fmt.Fprintf(stdout, "- %s\n", explainOneLine(old))
+	fmt.Fprintf(stdout, "+ %s\n", explainOneLine(current))
+	return true
+}
+
+func printMapDiff(stdout io.Writer, label string, old, current map[string]string) bool {
+	keys := unionStringKeys(old, current)
+	changed := false
+	wroteHeader := false
+	for _, k := range keys {
+		ov, okOld := old[k]
+		nv, okNew := current[k]
+		if okOld && okNew && ov == nv {
+			continue
+		}
+		if !wroteHeader {
+			fmt.Fprintln(stdout)
+			fmt.Fprintf(stdout, "%s:\n", label)
+			wroteHeader = true
+		}
+		switch {
+		case !okOld:
+			fmt.Fprintf(stdout, "+ %s=%s\n", k, nv)
+		case !okNew:
+			fmt.Fprintf(stdout, "- %s=%s\n", k, ov)
+		default:
+			fmt.Fprintf(stdout, "~ %s:\n", k)
+			fmt.Fprintf(stdout, "  - %s\n", ov)
+			fmt.Fprintf(stdout, "  + %s\n", nv)
+		}
+		changed = true
+	}
+	return changed
+}
+
+func printInputDiff(stdout io.Writer, oldEntries, currentEntries []hash.FileEntry) bool {
+	old := inputDigestMap(oldEntries)
+	current := inputDigestMap(currentEntries)
+	keys := unionStringKeys(old, current)
+	changed := false
+	wroteHeader := false
+	for _, k := range keys {
+		ov, okOld := old[k]
+		nv, okNew := current[k]
+		if okOld && okNew && ov == nv {
+			continue
+		}
+		if !wroteHeader {
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "inputs:")
+			wroteHeader = true
+		}
+		switch {
+		case !okOld:
+			fmt.Fprintf(stdout, "+ %s %s\n", nv[:12], k)
+		case !okNew:
+			fmt.Fprintf(stdout, "- %s %s\n", ov[:12], k)
+		default:
+			fmt.Fprintf(stdout, "~ %s:\n", k)
+			fmt.Fprintf(stdout, "  - %s\n", ov[:12])
+			fmt.Fprintf(stdout, "  + %s\n", nv[:12])
+		}
+		changed = true
+	}
+	return changed
+}
+
+func inputDigestMap(entries []hash.FileEntry) map[string]string {
+	out := make(map[string]string, len(entries))
+	for _, e := range entries {
+		out[e.Path] = fmt.Sprintf("%x", e.Hash)
+	}
+	return out
+}
+
+func unionStringKeys(a, b map[string]string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	for k := range a {
+		seen[k] = true
+	}
+	for k := range b {
+		seen[k] = true
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func explainOneLine(s string) string {
+	if s == "" {
+		return "<none>"
+	}
+	return oneLine(s)
 }
 
 // Shell-completion scripts shipped with the binary. Sources live in
@@ -3153,7 +3535,11 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 
 	fmt.Fprintf(stdout, "pkf doctor (pkf %s)\n", version)
 
-	// 1. pkl CLI
+	// 1. pkf on PATH — shell hooks use `pkf` from PATH, which can lag
+	// behind the binary currently running doctor.
+	reportPKFPath(report)
+
+	// 2. pkl CLI
 	if pklPath, err := exec.LookPath("pkl"); err == nil {
 		if ver, err := pklVersion(pklPath); err == nil {
 			report("OK", "pkl", fmt.Sprintf("%s at %s", ver, pklPath))
@@ -3164,7 +3550,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 		report("FAIL", "pkl", "not in PATH — install from https://pkl-lang.org/main/current/pkl-cli/")
 	}
 
-	// 2. cache directory
+	// 3. cache directory
 	cacheDir, err := cache.DefaultDir()
 	if err != nil {
 		report("WARN", "cache", fmt.Sprintf("could not resolve dir: %v", err))
@@ -3181,7 +3567,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 		report("OK", "cache", fmt.Sprintf("%s (%s across %d entries)", cacheDir, humanBytes(size), count))
 	}
 
-	// 3. remote cache (only if configured)
+	// 4. remote cache (only if configured)
 	if remote := os.Getenv("PKFIRE_REMOTE_CACHE"); remote != "" {
 		// HEAD a CAS path with a zero digest — expect 404 / 401 / 200, but
 		// not a connection error. Any HTTP response means the endpoint
@@ -3209,7 +3595,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 		report("OK", "remote", "PKFIRE_REMOTE_CACHE not set (local-only)")
 	}
 
-	// 4. Taskfile (best-effort — doctor should be runnable outside any project)
+	// 5. Taskfile (best-effort — doctor should be runnable outside any project)
 	abs, ferr := resolveFile(fs, *file)
 	if ferr == nil {
 		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
@@ -3235,6 +3621,72 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 		return errors.New("doctor reported failures")
 	}
 	return nil
+}
+
+func reportPKFPath(report func(level, label, msg string)) {
+	pathPkf, err := exec.LookPath("pkf")
+	if err != nil {
+		report("WARN", "pkf-path", "pkf is not in PATH; git hooks and shell aliases may fail")
+		return
+	}
+	pathVer, verErr := pkfVersion(pathPkf)
+	exe, exeErr := os.Executable()
+	current := exe
+	if exeErr != nil {
+		current = "(current executable unknown: " + exeErr.Error() + ")"
+	}
+	if exeErr == nil && sameExecutable(pathPkf, exe) {
+		if verErr != nil {
+			report("WARN", "pkf-path", fmt.Sprintf("%s is the current executable but `pkf version` failed: %v", pathPkf, verErr))
+			return
+		}
+		report("OK", "pkf-path", fmt.Sprintf("%s at %s (current executable)", pathVer, pathPkf))
+		return
+	}
+	if verErr != nil {
+		report("WARN", "pkf-path", fmt.Sprintf("PATH resolves to %s, but `pkf version` failed: %v; doctor is running %s", pathPkf, verErr, current))
+		return
+	}
+	if version != "dev" && pathVer == version {
+		report("OK", "pkf-path", fmt.Sprintf("PATH resolves to %s (%s); doctor is running %s", pathPkf, pathVer, current))
+		return
+	}
+	report("WARN", "pkf-path", fmt.Sprintf("PATH resolves to %s (%s), but doctor is running pkf %s at %s; hooks may use the PATH binary", pathPkf, pathVer, version, current))
+}
+
+func pkfVersion(path string) (string, error) {
+	out, err := exec.Command(path, "version").Output()
+	if err != nil {
+		return "", err
+	}
+	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	if line == "" {
+		return "", nil
+	}
+	return line, nil
+}
+
+func sameExecutable(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA == nil && errB == nil && absA == absB {
+		return true
+	}
+	if errA != nil {
+		absA = a
+	}
+	if errB != nil {
+		absB = b
+	}
+	infoA, errA := os.Stat(absA)
+	infoB, errB := os.Stat(absB)
+	if errA == nil && errB == nil {
+		return os.SameFile(infoA, infoB)
+	}
+	return false
 }
 
 // pklVersion runs `pkl --version` and returns the trimmed first token of

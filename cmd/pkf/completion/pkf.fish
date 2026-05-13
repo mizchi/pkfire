@@ -11,7 +11,7 @@ complete -c pkf -f -n '__fish_use_subcommand' -a list      -d 'list declared tas
 complete -c pkf -f -n '__fish_use_subcommand' -a run       -d 'run one or more tasks'
 complete -c pkf -f -n '__fish_use_subcommand' -a up        -d 'supervise long-running services'
 complete -c pkf -f -n '__fish_use_subcommand' -a doctor    -d 'diagnose pkfire setup'
-complete -c pkf -f -n '__fish_use_subcommand' -a lint      -d 'detect Taskfile dead code patterns'
+complete -c pkf -f -n '__fish_use_subcommand' -a lint      -d 'detect Taskfile issues'
 complete -c pkf -f -n '__fish_use_subcommand' -a format    -d 'pkl format -w wrapper'
 complete -c pkf -f -n '__fish_use_subcommand' -a hooks     -d 'manage .git/hooks shims'
 complete -c pkf -f -n '__fish_use_subcommand' -a affected  -d 'run tasks whose inputs changed since <ref>'
@@ -30,6 +30,13 @@ complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall 
 complete -c pkf -f -n '__fish_seen_subcommand_from cache' -a 'stats prune rm clear'
 complete -c pkf -f -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 complete -c pkf -f -n '__fish_seen_subcommand_from list' -l color -a 'auto always never'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -s v -l verbose -d 'show cmd preview and deps'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -l long -d 'show compact audit table'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -l json -d 'emit machine-readable output'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -l all -d 'include internal tasks'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -l unsorted -d 'use declaration order'
+complete -c pkf -f -n '__fish_seen_subcommand_from list' -l source-order -d 'use declaration order'
+complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l json -d 'emit machine-readable output'
 
 # `pkf graph --format <TAB>`.
 complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree'
