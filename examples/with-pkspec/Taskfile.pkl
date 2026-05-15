@@ -92,7 +92,7 @@ tasks { build; release; migrate }
 //       description = "running `pkf run release --version=X.Y.Z` produces a vX.Y.Z tag on origin"
 //       reviewStatus = "approved"
 //       implementations {
-//         new { kind = "task"; at = "Taskfile.pkl#release" }
+//         new TaskImpl { at = "Taskfile.pkl#release" }
 //       }
 //     }
 //     new {
@@ -101,7 +101,7 @@ tasks { build; release; migrate }
 //       description = "running `pkf run migrate-db` invokes prisma migrate deploy"
 //       reviewStatus = "approved"
 //       implementations {
-//         new { kind = "task"; at = "Taskfile.pkl#migrate-db" }
+//         new TaskImpl { at = "Taskfile.pkl#migrate-db" }
 //       }
 //     }
 //   }
