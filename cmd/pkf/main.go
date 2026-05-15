@@ -91,6 +91,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdList(args[1:], stdout, stderr)
 	case "describe":
 		return cmdDescribe(args[1:], stdout, stderr)
+	case "info":
+		return cmdInfo(args[1:], stdout, stderr)
 	case "graph":
 		return cmdGraph(args[1:], stdout, stderr)
 	case "run":
@@ -154,6 +156,8 @@ commands:
                                         list declared public tasks (-v: detail; --long: audit table; --json: machine-readable)
   describe [-f FILE] [--json] <task>    show a single task's desc / params / inputs / outputs / cache / deps
                                         (also reachable as 'pkf run <task> --help')
+  info [-f FILE] [--json] [--all]       structured snapshot: schema version + defaults + tasks + workflowTests
+                                        (intended as the single JSON source for downstream doc / report generators)
   graph [-f FILE] [--format FMT|--json] [--target TASK] [--all] [--unsorted]
                                         emit DAG (formats: dot, mermaid, tree, json)
   doctor [-f FILE] [--json] [--fix]     diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
@@ -570,6 +574,158 @@ func printDescribeJSON(stdout io.Writer, name string, t *config.Task) error {
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(o)
+}
+
+// cmdInfo emits a single structured snapshot of the Taskfile — the
+// path it loaded from, the pkfire schema version extracted from the
+// `amends` URI, project-level defaults, every task, and every
+// workflowTest. The intent is to give downstream doc / report
+// generators (jq pipelines, Pkl templates, nushell, …) one stable
+// JSON to read; pkfire deliberately does NOT ship a Markdown
+// generator so the format layer can iterate without forcing pkfire
+// releases.
+func cmdInfo(args []string, stdout, _ io.Writer) error {
+	if helpRequested(args) {
+		infoUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("pkf info", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	includeInternal := fs.Bool("all", false, "include internal tasks (default: public only)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("info takes no positional args, got %v", fs.Args())
+	}
+
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+	snap := buildInfoSnapshot(tf, abs, *includeInternal)
+
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(snap)
+	}
+	printInfoText(stdout, snap)
+	return nil
+}
+
+// infoSnapshot is the JSON shape returned by `pkf info --json`.
+// Fields are stable across pkfire patch releases; only additive
+// changes are allowed without a major bump.
+type infoSnapshot struct {
+	Taskfile      string                 `json:"taskfile"`
+	SchemaVersion string                 `json:"schemaVersion,omitempty"`
+	AmendsURI     string                 `json:"amends,omitempty"`
+	Defaults      *infoDefaultsJSON      `json:"defaults,omitempty"`
+	Tasks         []listTaskJSON         `json:"tasks"`
+	WorkflowTests []infoWorkflowTestJSON `json:"workflowTests,omitempty"`
+}
+
+type infoDefaultsJSON struct {
+	Shell      string            `json:"shell"`
+	ShellFlags []string          `json:"shellFlags"`
+	Env        map[string]string `json:"env,omitempty"`
+}
+
+type infoWorkflowTestJSON struct {
+	Name    string   `json:"name"`
+	Changed []string `json:"changed,omitempty"`
+	Tasks   []string `json:"tasks,omitempty"`
+	Direct  []string `json:"direct,omitempty"`
+}
+
+func buildInfoSnapshot(tf *config.Taskfile, abs string, includeInternal bool) *infoSnapshot {
+	amends := scanAmends(abs)
+	snap := &infoSnapshot{
+		Taskfile:  abs,
+		AmendsURI: amends,
+		Tasks:     []listTaskJSON{},
+	}
+	if v := extractSchemaVersion(amends); v != "" {
+		snap.SchemaVersion = v
+	}
+	if tf.Defaults != nil {
+		snap.Defaults = &infoDefaultsJSON{
+			Shell:      tf.Defaults.Shell,
+			ShellFlags: append([]string(nil), tf.Defaults.ShellFlags...),
+			Env:        tf.Defaults.Env,
+		}
+	}
+	names := filterVisibleTaskNames(tf, orderedTaskNames(tf, false), includeInternal)
+	for _, n := range names {
+		snap.Tasks = append(snap.Tasks, listTaskJSONFor(n, tf.Tasks[n]))
+	}
+	for _, wt := range tf.WorkflowTests {
+		if wt == nil {
+			continue
+		}
+		snap.WorkflowTests = append(snap.WorkflowTests, infoWorkflowTestJSON{
+			Name:    wt.Name,
+			Changed: append([]string(nil), wt.Changed...),
+			Tasks:   append([]string(nil), wt.Tasks...),
+			Direct:  append([]string(nil), wt.Direct...),
+		})
+	}
+	return snap
+}
+
+// schemaVersionRE matches `pkfire@<semver>` in an amends URI, the
+// only place pkfire's schema version appears verbatim.
+var schemaVersionRE = regexp.MustCompile(`pkfire@(\d+\.\d+\.\d+[A-Za-z0-9.\-]*)`)
+
+func extractSchemaVersion(amends string) string {
+	m := schemaVersionRE.FindStringSubmatch(amends)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+func printInfoText(w io.Writer, s *infoSnapshot) {
+	fmt.Fprintf(w, "taskfile:       %s\n", s.Taskfile)
+	if s.SchemaVersion != "" {
+		fmt.Fprintf(w, "schemaVersion:  pkfire@%s\n", s.SchemaVersion)
+	} else if s.AmendsURI != "" {
+		fmt.Fprintf(w, "amends:         %s\n", s.AmendsURI)
+	}
+	if s.Defaults != nil {
+		fmt.Fprintf(w, "defaults:       shell=%s flags=%s\n", s.Defaults.Shell, strings.Join(s.Defaults.ShellFlags, " "))
+	}
+	fmt.Fprintf(w, "tasks:          %d\n", len(s.Tasks))
+	withSpec := 0
+	withParams := 0
+	cached := 0
+	services := 0
+	for _, t := range s.Tasks {
+		if t.SpecRef != "" {
+			withSpec++
+		}
+		if len(t.Params) > 0 {
+			withParams++
+		}
+		if t.Cache {
+			cached++
+		}
+		if t.Service {
+			services++
+		}
+	}
+	fmt.Fprintf(w, "  cached:       %d\n", cached)
+	fmt.Fprintf(w, "  with params:  %d\n", withParams)
+	fmt.Fprintf(w, "  with specRef: %d\n", withSpec)
+	fmt.Fprintf(w, "  services:     %d\n", services)
+	fmt.Fprintf(w, "workflowTests:  %d\n", len(s.WorkflowTests))
 }
 
 type listLongRow struct {
@@ -3517,6 +3673,27 @@ flags:
       --json       machine-readable output
 
 Also reachable as 'pkf run <task> --help'.
+`)
+}
+
+func infoUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf info — structured snapshot of the Taskfile
+
+usage:
+  pkf info [-f FILE] [--json] [--all]
+
+flags:
+  -f, --file FILE  Taskfile.pkl path (default: ./Taskfile.pkl)
+      --json       machine-readable output (taskfile path, schema version,
+                   defaults, tasks, workflowTests in one document)
+      --all        include internal tasks (default: public only)
+
+Intent:
+  pkfire stays the source of structured data; doc / report generators
+  consume the --json form and pick their own format (jq pipelines,
+  Pkl templates, nushell, ...). pkfire does NOT ship a Markdown
+  generator — the rendering layer can iterate on its own schedule
+  without forcing pkfire releases.
 `)
 }
 
