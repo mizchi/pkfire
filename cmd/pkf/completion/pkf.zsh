@@ -9,6 +9,7 @@ _pkf() {
     'init:write a starter Taskfile.pkl'
     'list:list declared tasks'
     'describe:show a single task'\''s desc / params / inputs / outputs / cache / deps'
+    'info:structured snapshot (schema version + defaults + tasks + workflowTests)'
     'run:run one or more tasks'
     'up:supervise long-running services'
     'doctor:diagnose pkfire setup'
@@ -135,6 +136,15 @@ _pkf() {
         local -a tasks
         tasks=(${(f)"$(pkf list --all 2>/dev/null | awk '{print $1}')"})
         _describe 'task' tasks
+      fi
+      ;;
+    info)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'info option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--json[emit machine-readable output]' \
+          '--all[include internal tasks]'
       fi
       ;;
     hooks)

@@ -1474,6 +1474,8 @@ func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
 				"warm",
 				"describe)",
 				"-f --file --json",
+				"info)",
+				"-f --file --json --all",
 			},
 		},
 		{
@@ -1491,6 +1493,8 @@ func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
 				"_values 'pkl-cache subcommand' warm",
 				"describe:show a single task",
 				"describe)",
+				"info:structured snapshot",
+				"info)",
 			},
 		},
 		{
@@ -1508,6 +1512,8 @@ func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
 				"-a warm -d 'pre-evaluate Pkl files'",
 				"-a describe  -d 'show a single task surface'",
 				"__fish_seen_subcommand_from describe",
+				"-a info      -d 'structured snapshot of the Taskfile'",
+				"__fish_seen_subcommand_from info",
 			},
 		},
 	}
@@ -1829,6 +1835,131 @@ func TestDescribeOmitsSpecRefWhenUnset(t *testing.T) {
 	}
 }
 
+func TestInfoJSONEmitsFullSnapshot(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "go build"
+  inputs { "**/*.go" }
+  outputs { "bin/app" }
+  specRef = "build-pipeline"
+}
+local test = new Task {
+  name = "test"
+  cmd = "go test"
+  inputs { "**/*.go" }
+  deps { build }
+}
+workflowTests {
+  new {
+    name = "go source changes run build + test"
+    changed { "main.go" }
+    tasks { "build"; "test" }
+    direct { "build" }
+  }
+}
+tasks { build; test }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdInfo([]string{"-f", taskfile, "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdInfo: %v", err)
+	}
+	var got struct {
+		Taskfile      string `json:"taskfile"`
+		SchemaVersion string `json:"schemaVersion,omitempty"`
+		Amends        string `json:"amends,omitempty"`
+		Defaults      struct {
+			Shell      string   `json:"shell"`
+			ShellFlags []string `json:"shellFlags"`
+		} `json:"defaults"`
+		Tasks []struct {
+			Name    string `json:"name"`
+			SpecRef string `json:"specRef,omitempty"`
+		} `json:"tasks"`
+		WorkflowTests []struct {
+			Name    string   `json:"name"`
+			Changed []string `json:"changed"`
+			Tasks   []string `json:"tasks"`
+		} `json:"workflowTests"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v\n%s", err, stdout.String())
+	}
+	if got.Taskfile == "" || !strings.HasSuffix(got.Taskfile, "Taskfile.pkl") {
+		t.Errorf("taskfile path unexpected: %q", got.Taskfile)
+	}
+	if got.Defaults.Shell != "bash" {
+		t.Errorf("defaults.shell = %q, want bash", got.Defaults.Shell)
+	}
+	if len(got.Tasks) != 2 {
+		t.Errorf("expected 2 tasks, got %d", len(got.Tasks))
+	}
+	var found bool
+	for _, t := range got.Tasks {
+		if t.Name == "build" && t.SpecRef == "build-pipeline" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing build task with specRef build-pipeline: %#v", got.Tasks)
+	}
+	if len(got.WorkflowTests) != 1 || got.WorkflowTests[0].Name != "go source changes run build + test" {
+		t.Errorf("workflowTests not surfaced: %#v", got.WorkflowTests)
+	}
+}
+
+func TestInfoExtractsSchemaVersionFromAmends(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdInfo([]string{"-f", basicTaskfile(t), "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdInfo: %v", err)
+	}
+	var got struct {
+		SchemaVersion string `json:"schemaVersion"`
+		Amends        string `json:"amends"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(got.Amends, "pkfire@") {
+		t.Errorf("amends URI missing pkfire@: %q", got.Amends)
+	}
+	if got.SchemaVersion == "" {
+		t.Errorf("schemaVersion should be extracted from %q, got empty", got.Amends)
+	}
+}
+
+func TestInfoPlainTextShowsSummary(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdInfo([]string{"-f", basicTaskfile(t)}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdInfo: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"taskfile:", "schemaVersion:", "tasks:", "workflowTests:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("info summary missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestExtractSchemaVersion(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl", "0.10.0"},
+		{"package://x/y/pkfire@1.2.3-beta.1#/x.pkl", "1.2.3-beta.1"},
+		{"../../pkl/Taskfile.pkl", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := extractSchemaVersion(c.in); got != c.want {
+			t.Errorf("extractSchemaVersion(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestDescribeJSONEmitsStructuredOutput(t *testing.T) {
 	requirePkl(t)
 	taskfile := taskfileWithLocalSchema(t, `
@@ -1983,6 +2114,7 @@ func TestAllSubcommandsRespondToHelpFlag(t *testing.T) {
 		{"init", cmdInit, []string{"pkf init", "--force"}},
 		{"list", cmdList, []string{"pkf list", "--long", "--color"}},
 		{"describe", cmdDescribe, []string{"pkf describe", "--json"}},
+		{"info", cmdInfo, []string{"pkf info", "--json", "structured snapshot"}},
 		{"run", cmdRun, []string{"pkf run", "--print-hash", "--explain-cache"}},
 		{"up", cmdUp, []string{"pkf up", "--watch"}},
 		{"doctor", cmdDoctor, []string{"pkf doctor", "--fix", "PKFIRE_CACHE_WARN_SIZE_MB"}},
