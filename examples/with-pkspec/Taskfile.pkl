@@ -1,0 +1,113 @@
+/// pkfire ↔ pkspec link example.
+///
+/// Demonstrates the two seams between pkfire and
+/// [pkspec](https://github.com/mizchi/pkspec):
+///
+///   1. `Task.specRef` — a pkfire Task names the spec Scenario it
+///      implements. Surfaced by `pkf describe <task>` so a developer
+///      reading the task can jump to the spec.
+///
+///   2. `pkspec:spec=<id>` source markers in `cmd`-bodied comments,
+///      so `pkspec lint --scan` picks up "this code references that
+///      scenario" without a separate annotation file.
+///
+/// Run:
+///
+///   pkf describe release          # see the spec: row
+///   pkf list --long --all         # specRef does not appear here but is in --json
+///   pkf list --json | jq '.tasks[] | select(.specRef) | {name, specRef}'
+///   pkf affected --since=HEAD~1 --with-specs    # touches both attribution sources
+///
+/// With pkspec installed (`go install github.com/mizchi/pkspec/cmd/...@latest`),
+/// the cross-check goes the other way too: a Spec.pkl with
+/// `Implementation { kind = "task"; at = "Taskfile.pkl#release" }`
+/// makes `pkspec check --strict` verify the `release` task exists
+/// here (it shells out to `pkf list --json`).
+amends "../../pkl/Taskfile.pkl"
+
+local build: Task = new {
+  name = "build"
+  description = "Compile the release binary"
+  cmd =
+    """
+    # pkspec:spec=release-pipeline
+    go build -trimpath -o bin/app ./cmd/app
+    """
+  inputs { "cmd/**/*.go"; "internal/**/*.go"; "go.mod"; "go.sum" }
+  outputs { "bin/app" }
+}
+
+local release: Task = new {
+  name = "release"
+  description = "Tag and publish a release"
+  cmd =
+    """
+    set -euo pipefail
+    test -n "$VERSION" || { echo "VERSION required" >&2; exit 2; }
+    git tag -a "v$VERSION" -m "release v$VERSION"
+    git push origin "v$VERSION"
+    """
+  cache = false
+  deps { build }
+  params {
+    new { name = "version"; type = "string"; description = "semver to tag" }
+  }
+  // Spec-side declaration. The matching pkspec Scenario id is
+  // "release-pipeline"; pkspec check --strict will not complain
+  // because the Scenario can either name this task back via
+  // Implementation { kind = "task"; at = "Taskfile.pkl#release" }
+  // or be satisfied by an existing Test.pkl whose specRef points
+  // here.
+  specRef = "release-pipeline"
+}
+
+local migrate: Task = new {
+  name = "migrate-db"
+  description = "Run pending database migrations"
+  cmd =
+    """
+    # pkspec:spec=migration-runs
+    npx prisma migrate deploy
+    """
+  cache = false
+  inputs { "prisma/migrations/**" }
+  specRef = "migration-runs"
+}
+
+tasks { build; release; migrate }
+
+// ----------------------------------------------------------------
+// Matching pkspec Spec.pkl (sketch)
+// ----------------------------------------------------------------
+//
+// Drop this into specs/Spec.pkl in the same repo, alongside the
+// Taskfile.pkl above:
+//
+//   amends "package://pkg.pkl-lang.org/github.com/mizchi/pkspec/pkspec@<ver>#/Spec.pkl"
+//   feature = "release pipeline"
+//   scenarios {
+//     new {
+//       id = "release-pipeline"
+//       name = "release tag is pushed by the runner"
+//       description = "running `pkf run release --version=X.Y.Z` produces a vX.Y.Z tag on origin"
+//       reviewStatus = "approved"
+//       implementations {
+//         new { kind = "task"; at = "Taskfile.pkl#release" }
+//       }
+//     }
+//     new {
+//       id = "migration-runs"
+//       name = "schema migrations are applied at release"
+//       description = "running `pkf run migrate-db` invokes prisma migrate deploy"
+//       reviewStatus = "approved"
+//       implementations {
+//         new { kind = "task"; at = "Taskfile.pkl#migrate-db" }
+//       }
+//     }
+//   }
+//
+// `pkspec check --strict SPEC.pkl` will then:
+//   - confirm Taskfile.pkl exists,
+//   - shell out to `pkf list --json -f Taskfile.pkl` (when `pkf` is
+//     on PATH) and check that both `release` and `migrate-db` are
+//     declared task names.

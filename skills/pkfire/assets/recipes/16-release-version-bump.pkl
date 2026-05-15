@@ -1,0 +1,170 @@
+/// Recipe 16: bump a release version string across a pinned file
+/// list, optionally committing the result.
+///
+/// Why this exists
+/// ---------------
+/// A typical release tag (`pkf run tag --version=X.Y.Z`) has a
+/// boring prelude: the same semver string lives in five or six
+/// files — `flake.nix`, `Taskfile.pkl`, `action.yml`, the README's
+/// install example, the quick-start docs — and every one of them
+/// has to be edited before the tag is meaningful. Across a busy
+/// release cycle that prelude gets repeated dozens of times, and
+/// it's the easiest step in the whole flow to get wrong (forget one
+/// file → tagged release ships with stale install instructions).
+///
+/// This recipe collapses the prelude into:
+///
+///   pkf run bump-version --from=0.1.9 --to=0.2.0
+///   pkf run bump-version --from=0.1.9 --to=0.2.0 --commit=true
+///
+/// The `--commit=true` form stages the listed files and writes a
+/// conventional commit so the bump is one keystroke away from the
+/// `pkf run tag` invocation that follows.
+///
+/// Customise `files` and `message` below — everything else is
+/// generic.
+///
+/// Why explicit `--from` (and not auto-derived)
+/// --------------------------------------------
+/// Auto-detection would have to pick one file as the source of
+/// truth (e.g. `flake.nix`'s `version = ...`), which then quietly
+/// breaks when that file is renamed or its surrounding syntax
+/// shifts. Explicit `--from` keeps the rewrite reviewable: the user
+/// sees both old and new strings on the command line, and a typo in
+/// `--from` is a no-op rather than a silent mass-edit of the wrong
+/// substring. The tradeoff is one extra arg per release, which is
+/// fine — the version-bump cadence is once per tag, not once per
+/// commit.
+///
+/// Safety
+/// ------
+/// `sed -i` runs on a fixed file list (declared below). `--from` is
+/// matched literally, not as a regex, so `0.1.9` will not also
+/// rewrite `10.1.9` — but it WILL rewrite `0.1.90` if such a string
+/// happens to exist elsewhere in the listed files. Audit the diff
+/// before committing.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+/// Files that pin the release version. Edit this list for your repo.
+/// Keep paths repo-root-relative; the task runs from the Taskfile dir.
+local files: Listing<String> = new {
+  "flake.nix"
+  "Taskfile.pkl"
+  "action.yml"
+  "README.md"
+  "docs/quick-start.md"
+}
+
+/// Commit message template used when `--commit=true`. `${VERSION}` is
+/// substituted with the `--to` value at run time.
+local commitMessage: String = "release: bump version to ${VERSION}"
+
+/// `pkf run bump-version --from=0.1.9 --to=0.2.0 [--commit=true]`
+///
+/// In-place rewrites every occurrence of `$FROM` to `$TO` across the
+/// `files` list using `sed`. With `--commit=true` it `git add`s the
+/// same list and writes a release commit. Without it, the diff is
+/// left in the working tree for the user to inspect.
+local bumpVersion: Task = new {
+  name = "bump-version"
+  description = "Rewrite the release version across a pinned file list"
+  cache = false
+  // Raw string (#"""..."""#) so the sed quoting and `$@` survive
+  // Pkl's escape rules.
+  cmd =
+    #"""
+    set -euo pipefail
+    if [ -z "${FROM:-}" ] || [ -z "${TO:-}" ]; then
+      echo "bump-version: --from and --to are required" >&2
+      exit 2
+    fi
+    if [ "$FROM" = "$TO" ]; then
+      echo "bump-version: --from and --to are identical ($FROM); nothing to do" >&2
+      exit 0
+    fi
+    files="$FILES"
+    # Detect macOS vs GNU sed (the `-i` flag differs).
+    if sed --version >/dev/null 2>&1; then
+      sed_inplace=(sed -i)
+    else
+      sed_inplace=(sed -i "")
+    fi
+    # Build the literal-match regex by escaping every metacharacter
+    # so `0.1.9` does not also match `0X1Y9`. Sticking to a fixed set
+    # of POSIX BRE specials is portable across BSD and GNU sed.
+    esc_from=$(printf '%s' "$FROM" | sed -e 's/[][\\/.*^$]/\\&/g')
+    esc_to=$(printf '%s' "$TO" | sed -e 's/[\\/&]/\\&/g')
+    touched=()
+    for f in $files; do
+      if [ ! -f "$f" ]; then
+        echo "bump-version: skip missing $f" >&2
+        continue
+      fi
+      if grep -q -F -- "$FROM" "$f"; then
+        "${sed_inplace[@]}" "s/${esc_from}/${esc_to}/g" "$f"
+        touched+=("$f")
+        echo "bumped $f"
+      else
+        echo "bump-version: $f does not mention $FROM (skipped)" >&2
+      fi
+    done
+    if [ "${#touched[@]}" -eq 0 ]; then
+      echo "bump-version: no files contained $FROM; aborting before commit" >&2
+      exit 1
+    fi
+    if [ "$COMMIT" = "true" ]; then
+      git add -- "${touched[@]}"
+      git commit -m "$(printf '%s' "$MESSAGE" | sed -e "s/\${VERSION}/${TO}/g")"
+    fi
+    """#
+  env {
+    ["FILES"] = files.join(" ")
+    ["MESSAGE"] = commitMessage
+  }
+  params {
+    new {
+      name = "from"
+      type = "string"
+      description = "Previous version string to replace (literal match, no regex)"
+    }
+    new {
+      name = "to"
+      type = "string"
+      description = "New version string"
+    }
+    new {
+      name = "commit"
+      type = "bool"
+      default = "false"
+      description = "git add + commit the bumped files (off by default — leaves diff for review)"
+    }
+  }
+}
+
+tasks { bumpVersion }
+
+// ---------------------------------------------------------------
+// Chaining bump + tag (the lower-priority follow-up from #13)
+// ---------------------------------------------------------------
+//
+// Once the bump task is comfortable, wrap it together with your
+// existing `tag` task so the whole release is one command:
+//
+//   local release: Task = new {
+//     name = "release"
+//     description = "Bump + commit + tag in one shot"
+//     cache = false
+//     // depends on bump-version succeeding before tag fires
+//     deps { bumpVersion; tag }
+//     cmd = "echo release \"$TO\" done"
+//     params {
+//       new { name = "from"; type = "string" }
+//       new { name = "to";   type = "string" }
+//     }
+//   }
+//
+// Caveat: deps run before the parent's `cmd`, so the `tag` task
+// must not assume the bump commit exists at the moment its own
+// `cmd` is evaluated for caching — keep `cache = false` on both,
+// or factor the tag-creation step into a child task that reads the
+// freshly-committed version.

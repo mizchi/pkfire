@@ -1,0 +1,164 @@
+/// Recipe 19: bidirectional pkfire ↔ pkspec link.
+///
+/// Recipe 17 / 18 wrap pkspec invocations as cached pkfire tasks.
+/// This recipe goes further: it puts the *link* itself into the
+/// schema so a pkspec Scenario and a pkfire Task name each other,
+/// and CI can verify both directions stay in sync.
+///
+/// The shape
+/// ---------
+///
+/// 1. **Spec side** (`Spec.pkl`, owned by pkspec):
+///
+///    ```pkl
+///    scenarios {
+///      new {
+///        id = "release-pipeline"
+///        name = "release tag is pushed by the runner"
+///        reviewStatus = "approved"
+///        implementations {
+///          new { kind = "task"; at = "Taskfile.pkl#release" }
+///        }
+///      }
+///    }
+///    ```
+///
+///    `pkspec check --strict` then:
+///      - confirms `Taskfile.pkl` exists on disk;
+///      - when `pkf` is on PATH, shells out to
+///        `pkf list --json -f Taskfile.pkl` and verifies the task
+///        named after `#` is declared.
+///
+/// 2. **Task side** (this file): `Task.specRef = "release-pipeline"`
+///    surfaces the back-link via `pkf describe release` and
+///    `pkf list --json`.
+///
+/// Why both directions
+/// -------------------
+/// Either direction alone is useful. Spec-side
+/// (`kind = "task"`) is enough for `pkspec check --strict` to fail
+/// when the named task disappears. Task-side (`specRef`) is enough
+/// for `pkf describe` and `pkf affected --with-specs` to surface
+/// the spec touchpoint to a developer reading the runner config.
+///
+/// Both at once gives the round-trip property: rename the scenario
+/// id without updating `Task.specRef`, and `pkspec lint --scan`
+/// flags the orphaned task-side reference. Rename the task without
+/// updating `Implementation.at`, and `pkspec check --strict` fails.
+///
+/// `pkf affected --with-specs`
+/// ---------------------------
+/// With this link in place, a PR-time question — "which Scenarios
+/// does this change touch?" — has a fast answer:
+///
+///   pkf affected --since=origin/main --with-specs
+///
+/// Output combines `Task.specRef` of affected tasks AND every
+/// `pkspec:spec=<id>` marker in the changed file set. Pipe into
+/// `pkspec lint --scan` with `--specs-only` for just the ids.
+///
+/// Requires
+/// --------
+/// The pkfire release that ships `Task.specRef` (any release after
+/// schema v0.10.0). Older releases reject the field at evaluation
+/// time; until you upgrade, drop `specRef = ...` lines and use only
+/// the `// pkspec:spec=<id>` comment markers inside `cmd` (see
+/// `migrate-db` below) — those work on every pkfire version.
+///
+/// Copy-paste users
+/// ----------------
+/// Replace the amends below with the published-package URI for the
+/// matching pkfire release, e.g.
+///
+///   amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@<ver>#/Taskfile.pkl"
+///
+/// The relative-path form below is what the in-tree skill uses so
+/// the recipe stays evaluatable from this checkout regardless of
+/// which version is on pkg.pkl-lang.org.
+amends "../../../../pkl/Taskfile.pkl"
+
+/// The release pipeline task that implements the
+/// `release-pipeline` pkspec Scenario.
+local release: Task = new {
+  name = "release"
+  description = "Tag and publish a release"
+  cmd =
+    """
+    set -euo pipefail
+    test -n "$VERSION" || { echo "VERSION required" >&2; exit 2; }
+    git tag -a "v$VERSION" -m "release v$VERSION"
+    git push origin "v$VERSION"
+    """
+  cache = false
+  params {
+    new { name = "version"; type = "string"; description = "semver to tag" }
+  }
+  specRef = "release-pipeline"
+}
+
+/// A migration task linked to the `migration-runs` Scenario.
+local migrateDb: Task = new {
+  name = "migrate-db"
+  description = "Run pending database migrations"
+  cmd =
+    """
+    # pkspec:spec=migration-runs
+    npx prisma migrate deploy
+    """
+  cache = false
+  inputs { "prisma/migrations/**" }
+  specRef = "migration-runs"
+}
+
+/// A pkspec verification umbrella that pkfire `release-check`
+/// task can deps-on. Adds both directions:
+///   - `kind = "task"` resolution (handled by `spec-check`)
+///   - `Task.specRef` discovery (handled implicitly by markers in
+///     this file being picked up by `pkspec lint --scan`)
+local specCheck: Task = new {
+  name = "spec-check"
+  description = "pkspec check --strict — verifies kind=task and source markers"
+  cmd = "pkspec check --strict $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = "SPEC.pkl specs/**/*.pkl" }
+  inputs {
+    "SPEC.pkl"
+    "specs/**/*.pkl"
+    "Taskfile.pkl"
+  }
+}
+
+tasks { release; migrateDb; specCheck }
+
+// ---------------------------------------------------------------
+// Companion Spec.pkl
+// ---------------------------------------------------------------
+//
+// Drop next to this Taskfile (or under specs/) and run
+// `pkspec check --strict` to exercise the cross-check.
+//
+//   amends "<your pkspec amends>"
+//   feature = "release pipeline"
+//   scenarios {
+//     new {
+//       id = "release-pipeline"
+//       name = "release tag is pushed by the runner"
+//       reviewStatus = "approved"
+//       implementations {
+//         new { kind = "task"; at = "Taskfile.pkl#release" }
+//       }
+//     }
+//     new {
+//       id = "migration-runs"
+//       name = "schema migrations are applied at release"
+//       reviewStatus = "approved"
+//       implementations {
+//         new { kind = "task"; at = "Taskfile.pkl#migrate-db" }
+//       }
+//     }
+//   }
+//
+// Pre-push gate (combine with recipe 18):
+//   - secret-leak: secretlint (recipe 14)
+//   - spec gate:   pkspec check --strict (recipe 18 / specCheck above)
+//   - both run only when their declared inputs actually changed,
+//     because pkfire caches the result of each gate independently.

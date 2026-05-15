@@ -202,6 +202,22 @@ class Task {
   /// to `cmd` as env vars (uppercased name) and folded into the action
   /// key when `cache = true`.
   params: Listing<Param> = new {}
+
+  /// Optional link to a [pkspec](https://github.com/mizchi/pkspec)
+  /// `Scenario.id`. When set, this task is the implementation of the
+  /// referenced spec scenario — useful as a structured equivalent to
+  /// the `// pkspec:spec=<id>` source-marker comment, especially when
+  /// the implementation is a build / release / migration pipeline
+  /// that lives in `Taskfile.pkl` rather than application code.
+  ///
+  /// pkfire itself does no validation: it merely surfaces the link
+  /// in `pkf describe` / `pkf list --long`. Cross-checking that the
+  /// referenced scenario exists is the pkspec side's responsibility
+  /// (via `pkspec lint --scan` or `pkspec check --strict`).
+  ///
+  /// Not folded into the action key — changing only the spec ref
+  /// should not invalidate cached outputs.
+  specRef: String? = null
 }
 
 /// Project-level defaults shared by all tasks unless overridden.
@@ -273,6 +289,7 @@ class RenderedTask {
   inheritEnv: Boolean
   acceptsArgs: Boolean
   params: Listing<RenderedParam>
+  specRef: String?
 }
 
 /// Top-level shape of `output.value`. pkl-go's `EvaluateOutputValue` looks
@@ -345,6 +362,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
           }
         }
       }
+      specRef = t.specRef
     }
   }
 }

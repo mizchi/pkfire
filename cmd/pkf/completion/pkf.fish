@@ -8,6 +8,7 @@ end
 # Subcommands when no subcommand has been picked yet.
 complete -c pkf -f -n '__fish_use_subcommand' -a init      -d 'write a starter Taskfile.pkl'
 complete -c pkf -f -n '__fish_use_subcommand' -a list      -d 'list declared tasks'
+complete -c pkf -f -n '__fish_use_subcommand' -a describe  -d 'show a single task surface'
 complete -c pkf -f -n '__fish_use_subcommand' -a run       -d 'run one or more tasks'
 complete -c pkf -f -n '__fish_use_subcommand' -a up        -d 'supervise long-running services'
 complete -c pkf -f -n '__fish_use_subcommand' -a doctor    -d 'diagnose pkfire setup'
@@ -26,7 +27,7 @@ complete -c pkf -f -n '__fish_use_subcommand' -a version   -d 'print pkf version
 complete -c pkf -f -n '__fish_use_subcommand' -a help      -d 'show usage'
 
 # Dynamic task names for the subcommands that take them.
-complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up explain' -a '(__pkf_tasks)'
+complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up explain describe' -a '(__pkf_tasks)'
 
 # Nested subcommand completions.
 complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
@@ -83,6 +84,8 @@ complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l depth -d 'limit dep
 
 complete -c pkf -f -n '__fish_seen_subcommand_from explain' -s f -l file -d 'path to Taskfile.pkl'
 complete -c pkf -f -n '__fish_seen_subcommand_from explain' -l diff -d 'compare against another Taskfile.pkl'
+complete -c pkf -f -n '__fish_seen_subcommand_from describe' -s f -l file -d 'path to Taskfile.pkl'
+complete -c pkf -f -n '__fish_seen_subcommand_from describe' -l json -d 'emit machine-readable output'
 complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -s f -l file -d 'path to Taskfile.pkl'
 complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l to -d 'target schema version'
 complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l dry-run -d 'preview rewrite without writing'

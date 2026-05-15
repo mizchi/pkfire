@@ -89,6 +89,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdInit(args[1:], stdout, stderr)
 	case "list":
 		return cmdList(args[1:], stdout, stderr)
+	case "describe":
+		return cmdDescribe(args[1:], stdout, stderr)
 	case "graph":
 		return cmdGraph(args[1:], stdout, stderr)
 	case "run":
@@ -150,6 +152,8 @@ commands:
                                         Ctrl+C releases the whole process tree
   list [-f FILE] [-v|--long|--json] [--all] [--unsorted] [--color=auto|always|never]
                                         list declared public tasks (-v: detail; --long: audit table; --json: machine-readable)
+  describe [-f FILE] [--json] <task>    show a single task's desc / params / inputs / outputs / cache / deps
+                                        (also reachable as 'pkf run <task> --help')
   graph [-f FILE] [--format FMT|--json] [--target TASK] [--all] [--unsorted]
                                         emit DAG (formats: dot, mermaid, tree, json)
   doctor [-f FILE] [--json] [--fix]     diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
@@ -282,6 +286,10 @@ func schemaAmendsURI() string {
 }
 
 func cmdInit(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		initUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -307,6 +315,10 @@ func cmdInit(args []string, stdout, stderr io.Writer) error {
 }
 
 func cmdList(args []string, stdout, _ io.Writer) error {
+	if helpRequested(args) {
+		listUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -383,6 +395,181 @@ func cmdList(args []string, stdout, _ io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// cmdDescribe prints a single task's full surface — desc, params (with
+// defaults / choices), inputs / outputs / cache, deps, services, and
+// pointers to `pkf graph --target` for the full subgraph. The `--json`
+// variant emits the same fields for tooling.
+func cmdDescribe(args []string, stdout, _ io.Writer) error {
+	if helpRequested(args) {
+		describeUsage(stdout)
+		return nil
+	}
+	fs := flag.NewFlagSet("pkf describe", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := newFileFlag(fs)
+	asJSON := fs.Bool("json", false, "emit machine-readable output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return fmt.Errorf("usage: pkf describe [-f FILE] [--json] <task>")
+	}
+	if len(rest) > 1 {
+		return fmt.Errorf("describe takes a single task name, got %v", rest)
+	}
+	target := rest[0]
+	abs, err := resolveFile(fs, *file)
+	if err != nil {
+		return err
+	}
+	tf, err := config.Load(context.Background(), abs)
+	if err != nil {
+		return err
+	}
+	t, ok := tf.Tasks[target]
+	if !ok {
+		return fmt.Errorf("unknown task: %q (try `pkf list --all`)", target)
+	}
+	if *asJSON {
+		return printDescribeJSON(stdout, target, t)
+	}
+	return printDescribe(stdout, target, t)
+}
+
+func printDescribe(stdout io.Writer, name string, t *config.Task) error {
+	fmt.Fprintf(stdout, "%s\n", taskSignature(name, t))
+	if t.Description != nil && *t.Description != "" {
+		fmt.Fprintf(stdout, "  desc: %s\n", *t.Description)
+	}
+	if v := taskVisibility(t); v == "internal" {
+		fmt.Fprintf(stdout, "  visibility: internal\n")
+	}
+	if t.SpecRef != nil && *t.SpecRef != "" {
+		fmt.Fprintf(stdout, "  spec:  %s  (run `pkspec lint --scan` to verify)\n", *t.SpecRef)
+	}
+	if t.Service {
+		fmt.Fprintf(stdout, "  service: true\n")
+	}
+	if t.Workdir != nil && *t.Workdir != "" {
+		fmt.Fprintf(stdout, "  workdir: %s\n", *t.Workdir)
+	}
+	if len(t.Params) > 0 {
+		fmt.Fprintln(stdout, "  params:")
+		for _, p := range t.Params {
+			typ := p.Type
+			if typ == "" {
+				typ = "string"
+			}
+			line := fmt.Sprintf("    --%s (%s)", p.Name, typ)
+			if p.Default != nil {
+				line += fmt.Sprintf(" = %s", *p.Default)
+			}
+			if len(p.Choices) > 0 {
+				line += fmt.Sprintf(" {%s}", strings.Join(p.Choices, "|"))
+			}
+			fmt.Fprintln(stdout, line)
+			if p.Description != nil && *p.Description != "" {
+				fmt.Fprintf(stdout, "        %s\n", *p.Description)
+			}
+		}
+	}
+	if t.AcceptsArgs {
+		fmt.Fprintln(stdout, "  acceptsArgs: true  (pass tail args after `--`)")
+	}
+	if len(t.Inputs) > 0 {
+		fmt.Fprintln(stdout, "  inputs:")
+		for _, in := range t.Inputs {
+			fmt.Fprintf(stdout, "    %s\n", in)
+		}
+	}
+	if len(t.Outputs) > 0 {
+		fmt.Fprintln(stdout, "  outputs:")
+		for _, out := range t.Outputs {
+			fmt.Fprintf(stdout, "    %s\n", out)
+		}
+	}
+	cacheState := "on"
+	if !t.Cache {
+		cacheState = "off"
+	}
+	fmt.Fprintf(stdout, "  cache: %s\n", cacheState)
+	if len(t.Deps) > 0 {
+		fmt.Fprintf(stdout, "  deps: %s\n", strings.Join(t.Deps, ", "))
+		fmt.Fprintf(stdout, "        (run `pkf graph --target %s` for the full DAG)\n", name)
+	}
+	if len(t.Services) > 0 {
+		fmt.Fprintf(stdout, "  services: %s\n", strings.Join(t.Services, ", "))
+	}
+	if t.Cmd == "" {
+		fmt.Fprintln(stdout, "  cmd:  <none>")
+	} else {
+		fmt.Fprintf(stdout, "  cmd:  %s\n", t.Cmd)
+	}
+	return nil
+}
+
+func printDescribeJSON(stdout io.Writer, name string, t *config.Task) error {
+	type paramOut struct {
+		Name        string   `json:"name"`
+		Type        string   `json:"type"`
+		Default     *string  `json:"default,omitempty"`
+		Choices     []string `json:"choices,omitempty"`
+		Description *string  `json:"description,omitempty"`
+	}
+	type out struct {
+		Name        string            `json:"name"`
+		Description *string           `json:"description,omitempty"`
+		Visibility  string            `json:"visibility"`
+		Service     bool              `json:"service,omitempty"`
+		Workdir     *string           `json:"workdir,omitempty"`
+		Params      []paramOut        `json:"params,omitempty"`
+		AcceptsArgs bool              `json:"acceptsArgs,omitempty"`
+		Inputs      []string          `json:"inputs,omitempty"`
+		Outputs     []string          `json:"outputs,omitempty"`
+		Cache       bool              `json:"cache"`
+		Deps        []string          `json:"deps,omitempty"`
+		Services    []string          `json:"services,omitempty"`
+		Cmd         string            `json:"cmd"`
+		Env         map[string]string `json:"env,omitempty"`
+		Tools       map[string]string `json:"tools,omitempty"`
+		SpecRef     *string           `json:"specRef,omitempty"`
+	}
+	o := out{
+		Name:        name,
+		Description: t.Description,
+		Visibility:  taskVisibility(t),
+		Service:     t.Service,
+		Workdir:     t.Workdir,
+		AcceptsArgs: t.AcceptsArgs,
+		Inputs:      t.Inputs,
+		Outputs:     t.Outputs,
+		Cache:       t.Cache,
+		Deps:        t.Deps,
+		Services:    t.Services,
+		Cmd:         t.Cmd,
+		Env:         t.Env,
+		Tools:       t.Tools,
+		SpecRef:     t.SpecRef,
+	}
+	for _, p := range t.Params {
+		typ := p.Type
+		if typ == "" {
+			typ = "string"
+		}
+		o.Params = append(o.Params, paramOut{
+			Name:        p.Name,
+			Type:        typ,
+			Default:     p.Default,
+			Choices:     p.Choices,
+			Description: p.Description,
+		})
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(o)
 }
 
 type listLongRow struct {
@@ -686,6 +873,10 @@ const (
 )
 
 func cmdLint(args []string, stdout, _ io.Writer) error {
+	if helpRequested(args) {
+		lintUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf lint", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -1228,6 +1419,7 @@ type listTaskJSON struct {
 	AcceptsArgs bool            `json:"acceptsArgs"`
 	InheritEnv  bool            `json:"inheritEnv"`
 	Params      []listParamJSON `json:"params,omitempty"`
+	SpecRef     string          `json:"specRef,omitempty"`
 }
 
 type listJSON struct {
@@ -1267,6 +1459,9 @@ func listTaskJSONFor(name string, t *config.Task) listTaskJSON {
 	if t.Workdir != nil {
 		entry.Workdir = *t.Workdir
 	}
+	if t.SpecRef != nil {
+		entry.SpecRef = *t.SpecRef
+	}
 	for _, p := range t.Params {
 		entry.Params = append(entry.Params, listParamJSON{
 			Name:    p.Name,
@@ -1304,6 +1499,10 @@ func (f *optionalIntFlag) Set(s string) error {
 }
 
 func cmdGraph(args []string, stdout, _ io.Writer) error {
+	if helpRequested(args) {
+		graphUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf graph", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -1668,6 +1867,37 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	globalArgs, targets, postArgs, err := splitRunArgs(args)
 	if err != nil {
 		return err
+	}
+
+	// `pkf run --help` (no task) prints the run usage block. With a
+	// task name attached we fall through to the describe redirect
+	// below so `pkf run TASK --help` reports the task's surface.
+	if len(targets) == 0 && helpRequested(args) {
+		runUsage(stdout)
+		return nil
+	}
+
+	// `pkf run TASK --help` / `-h` is reserved by the runner and
+	// forwards to `pkf describe TASK` rather than being parsed as a
+	// param. Pre-0.11 returned `task "TASK" has no param "help"`,
+	// which was honest but unhelpful for a first reader.
+	if len(targets) == 1 && postRunHelpRequested(postArgs) {
+		describeArgs := []string{}
+		for i := 0; i < len(globalArgs); i++ {
+			a := globalArgs[i]
+			if a == "-f" || a == "--file" {
+				if i+1 < len(globalArgs) {
+					describeArgs = append(describeArgs, "-f", globalArgs[i+1])
+					i++
+				}
+				continue
+			}
+			if strings.HasPrefix(a, "-f=") || strings.HasPrefix(a, "--file=") {
+				describeArgs = append(describeArgs, a)
+			}
+		}
+		describeArgs = append(describeArgs, targets[0])
+		return cmdDescribe(describeArgs, stdout, stderr)
 	}
 
 	fs := flag.NewFlagSet("pkf run", flag.ContinueOnError)
@@ -2036,6 +2266,37 @@ func splitRunArgs(args []string) (globalArgs []string, taskNames []string, taskA
 	// apply that fallback consistently.
 	globalArgs = args
 	return
+}
+
+// postRunHelpRequested returns true when postArgs (the tokens after the
+// task name on a `pkf run` line) explicitly asks for help. Stops at `--`
+// because tail args belong to the task, not to pkf.
+func postRunHelpRequested(postArgs []string) bool {
+	for _, a := range postArgs {
+		if a == "--" {
+			return false
+		}
+		if a == "--help" || a == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
+// helpRequested returns true when args contain `--help`, `-h`, or a
+// literal `help` token before any `--` separator. Subcommands route
+// this to their own usage function so a first-time reader can always
+// type `pkf <subcommand> -h` and discover the flag surface.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--help" || a == "-h" || a == "help" {
+			return true
+		}
+	}
+	return false
 }
 
 func extractPostTaskBoolFlag(args []string, name string) ([]string, bool, error) {
@@ -2499,6 +2760,10 @@ const pkfHookMarker = "# managed by pkf hooks install"
 // for historical reasons. Use scripts/bump-version.sh for tree-wide
 // sweeps.
 func cmdMigrate(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		migrateUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf migrate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -2573,6 +2838,10 @@ func cmdMigrate(args []string, stdout, stderr io.Writer) error {
 // `pkf run` hits a populated cache instead of racing on the same
 // fetch. Idempotent.
 func cmdPklCache(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		pklCacheUsage(stdout)
+		return nil
+	}
 	if len(args) == 0 {
 		args = []string{"warm"}
 	}
@@ -2630,6 +2899,10 @@ func pklCacheWarm(stdout, stderr io.Writer, args []string) error {
 // `pkf explain --diff <old-taskfile> <task>` outputs and see exactly
 // what moved.
 func cmdExplain(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		explainUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf explain", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -3040,6 +3313,10 @@ var completionFish string
 // out to `pkf list`, so the script stays static and always reflects
 // the current Taskfile.
 func cmdCompletion(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		completionUsage(stdout)
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: pkf completion <bash|zsh|fish>")
 	}
@@ -3069,6 +3346,10 @@ func cmdCompletion(args []string, stdout, stderr io.Writer) error {
 // so an `outputs { "bin" }` cleans the directory and everything in
 // it. Missing paths are silently OK (idempotent).
 func cmdClean(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		cleanUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf clean", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -3155,8 +3436,9 @@ func cmdClean(args []string, stdout, stderr io.Writer) error {
 // Remote cache is never touched here — that's the server admin's
 // problem.
 func cmdCache(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: pkf cache <stats|prune|rm|clear> [args]")
+	if len(args) == 0 || helpRequested(args) {
+		cacheUsage(stdout)
+		return nil
 	}
 	sub := args[0]
 	dir, err := cache.DefaultDir()
@@ -3176,6 +3458,277 @@ func cmdCache(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown cache subcommand %q (want stats|prune|rm|clear)", sub)
 	}
+}
+
+func cacheUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf cache — inspect / clean the local CAS
+
+usage:
+  pkf cache <stats|prune|rm|clear> [args]
+
+subcommands:
+  stats                                 print cache dir, entry count, total size, oldest/newest mtime
+  prune [--older-than DUR] [--dry-run]  drop entries older than DUR (default 30d); --dry-run lists only
+  rm <action-key-hex>...                remove specific entries (full 64-char hex or unique prefix ≥ 2)
+  clear [--yes]                         remove every entry (--yes skips the confirmation prompt)
+
+cache directory:
+  $PKFIRE_CACHE_DIR if set, otherwise $XDG_CACHE_HOME/pkfire (~/.cache/pkfire).
+`)
+}
+
+func initUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf init — write a starter Taskfile.pkl
+
+usage:
+  pkf init [-f FILE] [--force]
+
+flags:
+  -f, --file FILE   destination (default: ./Taskfile.pkl)
+      --force       overwrite if FILE already exists
+`)
+}
+
+func listUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf list — list declared tasks
+
+usage:
+  pkf list [-f FILE] [-v|--long|--json] [--all] [--unsorted] [--color=auto|always|never]
+
+flags:
+  -f, --file FILE   Taskfile.pkl path (default: ./Taskfile.pkl)
+  -v, --verbose     show cmd preview and deps
+      --long        compact audit table (cache / quiet / workdir / inputs / outputs / shell / flags / cmd)
+      --json        machine-readable output
+      --all         include internal tasks
+      --unsorted    use Taskfile declaration order instead of alphabetical
+      --color MODE  when to color output: auto, always, never (default: auto)
+`)
+}
+
+func describeUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf describe — show one task's surface
+
+usage:
+  pkf describe [-f FILE] [--json] <task>
+
+flags:
+  -f, --file FILE  Taskfile.pkl path (default: ./Taskfile.pkl)
+      --json       machine-readable output
+
+Also reachable as 'pkf run <task> --help'.
+`)
+}
+
+func runUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf run — run one or more tasks
+
+usage:
+  pkf run [-f FILE] [-j N] [global flags] [task...] [--<param>=<value>...] [-- arg...]
+  pkf run <task> --help          # describes the task and exits
+
+flags:
+  -f, --file FILE       Taskfile.pkl path (default: ./Taskfile.pkl)
+  -j, --jobs N          max concurrent tasks (default: NumCPU)
+      --watch           re-run on input changes (Ctrl+C to stop)
+      --dry-run         print the plan and exit
+      --print-hash      print action keys for the target subgraph and exit
+      --explain-cache   explain per-task cache hit / miss decisions and exit
+      --no-cache        disable cache lookup AND store for this run
+      --refresh         skip lookup but still store (re-baseline)
+      --timing          print per-task duration at end of run
+      --quiet           suppress per-task log lines (errors + summary still print)
+      --keep-going      do not stop on first failure
+      --profile NAME    fold NAME into action keys; exposed as $PKF_PROFILE
+      --on-fail MODE    'shell' drops into $SHELL in the failed task's workdir
+      --remote-only     consult only the remote cache (requires PKFIRE_REMOTE_CACHE)
+`)
+}
+
+func upUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf up — supervise long-running services
+
+usage:
+  pkf up [-f FILE] [-j N] [--watch] <task>
+
+flags:
+  -f, --file FILE   Taskfile.pkl path
+  -j, --jobs N      max concurrent pre-service tasks
+      --watch       restart services on input change
+      --no-cache    disable cache for the pre-service tasks
+`)
+}
+
+func doctorUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf doctor — diagnose pkfire setup (pkf / pkl / cache / remote / taskfile)
+
+usage:
+  pkf doctor [-f FILE] [--json] [--fix] [--dry-run]
+
+flags:
+  -f, --file FILE  Taskfile.pkl path
+      --json       machine-readable output
+      --fix        apply safe fixes
+      --dry-run    show fixes without writing files
+
+cache thresholds (used by the cache diagnostic):
+  PKFIRE_CACHE_WARN_SIZE_MB    WARN above N MB (default 500; 0 disables this axis)
+  PKFIRE_CACHE_WARN_ENTRIES    WARN above N entries (default 2000; 0 disables this axis)
+`)
+}
+
+func lintUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf lint — detect Taskfile dead code and suspicious tasks
+
+usage:
+  pkf lint [-f FILE] [--json] [--fix] [--dry-run]
+
+flags:
+  -f, --file FILE  Taskfile.pkl path
+      --json       machine-readable output
+      --fix        apply safe fixes
+      --dry-run    show fixes without writing files
+`)
+}
+
+func formatUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf format — wrapper for 'pkl format -w'
+
+usage:
+  pkf format [-f FILE] [--check] [PATH...]
+
+flags:
+  -f, --file FILE  Taskfile.pkl path (used when no PATH is given)
+      --check      report unformatted files without writing (exit 11 if any)
+`)
+}
+
+func hooksUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf hooks — manage .git/hooks shims
+
+usage:
+  pkf hooks <install|uninstall|list> [-f FILE] [--force]
+
+subcommands:
+  install     create .git/hooks/<event> shims for tasks named pre-commit, pre-push, commit-msg, ...
+  uninstall   remove the shims installed by 'pkf hooks install'
+  list        list every git event that has an installed shim
+
+flags:
+  -f, --file FILE  Taskfile.pkl path
+      --force      overwrite hooks not managed by pkfire
+`)
+}
+
+func affectedUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf affected — run only tasks whose inputs changed (and their dependents)
+
+usage:
+  pkf affected [-f FILE] [-j N] [--since=<ref>|--files=PATH] [--explain] [--check] [--dry-run] [--with-specs|--specs-only] [task...]
+
+flags:
+  -f, --file FILE    Taskfile.pkl path
+  -j, --jobs N       max concurrent tasks
+      --since REF    git ref to diff against (default: origin/main, fallback HEAD~1)
+      --files PATH   simulate changed file(s); repeat or comma-separate
+      --explain      show changed files, matching input patterns, and affected closure
+      --check        run workflowTests declared in the Taskfile
+      --dry-run      print the affected plan and exit
+      --with-specs   also print pkspec scenario ids touched by the change set
+                     (sources: Task.specRef + pkspec:spec=<id> markers in changed files)
+      --specs-only   print ONLY the touched scenario ids (one per line; implies --with-specs --dry-run);
+                     pipe into pkspec, e.g. pkf affected --specs-only | xargs pkspec lint
+      --no-cache     disable cache for this run
+      --refresh      skip cache lookup but still store
+      --timing       per-task duration at end
+      --quiet        suppress per-task log lines
+      --keep-going   do not stop on first failure
+      --profile N    fold N into action keys; exposed as $PKF_PROFILE
+      --watch        re-evaluate affected set + re-run on input change
+`)
+}
+
+func cleanUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf clean — remove tasks' declared outputs
+
+usage:
+  pkf clean [-f FILE] [--dry-run] [task...]
+
+flags:
+  -f, --file FILE  Taskfile.pkl path
+      --dry-run    list paths without removing
+
+Notes:
+  - The cache is NOT touched. To force a re-run, use 'pkf run --refresh'.
+    To drop a cache entry too, follow up with 'pkf cache rm <action-key>'.
+  - No task arg = every task that declares outputs.
+`)
+}
+
+func completionUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf completion — emit a shell-completion script
+
+usage:
+  pkf completion <bash|zsh|fish>
+
+Install (zsh):  pkf completion zsh > "${fpath[1]}/_pkf" && compinit
+Install (bash): pkf completion bash > ~/.bash_completion.d/pkf
+Install (fish): pkf completion fish > ~/.config/fish/completions/pkf.fish
+`)
+}
+
+func graphUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf graph — emit the task DAG
+
+usage:
+  pkf graph [-f FILE] [--format FMT|--json] [--target TASK] [--depth N] [--all] [--unsorted]
+
+flags:
+  -f, --file FILE   Taskfile.pkl path
+      --format FMT  output format: dot (default), mermaid, tree, json
+      --json        shortcut for --format=json
+      --target T    render only the subgraph rooted at task T
+      --depth N     limit dep traversal to N hops (0 = unlimited; tree default = 2; requires --target unless format=tree)
+      --all         include internal tasks
+      --unsorted    use Taskfile declaration order
+`)
+}
+
+func explainUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf explain — dump or compare a task's action-key inputs
+
+usage:
+  pkf explain [-f FILE] [--diff OLD_FILE] <task>
+
+flags:
+  -f, --file FILE  Taskfile.pkl path (the "new" side of a diff)
+      --diff PATH  compare against another Taskfile.pkl
+`)
+}
+
+func migrateUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf migrate — rewrite Taskfile.pkl's amends URI to a new schema version
+
+usage:
+  pkf migrate --to=<ver> [-f FILE] [--dry-run] [--skip-verify]
+
+flags:
+      --to VER       target schema version (e.g. --to=0.11.0)
+  -f, --file FILE    Taskfile.pkl path
+      --dry-run      print the new amends line without writing
+      --skip-verify  skip the post-rewrite pkl eval verification
+`)
+}
+
+func pklCacheUsage(w io.Writer) {
+	fmt.Fprint(w, `pkf pkl-cache — manage the local Pkl package cache
+
+usage:
+  pkf pkl-cache warm [-f FILE] [PATH...]
+
+subcommands:
+  warm  pre-evaluate Pkl files so ~/.pkl/cache is populated before parallel jobs
+`)
 }
 
 // cachePath returns the on-disk entry path for a hex action key.
@@ -3475,6 +4028,10 @@ func expandPatterns(targets []string, tasks map[string]*config.Task) []string {
 // task names (exact-match), so `pkf affected --since=origin/main
 // test:unit test:integration` restricts the gate to those two.
 func cmdAffected(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		affectedUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf affected", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -3491,10 +4048,15 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	watch := fs.Bool("watch", false, "re-evaluate affected set + re-run on input change (Ctrl+C to stop)")
 	var files stringListFlag
 	fs.Var(&files, "files", "simulate changed file(s); repeat or comma-separate")
+	withSpecs := fs.Bool("with-specs", false, "also print pkspec scenario ids touched by the changed file set (Task.specRef + pkspec:spec=<id> markers)")
+	specsOnly := fs.Bool("specs-only", false, "print only the touched scenario ids (implies --with-specs and --dry-run); useful for piping into pkspec")
 	jobs := fs.Int("j", 0, "max concurrent tasks (default: NumCPU)")
 	fs.IntVar(jobs, "jobs", 0, "max concurrent tasks (default: NumCPU)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *specsOnly {
+		*withSpecs = true
 	}
 
 	abs, err := resolveFile(fs, *file)
@@ -3555,6 +4117,13 @@ func cmdAffected(args []string, stdout, stderr io.Writer) error {
 	}
 	if *explain {
 		printAffectedExplanation(stdout, analysis)
+	}
+	if *withSpecs {
+		specs := collectAffectedSpecs(tf, analysis.Affected, root, changed)
+		printAffectedSpecs(stdout, specs, *specsOnly)
+		if *specsOnly {
+			return nil
+		}
 	}
 	if len(analysis.Affected) == 0 {
 		fmt.Fprintln(stderr, "[pkf] affected: changes don't intersect any task's inputs — nothing to do")
@@ -3956,6 +4525,103 @@ func printAffectedExplanation(stdout io.Writer, a *affectedAnalysis) {
 	fmt.Fprintln(stdout)
 }
 
+// pkspecMarkerRE mirrors the regex pkspec uses to extract
+// `pkspec:spec=<id>` markers from source files (see
+// pkspec internal/spec/scan.go). Kept in lockstep so a marker
+// pkfire surfaces is the same marker pkspec validates.
+var pkspecMarkerRE = regexp.MustCompile(`pkspec:spec=([a-zA-Z0-9](?:[a-zA-Z0-9_.\-]*[a-zA-Z0-9_\-])?)`)
+
+// affectedSpec is one row in the `--with-specs` output: a scenario id
+// that the current change set touches, with the source attribution
+// pkfire could derive (task specRef, file marker, or both).
+type affectedSpec struct {
+	ID      string
+	Sources []string
+}
+
+// collectAffectedSpecs gathers spec scenario ids touched by the
+// current change set. Two sources, OR'd:
+//
+//   - affected tasks whose `Task.specRef` is set
+//   - `pkspec:spec=<id>` markers found in any changed file that
+//     still exists on disk (deleted files are silently skipped)
+//
+// This is intentionally pure in-process — pkspec is NOT shelled out
+// to. The marker regex is duplicated rather than imported so the
+// flag works even in projects that don't have pkspec installed.
+func collectAffectedSpecs(tf *config.Taskfile, affected map[string]bool, root string, changed []string) []affectedSpec {
+	byID := map[string]map[string]bool{} // id -> set of source labels
+
+	addRef := func(id, source string) {
+		if id == "" {
+			return
+		}
+		if _, ok := byID[id]; !ok {
+			byID[id] = map[string]bool{}
+		}
+		byID[id][source] = true
+	}
+
+	for name := range affected {
+		t := tf.Tasks[name]
+		if t == nil || t.SpecRef == nil || *t.SpecRef == "" {
+			continue
+		}
+		addRef(*t.SpecRef, "task: "+name)
+	}
+
+	for _, rel := range changed {
+		path := rel
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, rel)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, m := range pkspecMarkerRE.FindAllSubmatch(data, -1) {
+			if len(m) < 2 {
+				continue
+			}
+			addRef(string(m[1]), "marker: "+rel)
+		}
+	}
+
+	out := make([]affectedSpec, 0, len(byID))
+	for id, src := range byID {
+		sources := make([]string, 0, len(src))
+		for s := range src {
+			sources = append(sources, s)
+		}
+		sort.Strings(sources)
+		out = append(out, affectedSpec{ID: id, Sources: sources})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// printAffectedSpecs renders the result of collectAffectedSpecs.
+// In `specsOnly` mode the output is one id per line so it pipes
+// cleanly into `pkspec lint --scan` / `pkspec check`.
+func printAffectedSpecs(stdout io.Writer, specs []affectedSpec, specsOnly bool) {
+	if specsOnly {
+		for _, s := range specs {
+			fmt.Fprintln(stdout, s.ID)
+		}
+		return
+	}
+	if len(specs) == 0 {
+		fmt.Fprintln(stdout, "spec ids touched: (none)")
+		fmt.Fprintln(stdout)
+		return
+	}
+	fmt.Fprintf(stdout, "spec ids touched (%d):\n", len(specs))
+	for _, s := range specs {
+		fmt.Fprintf(stdout, "  %s  (%s)\n", s.ID, strings.Join(s.Sources, ", "))
+	}
+	fmt.Fprintln(stdout)
+}
+
 func runWorkflowTests(stdout io.Writer, tf *config.Taskfile, root string) error {
 	if len(tf.WorkflowTests) == 0 {
 		fmt.Fprintln(stdout, "no workflow tests declared")
@@ -4059,6 +4725,10 @@ func expandToDependents(tf *config.Taskfile, direct map[string]bool) map[string]
 // `git diff --cached --name-only` inside `cmd` to operate on the
 // staged set).
 func cmdHooks(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		hooksUsage(stdout)
+		return nil
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: pkf hooks <install|uninstall|list> [-f FILE] [--force]")
 	}
@@ -4319,6 +4989,10 @@ func hooksList(stdout io.Writer, tf *config.Taskfile, hooksDir string) error {
 // on violations and prints the path of each unformatted file
 // (CI-friendly).
 func cmdFormat(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		formatUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf format", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -4373,6 +5047,10 @@ func cmdFormat(args []string, stdout, stderr io.Writer) error {
 // half-configured?" — every check is read-only, every line is one
 // line, and the exit code is non-zero iff any FAIL fired.
 func cmdDoctor(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		doctorUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)
@@ -4432,7 +5110,12 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 		report("FAIL", "cache", fmt.Sprintf("%s exists but is not a directory", cacheDir))
 	} else {
 		size, count := cacheStats(cacheDir)
-		report("OK", "cache", fmt.Sprintf("%s (%s across %d entries)", cacheDir, humanBytes(size), count))
+		base := fmt.Sprintf("%s (%s across %d entries)", cacheDir, humanBytes(size), count)
+		if level, hint := cacheSizeAdvisory(size, count); level == "WARN" {
+			report("WARN", "cache", base+"\n              "+hint)
+		} else {
+			report("OK", "cache", base)
+		}
 	}
 
 	// 4. remote cache (only if configured)
@@ -4751,6 +5434,34 @@ func cacheStats(dir string) (size int64, count int) {
 // humanBytes renders a byte count as a short human string (KB/MB/GB).
 // Uses 1024 bases because the doctor output already aims at developer
 // eyeballs, not marketers.
+// cacheSizeAdvisory inspects local CAS size + entry count against
+// configurable thresholds and returns ("WARN", hint) when either is
+// exceeded. Returns ("OK", "") below the line. Thresholds are tunable
+// via env vars (PKFIRE_CACHE_WARN_SIZE_MB / PKFIRE_CACHE_WARN_ENTRIES);
+// 0 disables that axis.
+func cacheSizeAdvisory(size int64, count int) (level, hint string) {
+	sizeLimitMB := envIntDefault("PKFIRE_CACHE_WARN_SIZE_MB", 500)
+	entryLimit := envIntDefault("PKFIRE_CACHE_WARN_ENTRIES", 2000)
+	overSize := sizeLimitMB > 0 && size > int64(sizeLimitMB)*1024*1024
+	overEntries := entryLimit > 0 && count > entryLimit
+	if !overSize && !overEntries {
+		return "OK", ""
+	}
+	return "WARN", "consider `pkf cache prune --older-than 30d` or `pkf cache clear`"
+}
+
+func envIntDefault(name string, def int) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -4797,6 +5508,10 @@ func scanAmends(path string) string {
 // up to its `shutdownTimeoutSeconds`, then escalates to SIGKILL — so a
 // `cmd = "node server.js"` style service does not leak its node child.
 func cmdUp(args []string, stdout, stderr io.Writer) error {
+	if helpRequested(args) {
+		upUsage(stdout)
+		return nil
+	}
 	fs := flag.NewFlagSet("pkf up", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	file := newFileFlag(fs)

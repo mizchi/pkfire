@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1471,6 +1472,8 @@ func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
 				"--to --dry-run --skip-verify",
 				"pkl-cache)",
 				"warm",
+				"describe)",
+				"-f --file --json",
 			},
 		},
 		{
@@ -1486,6 +1489,8 @@ func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
 				"--skip-verify[skip post-migration pkl eval]",
 				"pkl-cache)",
 				"_values 'pkl-cache subcommand' warm",
+				"describe:show a single task",
+				"describe)",
 			},
 		},
 		{
@@ -1501,6 +1506,8 @@ func TestCompletionIncludesLateAddedSubcommands(t *testing.T) {
 				"-l skip-verify -d 'skip post-migration pkl eval'",
 				"__fish_seen_subcommand_from pkl-cache",
 				"-a warm -d 'pre-evaluate Pkl files'",
+				"-a describe  -d 'show a single task surface'",
+				"__fish_seen_subcommand_from describe",
 			},
 		},
 	}
@@ -1711,6 +1718,360 @@ func TestParseDurationAcceptsDays(t *testing.T) {
 		if got != want {
 			t.Errorf("%s: got %v want %v", input, got, want)
 		}
+	}
+}
+
+func TestDescribeShowsTaskSurface(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "go build -o bin/app ./cmd/app"
+  description = "build the binary"
+  inputs { "**/*.go" }
+  outputs { "bin/app" }
+}
+local tag = new Task {
+  name = "tag"
+  description = "push an annotated release tag"
+  cmd = "git tag $VERSION"
+  cache = false
+  deps { build }
+  params {
+    new {
+      name = "version"
+      type = "string"
+      default = "0.0.0"
+      description = "release version to tag"
+    }
+  }
+}
+tasks { build; tag }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDescribe([]string{"-f", taskfile, "tag"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDescribe: %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"tag",
+		"desc: push an annotated release tag",
+		"--version (string) = 0.0.0",
+		"release version to tag",
+		"cache: off",
+		"deps: build",
+		"git tag $VERSION",
+		"pkf graph --target tag",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("describe output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDescribeSurfacesSpecRefWhenSet(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local release = new Task {
+  name = "release"
+  cmd = "echo release"
+  description = "ship the binary"
+  specRef = "release-pipeline"
+}
+tasks { release }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDescribe([]string{"-f", taskfile, "release"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDescribe: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "spec:") || !strings.Contains(out, "release-pipeline") {
+		t.Errorf("describe should surface specRef:\n%s", out)
+	}
+	if !strings.Contains(out, "pkspec lint --scan") {
+		t.Errorf("describe should hint at the verifier:\n%s", out)
+	}
+}
+
+func TestDescribeJSONIncludesSpecRef(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local t = new Task {
+  name = "t"
+  cmd = "echo t"
+  specRef = "foo"
+}
+tasks { t }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDescribe([]string{"-f", taskfile, "--json", "t"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDescribe --json: %v", err)
+	}
+	var got struct {
+		SpecRef string `json:"specRef"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode JSON: %v\n%s", err, stdout.String())
+	}
+	if got.SpecRef != "foo" {
+		t.Errorf("expected specRef=foo in describe JSON, got %q", got.SpecRef)
+	}
+}
+
+func TestDescribeOmitsSpecRefWhenUnset(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDescribe([]string{"-f", basicTaskfile(t), "build"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDescribe: %v", err)
+	}
+	if strings.Contains(stdout.String(), "spec:") {
+		t.Errorf("describe should not print `spec:` row when specRef is unset:\n%s", stdout.String())
+	}
+}
+
+func TestDescribeJSONEmitsStructuredOutput(t *testing.T) {
+	requirePkl(t)
+	taskfile := taskfileWithLocalSchema(t, `
+local build = new Task {
+  name = "build"
+  cmd = "go build"
+  inputs { "**/*.go" }
+  outputs { "bin/app" }
+}
+tasks { build }
+`)
+	var stdout, stderr bytes.Buffer
+	if err := cmdDescribe([]string{"-f", taskfile, "--json", "build"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdDescribe --json: %v", err)
+	}
+	var got struct {
+		Name    string   `json:"name"`
+		Cache   bool     `json:"cache"`
+		Inputs  []string `json:"inputs"`
+		Outputs []string `json:"outputs"`
+		Cmd     string   `json:"cmd"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Name != "build" || got.Cmd != "go build" {
+		t.Errorf("unexpected describe payload: %+v", got)
+	}
+	if !got.Cache {
+		t.Errorf("expected cache=true by default, got %v", got.Cache)
+	}
+}
+
+func TestDescribeRejectsUnknownTask(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	err := cmdDescribe([]string{"-f", basicTaskfile(t), "no-such-task"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown task") {
+		t.Fatalf("expected unknown task error, got %v", err)
+	}
+}
+
+func TestDescribeRequiresExactlyOneTask(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := cmdDescribe(nil, &stdout, &stderr); err == nil {
+		t.Error("expected error when no task name is provided")
+	}
+	if err := cmdDescribe([]string{"a", "b"}, &stdout, &stderr); err == nil {
+		t.Error("expected error when multiple task names are provided")
+	}
+}
+
+func TestRunTaskHelpRedirectsToDescribe(t *testing.T) {
+	requirePkl(t)
+	var stdout, stderr bytes.Buffer
+	if err := cmdRun([]string{"-f", basicTaskfile(t), "build", "--help"}, &stdout, &stderr); err != nil {
+		t.Fatalf("cmdRun build --help: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "cmd:") || !strings.Contains(out, "build") {
+		t.Errorf("expected describe output, got:\n%s", out)
+	}
+	// must NOT execute the build task
+	if strings.Contains(out, "go build") && !strings.Contains(out, "cmd:  go build") {
+		t.Errorf("looks like build ran instead of being described:\n%s", out)
+	}
+}
+
+func TestPostRunHelpRequestedRespectsTailBoundary(t *testing.T) {
+	if !postRunHelpRequested([]string{"--help"}) {
+		t.Error("--help should be detected")
+	}
+	if !postRunHelpRequested([]string{"-h"}) {
+		t.Error("-h should be detected")
+	}
+	if postRunHelpRequested([]string{"--", "--help"}) {
+		t.Error("--help after `--` is a tail arg, not a help request")
+	}
+	if postRunHelpRequested([]string{"--version=1.0.0"}) {
+		t.Error("non-help flags should not trigger redirect")
+	}
+}
+
+func TestCacheSizeAdvisoryThresholds(t *testing.T) {
+	t.Setenv("PKFIRE_CACHE_WARN_SIZE_MB", "")
+	t.Setenv("PKFIRE_CACHE_WARN_ENTRIES", "")
+
+	level, hint := cacheSizeAdvisory(100*1024*1024, 100)
+	if level != "OK" || hint != "" {
+		t.Errorf("expected OK for 100MB/100 entries, got %q / %q", level, hint)
+	}
+
+	level, hint = cacheSizeAdvisory(600*1024*1024, 100)
+	if level != "WARN" || !strings.Contains(hint, "pkf cache prune") {
+		t.Errorf("expected WARN with prune hint above 500MB, got %q / %q", level, hint)
+	}
+
+	level, _ = cacheSizeAdvisory(10*1024*1024, 2500)
+	if level != "WARN" {
+		t.Errorf("expected WARN above 2000 entries, got %q", level)
+	}
+}
+
+func TestCacheSizeAdvisoryHonorsEnvOverrides(t *testing.T) {
+	t.Setenv("PKFIRE_CACHE_WARN_SIZE_MB", "1")
+	t.Setenv("PKFIRE_CACHE_WARN_ENTRIES", "0") // disable entry axis
+
+	level, _ := cacheSizeAdvisory(2*1024*1024, 100)
+	if level != "WARN" {
+		t.Errorf("expected WARN when SIZE_MB=1 and size=2MB, got %q", level)
+	}
+	level, _ = cacheSizeAdvisory(0, 1_000_000)
+	if level != "OK" {
+		t.Errorf("expected OK when ENTRIES=0 disables that axis, got %q", level)
+	}
+}
+
+func TestDoctorOversizedCacheReportsWarn(t *testing.T) {
+	requirePkl(t)
+	cacheDir := t.TempDir()
+	// Write a single dummy cas entry above the threshold so cacheStats walks it.
+	entry := filepath.Join(cacheDir, "cas", "aa", "bbbbbbbbbb")
+	if err := os.MkdirAll(entry, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, 2*1024*1024)
+	if err := os.WriteFile(filepath.Join(entry, "archive"), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PKFIRE_CACHE_DIR", cacheDir)
+	t.Setenv("PKFIRE_CACHE_WARN_SIZE_MB", "1")
+	t.Setenv("PKFIRE_CACHE_WARN_ENTRIES", "0")
+
+	var stdout, stderr bytes.Buffer
+	_ = cmdDoctor([]string{"-f", basicTaskfile(t)}, &stdout, &stderr)
+	out := stdout.String()
+	if !strings.Contains(out, "WARN") || !strings.Contains(out, "cache") {
+		t.Errorf("expected WARN cache row, got:\n%s", out)
+	}
+	if !strings.Contains(out, "pkf cache prune") {
+		t.Errorf("expected prune hint in cache WARN, got:\n%s", out)
+	}
+}
+
+func TestAllSubcommandsRespondToHelpFlag(t *testing.T) {
+	type call func(args []string, stdout, stderr io.Writer) error
+	cmds := []struct {
+		name string
+		fn   call
+		want []string
+	}{
+		{"init", cmdInit, []string{"pkf init", "--force"}},
+		{"list", cmdList, []string{"pkf list", "--long", "--color"}},
+		{"describe", cmdDescribe, []string{"pkf describe", "--json"}},
+		{"run", cmdRun, []string{"pkf run", "--print-hash", "--explain-cache"}},
+		{"up", cmdUp, []string{"pkf up", "--watch"}},
+		{"doctor", cmdDoctor, []string{"pkf doctor", "--fix", "PKFIRE_CACHE_WARN_SIZE_MB"}},
+		{"lint", cmdLint, []string{"pkf lint", "--fix"}},
+		{"format", cmdFormat, []string{"pkf format", "--check"}},
+		{"hooks", cmdHooks, []string{"pkf hooks", "install", "uninstall"}},
+		{"affected", cmdAffected, []string{"pkf affected", "--since", "--explain"}},
+		{"clean", cmdClean, []string{"pkf clean", "--dry-run"}},
+		{"cache", cmdCache, []string{"pkf cache", "stats", "prune"}},
+		{"completion", cmdCompletion, []string{"pkf completion", "bash", "zsh", "fish"}},
+		{"graph", cmdGraph, []string{"pkf graph", "--format", "mermaid"}},
+		{"explain", cmdExplain, []string{"pkf explain", "--diff"}},
+		{"migrate", cmdMigrate, []string{"pkf migrate", "--to", "--skip-verify"}},
+		{"pkl-cache", cmdPklCache, []string{"pkf pkl-cache", "warm"}},
+	}
+	for _, c := range cmds {
+		for _, flag := range []string{"--help", "-h", "help"} {
+			// `pkf run help` is intentionally interpreted as "run a
+			// task literally named help" — we cannot reserve the
+			// bare `help` token for this subcommand without breaking
+			// user task names. `--help` / `-h` still work for run.
+			if c.name == "run" && flag == "help" {
+				continue
+			}
+			t.Run(c.name+"/"+flag, func(t *testing.T) {
+				var stdout, stderr bytes.Buffer
+				if err := c.fn([]string{flag}, &stdout, &stderr); err != nil {
+					t.Fatalf("%s %s: %v", c.name, flag, err)
+				}
+				out := stdout.String()
+				for _, want := range c.want {
+					if !strings.Contains(out, want) {
+						t.Errorf("%s %s usage missing %q:\n%s", c.name, flag, want, out)
+					}
+				}
+				if stderr.Len() > 0 {
+					t.Errorf("%s %s wrote to stderr: %s", c.name, flag, stderr.String())
+				}
+			})
+		}
+	}
+}
+
+func TestHelpRequestedStopsAtTailSeparator(t *testing.T) {
+	if !helpRequested([]string{"--help"}) {
+		t.Error("--help should be detected")
+	}
+	if !helpRequested([]string{"-h"}) {
+		t.Error("-h should be detected")
+	}
+	if !helpRequested([]string{"help"}) {
+		t.Error("bare help should be detected")
+	}
+	if helpRequested([]string{"--", "--help"}) {
+		t.Error("--help after `--` is a tail arg")
+	}
+	if helpRequested(nil) {
+		t.Error("empty args should not request help")
+	}
+}
+
+func TestCacheHelpFlagsPrintUsage(t *testing.T) {
+	for _, sub := range []string{"--help", "-h", "help"} {
+		t.Run(sub, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := cmdCache([]string{sub}, &stdout, &stderr); err != nil {
+				t.Fatalf("cmdCache %q: %v", sub, err)
+			}
+			out := stdout.String()
+			if !strings.Contains(out, "subcommands:") {
+				t.Errorf("expected usage block with `subcommands:`:\n%s", out)
+			}
+			for _, want := range []string{"stats", "prune", "rm", "clear"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("usage missing %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(stderr.String()+out, "unknown cache subcommand") {
+				t.Errorf("help flag should not be reported as unknown:\nstdout: %s\nstderr: %s", out, stderr.String())
+			}
+		})
+	}
+}
+
+func TestCacheUnknownSubcommandStillErrors(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := cmdCache([]string{"banana"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown cache subcommand") {
+		t.Fatalf("expected unknown cache subcommand error, got %v", err)
 	}
 }
 
@@ -2456,6 +2817,129 @@ tasks { goBuild; docs }
 				break
 			}
 		}
+	}
+}
+
+func TestCmdAffectedWithSpecsCollectsTaskSpecRefAndMarkers(t *testing.T) {
+	requirePkl(t)
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaAmends := `amends "` + filepath.ToSlash(filepath.Join(repoRoot, "pkl/Taskfile.pkl")) + `"`
+	taskfile := schemaAmends + `
+
+local goBuild = new Task {
+  name = "go-build"
+  cmd  = "echo go build"
+  cache = false
+  inputs { "src/**/*.go" }
+  specRef = "build-pipeline"
+}
+tasks { goBuild }
+`
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"Taskfile.pkl": taskfile,
+		"src/main.go":  "package main\n",
+	})
+	// Edit a file AND include a pkspec marker so both attribution
+	// sources surface.
+	commitChange(t, repo, map[string]string{
+		"src/main.go": "package main\n// pkspec:spec=auth.login\nfunc main() {}\n",
+	})
+
+	var stdout, stderr bytes.Buffer
+	err = cmdAffected(
+		[]string{"-f", filepath.Join(repo, "Taskfile.pkl"), "--since=HEAD~1", "--dry-run", "--with-specs"},
+		&stdout, &stderr,
+	)
+	if err != nil {
+		t.Fatalf("cmdAffected --with-specs: %v\n%s\n%s", err, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "spec ids touched") {
+		t.Errorf("expected spec-ids header in output:\n%s", out)
+	}
+	if !strings.Contains(out, "build-pipeline") {
+		t.Errorf("Task.specRef should show up in --with-specs output:\n%s", out)
+	}
+	if !strings.Contains(out, "auth.login") {
+		t.Errorf("pkspec:spec=auth.login marker should surface:\n%s", out)
+	}
+	if !strings.Contains(out, "task: go-build") {
+		t.Errorf("attribution `task: go-build` missing:\n%s", out)
+	}
+	if !strings.Contains(out, "marker: src/main.go") {
+		t.Errorf("attribution `marker: src/main.go` missing:\n%s", out)
+	}
+}
+
+func TestCmdAffectedSpecsOnlyEmitsBareIDs(t *testing.T) {
+	requirePkl(t)
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaAmends := `amends "` + filepath.ToSlash(filepath.Join(repoRoot, "pkl/Taskfile.pkl")) + `"`
+	taskfile := schemaAmends + `
+
+local goBuild = new Task {
+  name = "go-build"
+  cmd  = "echo go build"
+  cache = false
+  inputs { "src/**/*.go" }
+  specRef = "build-pipeline"
+}
+tasks { goBuild }
+`
+	repo := newGitRepoWithCommit(t, map[string]string{
+		"Taskfile.pkl": taskfile,
+		"src/main.go":  "package main\n",
+	})
+	commitChange(t, repo, map[string]string{
+		"src/main.go": "package main\n// pkspec:spec=auth.login\n",
+	})
+
+	var stdout, stderr bytes.Buffer
+	err = cmdAffected(
+		[]string{"-f", filepath.Join(repo, "Taskfile.pkl"), "--since=HEAD~1", "--specs-only"},
+		&stdout, &stderr,
+	)
+	if err != nil {
+		t.Fatalf("cmdAffected --specs-only: %v\n%s\n%s", err, stdout.String(), stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	got := map[string]bool{}
+	for _, l := range lines {
+		got[strings.TrimSpace(l)] = true
+	}
+	for _, want := range []string{"auth.login", "build-pipeline"} {
+		if !got[want] {
+			t.Errorf("--specs-only should emit %q on its own line, got:\n%s", want, stdout.String())
+		}
+	}
+	// No attribution noise in specs-only mode.
+	if strings.Contains(stdout.String(), "task:") || strings.Contains(stdout.String(), "marker:") {
+		t.Errorf("--specs-only should be ids only, got attribution text:\n%s", stdout.String())
+	}
+}
+
+func TestCollectAffectedSpecsDedupesMultipleSources(t *testing.T) {
+	tf := &config.Taskfile{
+		Tasks: map[string]*config.Task{
+			"build": {SpecRef: stringPtr("shared-id")},
+		},
+	}
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "src.go"), []byte("// pkspec:spec=shared-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specs := collectAffectedSpecs(tf, map[string]bool{"build": true}, repo, []string{"src.go"})
+	if len(specs) != 1 || specs[0].ID != "shared-id" {
+		t.Fatalf("expected 1 spec with id=shared-id, got %#v", specs)
+	}
+	if len(specs[0].Sources) != 2 {
+		t.Errorf("expected 2 attribution sources, got %v", specs[0].Sources)
 	}
 }
 

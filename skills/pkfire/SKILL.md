@@ -156,6 +156,10 @@ run, then caches the new package locally.
 | [`assets/recipes/13-git-hooks.pkl`](./assets/recipes/13-git-hooks.pkl) | `pkf hooks install`: tasks named after git events (`pre-commit`, `pre-push`, `commit-msg`) wired to `.git/hooks/<event>` shims |
 | [`assets/recipes/14-secretlint-pre-push.pkl`](./assets/recipes/14-secretlint-pre-push.pkl) | secretlint as a `pkf run pre-push` task (scans the outgoing diff, not every commit) — drops the prek dep for the "secretlint-only" hook case |
 | [`assets/recipes/15-diagnostics-and-lint.pkl`](./assets/recipes/15-diagnostics-and-lint.pkl) | `list --long`, `lint --json/--fix`, `doctor --json/--fix`, internal audit tasks, quiet wrappers, strict shell flags |
+| [`assets/recipes/16-release-version-bump.pkl`](./assets/recipes/16-release-version-bump.pkl) | `pkf run bump-version --from=X --to=Y [--commit=true]` — sed-rewrites a pinned file list (flake.nix, action.yml, README, docs, …) so the release-tag prelude collapses to one command |
+| [`assets/recipes/17-pkspec-checks.pkl`](./assets/recipes/17-pkspec-checks.pkl) | `spec-check`, `spec-lint`, `spec-next`, `spec-orphans`, `spec-coverage`, `pkspec-doctor` wrappers around the [pkspec](https://github.com/mizchi/pkspec) CLI, cached on the declared `specSources` / `markerSources` so `pkf affected --since` can skip the gate |
+| [`assets/recipes/18-pkspec-check-pre-push.pkl`](./assets/recipes/18-pkspec-check-pre-push.pkl) | `pkspec check --strict` + `pkspec lint --scan` as a `pkf run pre-push` task — drop-in companion to recipe 14 for repos that own a pkspec spec set |
+| [`assets/recipes/19-spec-task-link.pkl`](./assets/recipes/19-spec-task-link.pkl) | Bidirectional pkfire ↔ pkspec link: `Task.specRef` (task → spec) paired with `Implementation { kind = "task"; at = "Taskfile.pkl#<task>" }` (spec → task). Enables `pkf affected --with-specs` and `pkspec check --strict` cross-check. Requires pkfire 0.11.0+ |
 
 ## Project layout
 

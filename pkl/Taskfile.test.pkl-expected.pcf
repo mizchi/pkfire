@@ -29,6 +29,7 @@ examples {
       inheritEnv = true
       acceptsArgs = false
       params {}
+      specRef = null
     }
   }
 }

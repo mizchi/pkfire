@@ -37,6 +37,7 @@ type Task struct {
 	InheritEnv             bool              `pkl:"inheritEnv"`
 	AcceptsArgs            bool              `pkl:"acceptsArgs"`
 	Params                 []*Param          `pkl:"params"`
+	SpecRef                *string           `pkl:"specRef"`
 }
 
 // Param mirrors `pkfire.Taskfile#Param`. A param's resolved value is

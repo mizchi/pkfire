@@ -1,0 +1,155 @@
+/// Recipe 17: pkspec checks as cached pkfire tasks.
+///
+/// pkspec (https://github.com/mizchi/pkspec) is the sibling spec /
+/// test contract tool: it owns `Spec.pkl` / `Test.pkl` / `Adapter.pkl`,
+/// the `pkspec:spec=<id>` source markers, and the `--check --strict`
+/// gate that fails CI when a Scenario has no implementing Test.
+///
+/// This recipe wraps the most useful pkspec invocations as typed
+/// pkfire tasks so they cache on the underlying spec / source set
+/// and chain into your `release-check` / `pre-push` aggregator.
+///
+/// Why pkfire and not raw justfile / shell
+/// ----------------------------------------
+/// 1. **Cache hit on unchanged specs.** `pkspec check --strict` over
+///    a tree of `Spec.pkl` + source markers takes 300-500 ms; rerun
+///    100 times across a release cycle and the wasted seconds add up.
+///    Declaring `inputs { ...specSources }` skips the rerun when no
+///    relevant file changed.
+/// 2. **`pkf affected --since`.** Same input declaration lets
+///    `pkf affected --since=origin/main` decide whether the spec
+///    gate even needs to run for this PR.
+/// 3. **One source of truth for the file set.** `specSources` is
+///    used both as `inputs` and as the positional args to pkspec,
+///    so adding a new spec dir is a one-line edit.
+///
+/// Prereq
+/// ------
+/// `pkspec` on PATH. Install via:
+///   - Go:  `go install github.com/mizchi/pkspec/cmd/...@latest`
+///   - Nix: `nix profile install github:mizchi/pkspec`
+///   - GH Actions: `uses: mizchi/pkspec@v0` (composite installer)
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+/// Spec / test sources. Edit this list for your repo.
+///
+/// `markerSources` is the file set that may contain
+/// `pkspec:spec=<id>` source markers — typically your application
+/// code. pkspec scans it for dead links and (with --scan) feeds the
+/// backlinks into the spec graph.
+local specSources: Listing<String> = new {
+  "SPEC.pkl"
+  "specs/**/*.pkl"
+  "examples/*/Spec.pkl"
+  "examples/*/Test.pkl"
+}
+
+local markerSources: Listing<String> = new {
+  "cmd/**/*.go"
+  "internal/**/*.go"
+  "src/**/*.ts"
+  "src/**/*.tsx"
+}
+
+/// `pkf run spec-check` — the headline gate. Fails if any Scenario
+/// is unimplemented or any source marker points at a missing id.
+local specCheck: Task = new {
+  name = "spec-check"
+  description = "pkspec check --strict over the declared spec set"
+  cmd = "pkspec check --strict $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  inputs {
+    ...specSources
+    ...markerSources
+  }
+}
+
+/// `pkf run spec-lint` — structural lint plus marker scan. Catches
+/// broken graph refs, dead spec links, missing descriptions, AND
+/// (with --scan) markers in source that don't match any Scenario.
+local specLint: Task = new {
+  name = "spec-lint"
+  description = "pkspec lint --scan: structural + source-marker checks"
+  cmd = "pkspec lint --scan $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  inputs {
+    ...specSources
+    ...markerSources
+  }
+}
+
+/// `pkf run spec-next` — print unimplemented Scenarios ranked by
+/// Goal priority. Not a gate; cache = false because the user wants
+/// fresh output every invocation.
+local specNext: Task = new {
+  name = "spec-next"
+  description = "List unimplemented Scenarios ranked by Goal priority"
+  cmd = "pkspec spec --next $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  cache = false
+}
+
+/// `pkf run spec-orphans` — print Tests with no Scenario.specRef.
+/// Useful before a release to make sure nothing was left dangling.
+local specOrphans: Task = new {
+  name = "spec-orphans"
+  description = "List Test modules with no matching Scenario.specRef"
+  cmd = "pkspec spec --orphans $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  cache = false
+}
+
+/// `pkf run spec-coverage` — coverage rollup by severity and review.
+local specCoverage: Task = new {
+  name = "spec-coverage"
+  description = "pkspec spec --coverage rollup"
+  cmd = "pkspec spec --coverage $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  inputs = specSources
+}
+
+/// `pkf run pkspec-doctor` — environment health for the pkspec side
+/// (pkl required; node / go / git optional depending on adapters in
+/// use). Pairs with `pkf doctor` for the runner side.
+local pkspecDoctor: Task = new {
+  name = "pkspec-doctor"
+  description = "pkspec doctor: pkl / git / node / go health check"
+  cmd = "pkspec doctor"
+  cache = false
+}
+
+/// `pkf run spec-gate` — bundle the cacheable checks. Drop this
+/// into your `release-check` task's deps.
+local specGate: Task = new {
+  name = "spec-gate"
+  description = "spec-check + spec-lint as one gate"
+  cmd = "echo spec gate ok"
+  cache = false
+  deps { specCheck; specLint }
+}
+
+tasks {
+  specCheck
+  specLint
+  specNext
+  specOrphans
+  specCoverage
+  pkspecDoctor
+  specGate
+}
+
+// ---------------------------------------------------------------
+// Wiring into release-check
+// ---------------------------------------------------------------
+//
+// In your existing `release-check` task:
+//
+//   local releaseCheck: Task = new {
+//     name = "release-check"
+//     cache = false
+//     deps { test; build; smoke; specGate }   // <-- add specGate
+//     cmd = "echo release ok"
+//   }
+//
+// `pkf affected --since=origin/main release-check` then skips the
+// spec gate on PRs that touched no spec or marker source.

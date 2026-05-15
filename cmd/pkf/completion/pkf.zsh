@@ -8,6 +8,7 @@ _pkf() {
   subcommands=(
     'init:write a starter Taskfile.pkl'
     'list:list declared tasks'
+    'describe:show a single task'\''s desc / params / inputs / outputs / cache / deps'
     'run:run one or more tasks'
     'up:supervise long-running services'
     'doctor:diagnose pkfire setup'
@@ -123,6 +124,18 @@ _pkf() {
       local -a tasks
       tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
       _describe 'task' tasks
+      ;;
+    describe)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'describe option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--json[emit machine-readable output]'
+      else
+        local -a tasks
+        tasks=(${(f)"$(pkf list --all 2>/dev/null | awk '{print $1}')"})
+        _describe 'task' tasks
+      fi
       ;;
     hooks)
       if (( CURRENT == 3 )); then

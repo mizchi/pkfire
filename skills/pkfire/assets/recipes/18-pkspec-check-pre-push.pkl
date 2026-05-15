@@ -1,0 +1,104 @@
+/// Recipe 18: `pkspec check --strict` as a pre-push gate.
+///
+/// Same shape as recipe 14 (secretlint pre-push), but for the spec
+/// side: every push to a shared branch verifies that no Scenario
+/// is unimplemented and no `pkspec:spec=<id>` marker points at a
+/// missing id.
+///
+/// Why pre-push and not pre-commit
+/// -------------------------------
+/// Per-commit `pkspec check` adds ~300 ms to every `git commit`,
+/// including amends and fixups. pre-push runs once when the changes
+/// actually leave your machine — the moment a contract gate
+/// actually matters. Bypass for emergencies: `git push --no-verify`.
+///
+/// Why a recipe and not a hook script
+/// ----------------------------------
+/// pkfire owns the hook surface (`pkf hooks install`). Declaring
+/// pre-push as a pkfire Task keeps the dependency graph visible to
+/// `pkf list --long` and lets `pkf affected --since` skip the gate
+/// when no spec / marker source changed since `origin/main`.
+///
+/// Prereq
+/// ------
+/// `pkspec` on PATH (`go install github.com/mizchi/pkspec/cmd/...@latest`
+/// or `nix profile install github:mizchi/pkspec`).
+///
+/// One-time setup
+/// --------------
+///   pkf hooks install
+///
+/// After that, `git push` fires `.git/hooks/pre-push` which runs
+/// `pkf run pre-push`, which deps on `spec-check` here.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local specSources: Listing<String> = new {
+  "SPEC.pkl"
+  "specs/**/*.pkl"
+  "examples/*/Spec.pkl"
+  "examples/*/Test.pkl"
+}
+
+local markerSources: Listing<String> = new {
+  "cmd/**/*.go"
+  "internal/**/*.go"
+  "src/**/*.ts"
+  "src/**/*.tsx"
+}
+
+/// Strict spec gate. `--strict` upgrades warnings (orphan tests,
+/// undocumented Scenarios) to errors. Cached on spec + marker
+/// sources so an unchanged tree is a no-op rerun.
+local specCheck: Task = new {
+  name = "spec-check"
+  description = "pkspec check --strict (pre-push spec gate)"
+  cmd = "pkspec check --strict $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  inputs {
+    ...specSources
+    ...markerSources
+  }
+}
+
+/// Optional companion: marker scan. Catches broken
+/// `pkspec:spec=<id>` references in code that the strict check
+/// alone does not flag if no Scenario imports them.
+local specLintScan: Task = new {
+  name = "spec-lint-scan"
+  description = "pkspec lint --scan for dead source markers"
+  cmd = "pkspec lint --scan $SPEC_PATHS"
+  env { ["SPEC_PATHS"] = specSources.join(" ") }
+  inputs {
+    ...specSources
+    ...markerSources
+  }
+}
+
+/// Hook target. `pkf hooks install` wires `.git/hooks/pre-push` to
+/// this aggregator. Add more pre-push gates (secretlint, full test
+/// suite) by extending `deps`.
+local prePush: Task = new {
+  name = "pre-push"
+  description = "Pre-push gate: spec-check + spec-lint-scan"
+  cmd = "echo pre-push ok"
+  cache = false
+  deps { specCheck; specLintScan }
+}
+
+tasks { specCheck; specLintScan; prePush }
+
+// ---------------------------------------------------------------
+// Combining with recipe 14 (secretlint)
+// ---------------------------------------------------------------
+//
+// To run both secretlint AND spec checks on pre-push, merge the
+// `deps` blocks:
+//
+//   local prePush = new Task {
+//     name = "pre-push"; cache = false
+//     deps { secretlint; specCheck; specLintScan }
+//     cmd = "echo pre-push ok"
+//   }
+//
+// The order in `deps` is for declaration only — pkfire builds the
+// DAG and runs independent leaves in parallel.

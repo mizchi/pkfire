@@ -13,7 +13,7 @@ _pkf() {
 
   # First positional = subcommand.
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "init list run up doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
+    COMPREPLY=($(compgen -W "init list describe run up doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
     return
   fi
 
@@ -58,6 +58,15 @@ _pkf() {
       if [[ "$cur" == -* ]]; then return; fi
       local tasks
       tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+      ;;
+    describe)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
+        return
+      fi
+      local tasks
+      tasks=$(pkf list --all 2>/dev/null | awk '{print $1}')
       COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
       ;;
     hooks)
