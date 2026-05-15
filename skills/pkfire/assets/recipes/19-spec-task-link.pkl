@@ -17,7 +17,7 @@
 ///        name = "release tag is pushed by the runner"
 ///        reviewStatus = "approved"
 ///        implementations {
-///          new { kind = "task"; at = "Taskfile.pkl#release" }
+///          new TaskImpl { at = "Taskfile.pkl#release" }
 ///        }
 ///      }
 ///    }
@@ -144,7 +144,7 @@ tasks { release; migrateDb; specCheck }
 //       name = "release tag is pushed by the runner"
 //       reviewStatus = "approved"
 //       implementations {
-//         new { kind = "task"; at = "Taskfile.pkl#release" }
+//         new TaskImpl { at = "Taskfile.pkl#release" }
 //       }
 //     }
 //     new {
@@ -152,7 +152,7 @@ tasks { release; migrateDb; specCheck }
 //       name = "schema migrations are applied at release"
 //       reviewStatus = "approved"
 //       implementations {
-//         new { kind = "task"; at = "Taskfile.pkl#migrate-db" }
+//         new TaskImpl { at = "Taskfile.pkl#migrate-db" }
 //       }
 //     }
 //   }
