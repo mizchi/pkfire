@@ -145,6 +145,31 @@ func ExpandInputs(root string, patterns []string) ([]string, error) {
 	return out, nil
 }
 
+// ExpandOutputs resolves output glob patterns under `root` into a sorted,
+// deduplicated list of paths (relative to `root`). Unlike ExpandInputs it
+// preserves directory matches so callers can walk them, and patterns that
+// match nothing are silently skipped — a task may legitimately declare an
+// optional artifact that this run did not produce.
+func ExpandOutputs(root string, patterns []string) ([]string, error) {
+	rootFS := os.DirFS(root)
+	seen := make(map[string]struct{})
+	for _, p := range patterns {
+		matches, err := doublestar.Glob(rootFS, filepath.ToSlash(p))
+		if err != nil {
+			return nil, fmt.Errorf("glob %q: %w", p, err)
+		}
+		for _, m := range matches {
+			seen[m] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // HashInputs expands `patterns` under `root` and returns one FileEntry per
 // matched regular file, in sorted-path order.
 func HashInputs(root string, patterns []string) ([]FileEntry, error) {
