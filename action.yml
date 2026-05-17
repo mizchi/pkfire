@@ -45,6 +45,8 @@ runs:
     - name: Resolve version and platform
       id: resolve
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         # GHA can't parse `uses: <repo>@pkfire@<ver>` (the second `@` in
@@ -52,6 +54,17 @@ runs:
         # DR-0004). So the action ref is `v<ver>` or `v<major>`; we
         # normalize either form into the underlying release tag
         # `pkfire@<ver>` that the release assets live under.
+        # When a workflow token is available, attach it to the GitHub
+        # API calls below so the request goes against the authenticated
+        # 5000-req/hr ceiling instead of the unauthenticated 60-req/hr
+        # one. Consumers that don't pass `permissions.contents: read`
+        # fall back to anonymous mode; the call still works on a quiet
+        # runner but flakes on busy shared IP pools.
+        gh_auth_arg=()
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+          gh_auth_arg=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+        fi
+
         normalize() {
           local raw="$1"
           case "$raw" in
@@ -63,7 +76,7 @@ runs:
               # Floating major: pick the latest release whose tag
               # matches pkfire@<major>.*
               local major="${raw#v}"
-              curl -fsSL https://api.github.com/repos/mizchi/pkfire/releases \
+              curl -fsSL "${gh_auth_arg[@]}" https://api.github.com/repos/mizchi/pkfire/releases \
                 | sed -n 's/.*"tag_name": *"\(pkfire@'"$major"'\.[^"]*\)".*/\1/p' \
                 | head -n1
               return ;;
@@ -76,7 +89,7 @@ runs:
           version="$(normalize "${{ github.action_ref }}")"
         fi
         if [ -z "$version" ]; then
-          version=$(curl -fsSL https://api.github.com/repos/mizchi/pkfire/releases/latest \
+          version=$(curl -fsSL "${gh_auth_arg[@]}" https://api.github.com/repos/mizchi/pkfire/releases/latest \
             | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
         fi
         if [ -z "$version" ]; then
