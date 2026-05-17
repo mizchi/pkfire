@@ -171,6 +171,71 @@ func TestRestoreRejectsAbsoluteSymlink(t *testing.T) {
 	}
 }
 
+func TestStoreExpandsGlobOutputs(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	cas := t.TempDir()
+
+	mustWrite(t, filepath.Join(src, "js/dist/index.js"), "INDEX")
+	mustWrite(t, filepath.Join(src, "js/dist/crater.wasm"), "WASM")
+	mustWrite(t, filepath.Join(src, "js/dist/nested/util.js"), "UTIL")
+	mustWrite(t, filepath.Join(src, "js/dist/types/index.d.ts"), "DTS")
+	mustWrite(t, filepath.Join(src, "untouched.txt"), "should-not-cache")
+
+	c := cache.New(cas)
+	key := [32]byte{0xee}
+
+	// `js/dist/**` is the pattern declared by real Taskfiles. Without
+	// glob expansion the cache would Lstat the literal `js/dist/**`
+	// path, fail with ErrNotExist, skip it silently, and store an
+	// empty archive — exactly the poisoned-cache regression this
+	// test guards against.
+	if err := c.Store(key, src, []string{"js/dist/**"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := c.Restore(key, dst); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	for rel, want := range map[string]string{
+		"js/dist/index.js":         "INDEX",
+		"js/dist/crater.wasm":      "WASM",
+		"js/dist/nested/util.js":   "UTIL",
+		"js/dist/types/index.d.ts": "DTS",
+	} {
+		got, err := os.ReadFile(filepath.Join(dst, rel))
+		if err != nil {
+			t.Errorf("%s not restored: %v", rel, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", rel, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "untouched.txt")); !os.IsNotExist(err) {
+		t.Errorf("non-output file should not have been cached: err=%v", err)
+	}
+}
+
+func TestStoreSilentlySkipsNonMatchingGlobs(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "real.txt"), "x")
+	c := cache.New(t.TempDir())
+	key := [32]byte{0xef}
+	// `dist/**` matches nothing; should not fail Store. The literal
+	// `real.txt` still archives.
+	if err := c.Store(key, src, []string{"dist/**", "real.txt"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	dst := t.TempDir()
+	if err := c.Restore(key, dst); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "real.txt")); err != nil {
+		t.Errorf("real.txt should be restored: %v", err)
+	}
+}
+
 func TestRestoreIsHermeticAgainstSiblingFiles(t *testing.T) {
 	src := t.TempDir()
 	mustWrite(t, filepath.Join(src, "out/a"), "AA")

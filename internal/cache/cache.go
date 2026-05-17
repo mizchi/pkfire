@@ -161,7 +161,11 @@ func writeArchive(w io.Writer, root string, outputs []string) error {
 	}
 	tw := tar.NewWriter(zw)
 
-	for _, rel := range outputs {
+	expanded, err := hash.ExpandOutputs(root, outputs)
+	if err != nil {
+		return err
+	}
+	for _, rel := range expanded {
 		full := filepath.Join(root, rel)
 		info, err := os.Lstat(full)
 		if err != nil {
