@@ -10,9 +10,56 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-18
+
+### Added
+
+- `pkf describe <task>` and `pkf run <task> --help` / `-h` print
+  desc / params / inputs / outputs / cache / deps / dependents for
+  a single task. `--json` form for tooling. Closes #11.
+- Top-level `pkf cache --help` / `-h` / `help` now prints the cache
+  usage block instead of erroring with "unknown subcommand". Every
+  other subcommand — `init`, `list`, `describe`, `run`, `up`,
+  `doctor`, `lint`, `format`, `hooks`, `affected`, `clean`,
+  `completion`, `graph`, `explain`, `migrate`, `pkl-cache` — ships a
+  dedicated usage block reachable via `pkf <sub> -h`. Closes #12.
+- `pkf info` prints a one-shot Taskfile snapshot — path, schema
+  version (extracted from the `amends` URI), defaults, every visible
+  task, every workflowTest — as either a plain-text summary or
+  `--json` for downstream doc / report generators.
+- pkfire ↔ pkspec linking surfaces. `Task.specRef: String?` declares
+  which Scenario a Task implements; `pkf affected --with-specs` cross-
+  references the affected task set against pkspec Scenarios; recipes
+  17–19 (pkspec-checks, pkspec-check-pre-push, spec-task-link)
+  document the integration. The pkspec side ships
+  `Implementation kind = "task"` and `pkspec check --strict` cross-
+  validates the Taskfile path / task name.
+- `skills/pkfire/assets/recipes/16-release-version-bump.pkl` recipe.
+  `pkf run bump-version --from=X --to=Y [--commit=true]` sed-rewrites
+  a pinned file list (flake.nix, action.yml, README, docs/quick-
+  start.md, …) so the release-tag prelude collapses to one command.
+  Portable between BSD and GNU sed. Closes #13.
+
 ### Changed
 
+- `pkf doctor` elevates the cache row to `WARN` and recommends
+  `pkf cache prune` once cache size or entry count crosses
+  configurable thresholds. Tunable via `PKFIRE_CACHE_WARN_SIZE_MB`
+  (default 500) and `PKFIRE_CACHE_WARN_ENTRIES` (default 2000); set
+  either to 0 to disable. Closes #14.
 - Examples now amend the published `pkfire@0.10.0` Pkl package.
+
+### Fixed
+
+- `writeArchive` previously passed each output pattern through
+  `filepath.Join` + `os.Lstat` as if it were a literal path. Glob
+  patterns like `js/dist/**` resolved to nonexistent literal paths,
+  silently skipped via the `ErrNotExist` branch, and the resulting
+  cache archive was empty. Subsequent runs hit the cache entry,
+  restored an empty archive, and any downstream task needing the
+  missing artifacts failed with ENOENT. The archive walker now
+  expands globs via `doublestar.Glob` before staging files. Closes
+  #15.
 
 ## [0.10.0] - 2026-05-14
 
