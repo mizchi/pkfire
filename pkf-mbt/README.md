@@ -98,11 +98,12 @@ so any HTTP server that supports `GET`/`PUT` works as a backend. Each
 file is one request; archive support (single tarball per entry) is a
 future improvement once tar+zstd land in the MoonBit ecosystem.
 
-Limitations:
-
-- File mode is not preserved on restore — restored binaries lose the
-  executable bit and need `chmod +x` manually (or via a downstream
-  task). Tracked as a follow-up.
+File mode preservation: each manifest entry records `<rel>\t<mode>`. At
+store time the mode is detected from the file's magic bytes (ELF,
+Mach-O 32/64 LE/BE, Mach-O fat, Windows PE, shebang → 0o755; everything
+else → 0o644). At restore time the recorded mode is reapplied via
+`mizchi/x/fs.chmod`. Older single-column manifests fall back to 0o644
+for backwards compatibility.
 
 ## Subcommands
 

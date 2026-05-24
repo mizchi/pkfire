@@ -443,6 +443,79 @@ fn rm_rf(path : String) -> Unit {
 }
 
 ///|
+// ---------------------------------------------------------------------------
+// File-mode preservation.
+//
+// MoonBit's fs surface exposes `chmod` but not `stat`, so we can't read
+// the source file's mode at store time. Instead, detect executable
+// payloads by their magic bytes (ELF / Mach-O / Mach-O fat / Windows
+// PE / shebang) and record a "755" mode in the manifest. The restore
+// path reads the recorded mode and applies it via `@mfs.chmod`.
+// ---------------------------------------------------------------------------
+
+///|
+fn looks_executable(bytes : Bytes) -> Bool {
+  if bytes.length() < 2 {
+    return false
+  }
+  let b0 = bytes[0].to_int()
+  let b1 = bytes[1].to_int()
+  // Shebang
+  if b0 == 0x23 && b1 == 0x21 {
+    return true
+  }
+  if bytes.length() < 4 {
+    return false
+  }
+  let b2 = bytes[2].to_int()
+  let b3 = bytes[3].to_int()
+  // ELF: 0x7F 'E' 'L' 'F'
+  if b0 == 0x7f && b1 == 0x45 && b2 == 0x4c && b3 == 0x46 {
+    return true
+  }
+  // Mach-O 64 LE: cf fa ed fe
+  if b0 == 0xcf && b1 == 0xfa && b2 == 0xed && b3 == 0xfe {
+    return true
+  }
+  // Mach-O 32 LE: ce fa ed fe
+  if b0 == 0xce && b1 == 0xfa && b2 == 0xed && b3 == 0xfe {
+    return true
+  }
+  // Mach-O 64 BE: fe ed fa cf
+  if b0 == 0xfe && b1 == 0xed && b2 == 0xfa && b3 == 0xcf {
+    return true
+  }
+  // Mach-O 32 BE: fe ed fa ce
+  if b0 == 0xfe && b1 == 0xed && b2 == 0xfa && b3 == 0xce {
+    return true
+  }
+  // Mach-O fat: ca fe ba be (also Java class — caller domain is build
+  // outputs, not class files, so treating as executable is fine).
+  if b0 == 0xca && b1 == 0xfe && b2 == 0xba && b3 == 0xbe {
+    return true
+  }
+  // Windows PE: 'M' 'Z'
+  if b0 == 0x4d && b1 == 0x5a {
+    return true
+  }
+  false
+}
+
+///|
+fn detect_file_mode(path : String) -> Int {
+  // Returns 0o755 for files that look like executables (binary or
+  // shebang), 0o644 otherwise. Reads at most the magic prefix.
+  let bytes = @fs.read_file_to_bytes(path) catch {
+    _ => Bytes::new(0)
+  }
+  if looks_executable(bytes) {
+    0o755
+  } else {
+    0o644
+  }
+}
+
+///|
 fn copy_file(src : String, dst : String) -> Unit {
   let parent = dirname(dst)
   if parent.length() > 0 {
@@ -770,14 +843,14 @@ fn cache_store(
         let nested_src = join_path(root, nested)
         let nested_dst = join_path(outputs_dir, nested)
         copy_file(nested_src, nested_dst)
-        manifest.write_string(nested)
-        manifest.write_char('\n')
+        let mode = detect_file_mode(nested_src)
+        write_manifest_entry(manifest, nested, mode)
       }
     } else {
       let dst = join_path(outputs_dir, rel)
       copy_file(src, dst)
-      manifest.write_string(rel)
-      manifest.write_char('\n')
+      let mode = detect_file_mode(src)
+      write_manifest_entry(manifest, rel, mode)
     }
   }
   @fs.write_string_to_file(
@@ -789,7 +862,66 @@ fn cache_store(
 }
 
 ///|
-fn cache_restore(key : String, root : String) -> Unit {
+fn write_manifest_entry(buf : StringBuilder, rel : String, mode : Int) -> Unit {
+  // Format: `<rel>\t<mode-octal>\n`. The tab + mode column is the
+  // backwards-compatible extension — older single-column manifests
+  // still parse via `parse_manifest_line` below (mode defaults to
+  // 0o644).
+  buf.write_string(rel)
+  buf.write_char('\t')
+  buf.write_string(int_to_octal(mode))
+  buf.write_char('\n')
+}
+
+///|
+fn int_to_octal(n : Int) -> String {
+  if n == 0 {
+    return "0"
+  }
+  let buf = StringBuilder::new(size_hint=4)
+  let mut v = n
+  let digits : Array[Char] = []
+  while v > 0 {
+    digits.push(Int::unsafe_to_char((v % 8) + '0'.to_int()))
+    v = v / 8
+  }
+  for i = digits.length() - 1; i >= 0; i = i - 1 {
+    buf.write_char(digits[i])
+  }
+  buf.to_string()
+}
+
+///|
+fn parse_octal(s : String) -> Int {
+  let mut v = 0
+  for i in 0..<s.length() {
+    let c = s[i].to_int()
+    if c >= '0'.to_int() && c <= '7'.to_int() {
+      v = v * 8 + (c - '0'.to_int())
+    } else {
+      break
+    }
+  }
+  v
+}
+
+///|
+fn parse_manifest_line(line : String) -> (String, Int) {
+  // Returns (rel, mode). Older single-column manifests fall back to
+  // 0o644 (no chmod applied at restore beyond what `write_bytes_to_file`
+  // produces by default).
+  match line.find("\t") {
+    Some(idx) => {
+      let rel = line.substring(start=0, end=idx)
+      let mode_str = line.substring(start=idx + 1, end=line.length())
+      (rel, parse_octal(mode_str))
+    }
+    None => (line, 0o644)
+  }
+}
+
+///|
+async fn cache_restore(key : String, root : String) -> Unit {
   let dir = entry_dir(key)
   let outputs_dir = join_path(dir, "outputs")
   let manifest_path = join_path(dir, "manifest")
@@ -797,10 +929,11 @@ fn cache_restore(key : String, root : String) -> Unit {
     _ => ""
   }
   for line in manifest.split("\n") {
-    let rel = line.to_string()
-    if rel.length() == 0 {
+    let raw = line.to_string()
+    if raw.length() == 0 {
       continue
     }
+    let (rel, mode) = parse_manifest_line(raw)
     let src = join_path(outputs_dir, rel)
     let dst = if root.length() == 0 || root == "." {
       rel
@@ -808,6 +941,12 @@ fn cache_restore(key : String, root : String) -> Unit {
       join_path(root, rel)
     }
     copy_file(src, dst)
+    // Preserve the recorded mode (executable bit, etc.). Best-effort:
+    // chmod failures are swallowed so a read-only target FS doesn't
+    // abort the restore.
+    @xfs.chmod(dst.view(), mode) catch {
+      _ => ()
+    }
   }
 }
 
