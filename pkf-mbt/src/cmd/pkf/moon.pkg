@@ -1,6 +1,7 @@
 import {
   "mizchi/pkf-mbt/src/loader" @loader,
   "mizchi/pkl" @pkl,
+  "mizchi/x/fs" @xfs,
   "mizchi/x/http" @http,
   "mizchi/x/process" @process,
   "mizchi/x/signal" @signal,
