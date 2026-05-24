@@ -19,7 +19,7 @@ This is an experimental rewrite that lives alongside the Go pkfire (the binary a
 | `pkf affected [path...]` / `--check` | yes | yes |
 | Content-addressed cache (local) | yes (SHA-256, flat dir) | yes (BLAKE3, tar.zst) |
 | Cache interop with go pkfire | no (separate namespace) | n/a |
-| Remote cache | no | yes |
+| Remote cache (HTTP) | yes (env-driven) | yes |
 | Watch mode | no | yes |
 | `pkf list` / `pkf graph` / `pkf affected` | no | yes |
 | Pkl evaluation | in-process via `mizchi/pkl` library | in-process via pkl-go binding |
@@ -82,6 +82,27 @@ Wire incompatibility with go pkfire is intentional for the MVP:
 Future phases can swap in BLAKE3 + tar.zst once those land in the MoonBit
 ecosystem; the action-key text format already mirrors go pkfire's so the
 key hex stays bit-stable across the swap.
+
+### Remote cache
+
+Set `PKFIRE_MBT_REMOTE_CACHE` to an HTTP base URL and (optionally)
+`PKFIRE_MBT_REMOTE_TOKEN` for a `Authorization: Bearer <token>` header.
+On cache miss, `pkf` first checks the local CAS, then the remote backend
+via `GET <base>/cas/<key[0:2]>/<key[2:]>/{manifest, outputs/<rel>}`. A
+remote hit warms the local CAS as it restores. After a successful build,
+the local store is followed by a best-effort PUT of the same files —
+upload failures log once and never abort the run.
+
+Layout matches the local CAS (manifest text file + flat output tree),
+so any HTTP server that supports `GET`/`PUT` works as a backend. Each
+file is one request; archive support (single tarball per entry) is a
+future improvement once tar+zstd land in the MoonBit ecosystem.
+
+Limitations:
+
+- File mode is not preserved on restore — restored binaries lose the
+  executable bit and need `chmod +x` manually (or via a downstream
+  task). Tracked as a follow-up.
 
 ## Subcommands
 
