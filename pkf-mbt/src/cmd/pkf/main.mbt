@@ -49,10 +49,19 @@ struct Task {
 }
 
 ///|
+struct WorkflowTest {
+  name : String
+  changed : Array[String]
+  tasks : Array[String]
+  direct : Array[String]
+}
+
+///|
 struct Plan {
   default_env : Map[String, String]
   tasks : Map[String, Task]
   task_order : Array[String]
+  workflow_tests : Array[WorkflowTest]
 }
 
 ///|
@@ -287,7 +296,41 @@ fn parse_plan(raw : String) -> Plan {
       visibility,
     }
   }
-  Plan::{ default_env, tasks, task_order }
+  let workflow_tests : Array[WorkflowTest] = []
+  match entries.get("workflowTests") {
+    Some(Array(raw_tests)) =>
+      for raw in raw_tests {
+        match raw {
+          Object(e) => {
+            let name = match e.get("name") {
+              Some(v) => parse_string(v)
+              None => continue
+            }
+            let changed = match e.get("changed") {
+              Some(v) => parse_string_array(v)
+              None => []
+            }
+            let wt_tasks = match e.get("tasks") {
+              Some(v) => parse_string_array(v)
+              None => []
+            }
+            let direct = match e.get("direct") {
+              Some(v) => parse_string_array(v)
+              None => []
+            }
+            workflow_tests.push(WorkflowTest::{
+              name,
+              changed,
+              tasks: wt_tasks,
+              direct,
+            })
+          }
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  Plan::{ default_env, tasks, task_order, workflow_tests }
 }
 
 ///|
@@ -1337,6 +1380,251 @@ fn upcase(name : String) -> String {
 
 ///|
 // ---------------------------------------------------------------------------
+// `pkf affected` — given a set of changed file paths, compute the run plan.
+//
+// Algorithm:
+//   1. `direct` = every task whose declared `inputs` glob matches a
+//      changed path. Ordered by authored task_order.
+//   2. Expand to `affected` via reverse-edge closure: if task A is in
+//      `affected` and another task B has A in its `deps`, B becomes
+//      affected too (a dependent re-runs when its dep is dirty).
+//   3. Expand each affected task to include its own transitive deps
+//      (so the plan is closed under "needs to run before me").
+//   4. Topological sort over the resulting set.
+//
+// `--check` re-runs each declared `WorkflowTest` against the algorithm
+// and asserts the computed plan matches the test's `tasks` (and
+// optionally `direct`) — handy for catching schema drift in CI.
+// ---------------------------------------------------------------------------
+
+///|
+fn task_inputs_match_any(task : Task, changed : Array[String]) -> Bool {
+  for change in changed {
+    for pattern in task.inputs {
+      if glob_match(pattern, change) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+///|
+fn compute_affected(
+  plan : Plan,
+  changed : Array[String],
+) -> (Array[String], Array[String]) {
+  // Direct hits: tasks whose inputs glob matches a changed path.
+  let direct_set : Map[String, Bool] = Map([], capacity=plan.task_order.length())
+  let direct : Array[String] = []
+  for name in plan.task_order {
+    let task = match plan.tasks.get(name) {
+      Some(t) => t
+      None => continue
+    }
+    if task_inputs_match_any(task, changed) {
+      direct_set[name] = true
+      direct.push(name)
+    }
+  }
+  // Reverse-edge closure: pull every dependent of an already-affected
+  // task into the affected set. Loop until the set stops growing.
+  let affected : Map[String, Bool] = Map([], capacity=plan.task_order.length())
+  for n in direct {
+    affected[n] = true
+  }
+  let mut changed_set = true
+  while changed_set {
+    changed_set = false
+    for name in plan.task_order {
+      if affected.get(name) is Some(true) {
+        continue
+      }
+      let task = match plan.tasks.get(name) {
+        Some(t) => t
+        None => continue
+      }
+      for dep in task.deps {
+        if affected.get(dep) is Some(true) {
+          affected[name] = true
+          changed_set = true
+          break
+        }
+      }
+    }
+  }
+  // Pull in each affected task's own deps so the plan is runnable.
+  let plan_set : Map[String, Bool] = Map([], capacity=affected.length())
+  for name, _ in affected {
+    let order = topo_sort_for(name, plan)
+    for n in order {
+      plan_set[n] = true
+    }
+  }
+  // Produce the final plan in topological order. We compute the topo
+  // for each affected task and union; then re-emit in plan.task_order's
+  // authored ordering (filtered to plan_set members) — that matches
+  // Apple pkfire's output, which sorts the affected set by authored
+  // order and then expands deps. For multi-root sets we walk each
+  // affected task's topo and dedupe; the result is the affected set
+  // listed in the order they'd run.
+  let final_plan : Array[String] = []
+  let seen : Map[String, Bool] = Map([], capacity=plan_set.length())
+  for name in plan.task_order {
+    if plan_set.get(name) is Some(true) && seen.get(name) is None {
+      final_plan.push(name)
+      seen[name] = true
+    }
+  }
+  // Sort with deps before dependents within the affected set: walk
+  // plan.task_order forward but emit each task only after its deps
+  // have been emitted. The simple authored-order pass above is wrong
+  // when an inserted dep sits later in task_order than its dependent
+  // (rare but possible). Reorder with a classical DFS topo sort
+  // restricted to plan_set.
+  let topo_out : Array[String] = []
+  let topo_visited : Map[String, Bool] = Map([], capacity=plan_set.length())
+  let topo_stack : Map[String, Bool] = Map([], capacity=plan_set.length())
+  fn visit(name : String) -> Unit {
+    if topo_visited.get(name) is Some(true) {
+      return
+    }
+    if topo_stack.get(name) is Some(true) {
+      return
+    }
+    topo_stack[name] = true
+    let task = match plan.tasks.get(name) {
+      Some(t) => t
+      None => {
+        let _ = topo_stack.remove(name)
+        return
+      }
+    }
+    for dep in task.deps {
+      if plan_set.get(dep) is Some(true) {
+        visit(dep)
+      }
+    }
+    let _ = topo_stack.remove(name)
+    topo_visited[name] = true
+    topo_out.push(name)
+  }
+
+  for name in final_plan {
+    visit(name)
+  }
+  (direct, topo_out)
+}
+
+///|
+async fn affected_cmd(args : ArrayView[String]) -> Int {
+  let mut check_mode = false
+  let mut changed_file : String? = None
+  let positional : Array[String] = []
+  let mut i = 0
+  while i < args.length() {
+    let arg = args[i]
+    if arg == "--check" {
+      check_mode = true
+    } else if arg.has_prefix("--changed=") {
+      changed_file = Some(arg.substring(start=10, end=arg.length()))
+    } else if arg.has_prefix("--") {
+      die("pkf affected: unknown flag `\{arg}`")
+      return 2
+    } else {
+      positional.push(arg)
+    }
+    i = i + 1
+  }
+  let taskfile = locate_taskfile()
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  if check_mode {
+    if plan.workflow_tests.length() == 0 {
+      println("pkf affected --check: no workflowTests declared")
+      return 0
+    }
+    let mut failed = 0
+    for wt in plan.workflow_tests {
+      let (direct, computed) = compute_affected(plan, wt.changed)
+      let plan_ok = string_arrays_equal(computed, wt.tasks)
+      let direct_ok = wt.direct.length() == 0 ||
+        string_arrays_equal(direct, wt.direct)
+      if plan_ok && direct_ok {
+        println("PASS  \{wt.name}")
+      } else {
+        failed = failed + 1
+        println("FAIL  \{wt.name}")
+        if !plan_ok {
+          println("  expected plan:   " + join_list(wt.tasks))
+          println("  computed plan:   " + join_list(computed))
+        }
+        if !direct_ok {
+          println("  expected direct: " + join_list(wt.direct))
+          println("  computed direct: " + join_list(direct))
+        }
+      }
+    }
+    if failed > 0 {
+      println("\{failed} / \{plan.workflow_tests.length()} workflow tests failed")
+      return 1
+    }
+    println("all \{plan.workflow_tests.length()} workflow tests passed")
+    0
+  } else {
+    if positional.length() == 0 && changed_file is None {
+      die(
+        "pkf affected: expected at least one positional <path> or --changed=<file>",
+      )
+      return 2
+    }
+    let changed : Array[String] = []
+    for p in positional {
+      changed.push(p)
+    }
+    match changed_file {
+      Some(_) => {
+        // Reading from a file would require @fs streaming; leave as a
+        // future improvement.
+        die("pkf affected: --changed=<file> is not yet supported")
+        return 2
+      }
+      None => ()
+    }
+    let (_, computed) = compute_affected(plan, changed)
+    for name in computed {
+      println(name)
+    }
+    0
+  }
+}
+
+///|
+fn string_arrays_equal(a : Array[String], b : Array[String]) -> Bool {
+  if a.length() != b.length() {
+    return false
+  }
+  for i in 0..<a.length() {
+    if a[i] != b[i] {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn join_list(items : Array[String]) -> String {
+  let mut out = "["
+  for i, item in items {
+    if i > 0 {
+      out = out + ", "
+    }
+    out = out + item
+  }
+  out + "]"
+}
+
+// ---------------------------------------------------------------------------
 // `pkf list` / `pkf graph` — repo-level introspection over the Taskfile.
 // ---------------------------------------------------------------------------
 
@@ -1502,12 +1790,14 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       #|  run <task> [--name=value]... [-- positional...]
       #|  list [-v] [--all]
       #|  graph [--all]
+      #|  affected <path>... | --check
     println(msg)
     return 2
   }
   match args[0] {
     "list" => list_cmd(args[1:])
     "graph" => graph_cmd(args[1:])
+    "affected" => affected_cmd(args[1:])
     "run" => {
       let parsed = parse_run_args(args[1:])
       if parsed.target.length() == 0 {
