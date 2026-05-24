@@ -16,6 +16,7 @@ This is an experimental rewrite that lives alongside the Go pkfire (the binary a
 | `acceptsArgs` positional args | yes | yes |
 | Long-running `services` (start + readiness + teardown) | yes | yes |
 | `pkf list` / `pkf graph` (introspection) | yes | yes |
+| `pkf affected [path...]` / `--check` | yes | yes |
 | Content-addressed cache (local) | yes (SHA-256, flat dir) | yes (BLAKE3, tar.zst) |
 | Cache interop with go pkfire | no (separate namespace) | n/a |
 | Remote cache | no | yes |
@@ -88,6 +89,8 @@ key hex stays bit-stable across the swap.
 pkf run <task> [--name=value]... [-- positional...]
 pkf list [-v] [--all]                   # tasks in authored order; -v adds params/deps/inputs/outputs
 pkf graph [--all]                       # ASCII deps tree per public task
+pkf affected <path>...                  # print the run plan for the given changed files
+pkf affected --check                    # run declared workflowTests and assert plans
 ```
 
 `--all` includes `visibility = "internal"` tasks; otherwise they are hidden. Service tasks show in `list` with a `[service]` tag and are otherwise treated like regular tasks (apart from being rejected as direct `pkf run` targets).
