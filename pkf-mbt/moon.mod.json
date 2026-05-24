@@ -1,0 +1,11 @@
+{
+  "name": "mizchi/pkf-mbt",
+  "version": "0.0.1",
+  "deps": {
+    "mizchi/pkl": "0.2.2",
+    "mizchi/x": "0.3.3",
+    "moonbitlang/async": "0.19.0",
+    "moonbitlang/x": "0.4.43"
+  },
+  "preferred-target": "native"
+}
