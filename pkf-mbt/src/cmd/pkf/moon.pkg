@@ -1,0 +1,23 @@
+import {
+  "mizchi/pkf-mbt/src/loader" @loader,
+  "mizchi/pkl" @pkl,
+  "mizchi/x/process" @process,
+  "mizchi/x/signal" @signal,
+  "mizchi/x/socket" @socket,
+  "moonbitlang/async",
+  "moonbitlang/core/encoding/utf8" @utf8,
+  "moonbitlang/core/json" @json,
+  "moonbitlang/core/strconv" @strconv,
+  "moonbitlang/x/crypto" @crypto,
+  "moonbitlang/x/fs" @fs,
+  "moonbitlang/x/sys" @sys,
+}
+
+warnings = "-0029-0014-0024-0009"
+
+options(
+  "is-main": true,
+  targets: {
+    "main.mbt": [ "native" ],
+  },
+)
