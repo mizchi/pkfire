@@ -41,6 +41,7 @@ struct Task {
   service : Bool
   services : Array[String]
   ready_port : Int
+  ready_cmd : String
   ready_timeout_seconds : Int
   shutdown_timeout_seconds : Int
   description : String?
@@ -220,6 +221,10 @@ fn parse_plan(raw : String) -> Plan {
       Some(Number(n, ..)) => n.to_int()
       _ => 0
     }
+    let ready_cmd = match task_entries.get("readyCmd") {
+      Some(v) => parse_string(v)
+      None => ""
+    }
     let ready_timeout_seconds = match task_entries.get("readyTimeoutSeconds") {
       Some(Number(n, ..)) => n.to_int()
       _ => 30
@@ -275,6 +280,7 @@ fn parse_plan(raw : String) -> Plan {
       service,
       services,
       ready_port,
+      ready_cmd,
       ready_timeout_seconds,
       shutdown_timeout_seconds,
       description,
@@ -789,15 +795,57 @@ async fn probe_port(port : Int) -> Bool {
 }
 
 ///|
-async fn wait_until_ready(port : Int, timeout_seconds : Int) -> Bool {
-  // Poll every 50ms up to `timeout_seconds`. Returns true once the port
-  // accepts a connection.
-  let deadline_iters = timeout_seconds * 20
+async fn run_ready_cmd(task : Task) -> Bool {
+  // Single readiness-probe shell execution. The probe is considered
+  // ready when the cmd exits 0 — matches `pg_isready`, `curl -sf`,
+  // etc. The default 5-second timeout shields against a buggy probe
+  // hanging indefinitely.
+  let argv : Array[String] = []
+  for flag in task.shell_flags {
+    argv.push(flag)
+  }
+  argv.push(task.ready_cmd)
+  // Suppress probe output by collecting stdout/stderr instead of
+  // inheriting — health-check chatter shouldn't drown the pkf log.
+  let (code, _, _) = match task.workdir {
+    Some(cwd) =>
+      @process.collect_output(
+        task.shell.view(),
+        argv[:],
+        inherit_env=task.inherit_env,
+        cwd=cwd.view(),
+      )
+    None =>
+      @process.collect_output(
+        task.shell.view(),
+        argv[:],
+        inherit_env=task.inherit_env,
+      )
+  }
+  code == 0
+}
+
+///|
+async fn wait_until_ready(task : Task) -> Bool {
+  // Poll readiness probes every 100ms up to `readyTimeoutSeconds`.
+  // When both `readyPort` and `readyCmd` are set, BOTH must pass —
+  // pg_isready alone doesn't guarantee the TCP socket is bound and
+  // vice versa. Returns true on first joint success. When neither is
+  // set, the call is a no-op (service is considered immediately
+  // ready, matching Apple pkfire).
+  let has_port = task.ready_port > 0
+  let has_cmd = task.ready_cmd.length() > 0
+  if !has_port && !has_cmd {
+    return true
+  }
+  let deadline_iters = task.ready_timeout_seconds * 10
   for i in 0..<deadline_iters {
-    if probe_port(port) {
+    let port_ok = if has_port { probe_port(task.ready_port) } else { true }
+    let cmd_ok = if has_cmd { run_ready_cmd(task) } else { true }
+    if port_ok && cmd_ok {
       return true
     }
-    @async.sleep(50)
+    @async.sleep(100)
     ignore(i)
   }
   false
@@ -867,18 +915,13 @@ async fn[X] start_service(
         new_process_group=true,
       )
   }
-  // Wait for readiness.
-  if service_task.ready_port > 0 {
-    let ok = wait_until_ready(
-      service_task.ready_port,
-      service_task.ready_timeout_seconds,
+  // Wait for readiness (readyPort + readyCmd, whichever are set).
+  let ok = wait_until_ready(service_task)
+  if !ok {
+    proc.cancel()
+    raise Failure(
+      "service `\{service_task.name}` did not become ready within \{service_task.ready_timeout_seconds}s",
     )
-    if !ok {
-      proc.cancel()
-      raise Failure(
-        "service `\{service_task.name}` did not become ready on port \{service_task.ready_port} within \{service_task.ready_timeout_seconds}s",
-      )
-    }
   }
   RunningService::{
     name: service_task.name,
@@ -1448,6 +1491,7 @@ async fn graph_cmd(args : ArrayView[String]) -> Int {
   0
 }
 
+///|
 ///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {

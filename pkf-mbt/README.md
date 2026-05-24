@@ -124,7 +124,9 @@ pkf graph [--all]                       # ASCII deps tree per public task
   shell wraps a long-running child that re-forks beyond what `pkill
   -P` can reach, `pkf` may leave it orphaned — workaround: write
   `cmd = "exec <binary> ..."` so the shell replaces itself with the
-  real process. `readyCmd` is not yet wired.
+  real process. Readiness probing supports both `readyPort` (TCP
+  connect) and `readyCmd` (shell exit-0); when both are set, BOTH
+  must pass before the service is considered up.
 - Glob support: `*` (no slash) / `?` (single char) / `**` (zero-or-more
   segments) only. No character classes, no `{a,b}` alternation.
 - Exit-on-first-failure semantics: a non-zero task aborts the plan; matches
