@@ -812,6 +812,184 @@ fn cache_restore(key : String, root : String) -> Unit {
 }
 
 // ---------------------------------------------------------------------------
+// Remote cache (HTTP). Layered on top of the local CAS — every fetch
+// warms local, every store fires-and-forgets to remote. Failures on
+// the remote path are silent (logged at most); they never block the
+// task. The wire layout mirrors the local one to keep the swap
+// trivial:
+//
+//   <base>/cas/<key[0:2]>/<key[2:]>/manifest
+//   <base>/cas/<key[0:2]>/<key[2:]>/outputs/<rel>
+//
+// One GET / PUT per file. Archive support deferred to a follow-up
+// (would need tar + zstd, neither shipped in the MoonBit ecosystem
+// today).
+// ---------------------------------------------------------------------------
+
+///|
+fn remote_base() -> String? {
+  match @sys.get_env_var("PKFIRE_MBT_REMOTE_CACHE") {
+    Some(s) =>
+      if s.length() == 0 {
+        None
+      } else if s.has_suffix("/") {
+        Some(s.substring(start=0, end=s.length() - 1))
+      } else {
+        Some(s)
+      }
+    None => None
+  }
+}
+
+///|
+fn remote_token() -> String? {
+  @sys.get_env_var("PKFIRE_MBT_REMOTE_TOKEN")
+}
+
+///|
+fn remote_headers() -> Map[String, String] {
+  let h : Map[String, String] = Map([], capacity=2)
+  match remote_token() {
+    Some(t) => h["Authorization"] = "Bearer " + t
+    None => ()
+  }
+  h
+}
+
+///|
+fn remote_entry_url(base : String, key : String) -> String {
+  let head = key.substring(start=0, end=2)
+  let tail = key.substring(start=2, end=key.length())
+  base + "/cas/" + head + "/" + tail
+}
+
+///|
+async fn remote_get_bytes(url : String) -> Bytes? {
+  let headers = remote_headers()
+  match (try? @http.get(url, headers~)) {
+    Ok((resp, data)) =>
+      if resp.code == 200 {
+        // `&Data::binary` returns the raw response bytes without any
+        // UTF-8 round-trip. `data.text().to_bytes()` would re-encode
+        // the bytes as UTF-16 (MoonBit's String.to_bytes default),
+        // wrecking binary payloads (Mach-O / ELF / archives).
+        Some(data.binary())
+      } else {
+        None
+      }
+    Err(_) => None
+  }
+}
+
+///|
+async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
+  let headers = remote_headers()
+  match (try? @http.put(url, bytes, headers~)) {
+    Ok((resp, _)) => resp.code >= 200 && resp.code < 300
+    Err(_) => false
+  }
+}
+
+///|
+async fn cache_remote_fetch(key : String, root : String) -> Bool {
+  // Pull from the remote cache into the local CAS, then restore.
+  // Returns true on success — the caller then short-circuits the same
+  // way it would on a plain local hit. Manifest fetch failure is
+  // treated as remote miss; partial file failures abort the fetch so
+  // we don't half-restore.
+  let base = match remote_base() {
+    Some(b) => b
+    None => return false
+  }
+  let entry_url = remote_entry_url(base, key)
+  let manifest_bytes = match remote_get_bytes(entry_url + "/manifest") {
+    Some(b) => b
+    None => return false
+  }
+  // Manifest is UTF-8 newline-delimited paths; decode explicitly so
+  // we don't rely on the locale-sensitive `to_unchecked_string` path.
+  let manifest_str = match (try? @utf8.decode(manifest_bytes)) {
+    Ok(s) => s
+    Err(_) => return false
+  }
+  let dir = entry_dir(key)
+  mkdir_p(dir)
+  let outputs_dir = join_path(dir, "outputs")
+  mkdir_p(outputs_dir)
+  for line in manifest_str.split("\n") {
+    let rel = line.to_string()
+    if rel.length() == 0 {
+      continue
+    }
+    let file_url = entry_url + "/outputs/" + rel
+    let body = match remote_get_bytes(file_url) {
+      Some(b) => b
+      None => {
+        // Abort and roll back — the remote entry is inconsistent.
+        rm_rf(dir)
+        return false
+      }
+    }
+    let local_path = join_path(outputs_dir, rel)
+    let parent = dirname(local_path)
+    if parent.length() > 0 {
+      mkdir_p(parent)
+    }
+    @fs.write_bytes_to_file(local_path, body) catch {
+      _ => {
+        rm_rf(dir)
+        return false
+      }
+    }
+  }
+  @fs.write_string_to_file(join_path(dir, "manifest"), manifest_str) catch {
+    _ => ()
+  }
+  cache_restore(key, root)
+  true
+}
+
+///|
+async fn cache_remote_push(key : String) -> Unit {
+  // Best-effort upload after a successful local store. Each failure
+  // is logged once and never propagates.
+  let base = match remote_base() {
+    Some(b) => b
+    None => return
+  }
+  let dir = entry_dir(key)
+  let manifest_path = join_path(dir, "manifest")
+  let manifest_str = @fs.read_file_to_string(manifest_path) catch {
+    _ => ""
+  }
+  let entry_url = remote_entry_url(base, key)
+  // Encode as UTF-8 explicitly — `String::to_bytes` returns UTF-16LE
+  // which would make the manifest unparseable on the fetch side.
+  let ok = remote_put_bytes(entry_url + "/manifest", @utf8.encode(manifest_str))
+  if !ok {
+    println("pkf: remote cache PUT manifest failed for \{key.substring(start=0, end=8)} (ignored)")
+    return
+  }
+  let outputs_dir = join_path(dir, "outputs")
+  for line in manifest_str.split("\n") {
+    let rel = line.to_string()
+    if rel.length() == 0 {
+      continue
+    }
+    let local_path = join_path(outputs_dir, rel)
+    let body = @fs.read_file_to_bytes(local_path) catch {
+      _ => continue
+    }
+    let file_url = entry_url + "/outputs/" + rel
+    let put_ok = remote_put_bytes(file_url, body)
+    if !put_ok {
+      println("pkf: remote cache PUT \{rel} failed for \{key.substring(start=0, end=8)} (ignored)")
+      return
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Service orchestration: bring up declared `services { ... }` before running
 // the main `cmd`, probe readiness, and tear them down on completion.
 // ---------------------------------------------------------------------------
@@ -1079,6 +1257,10 @@ async fn[X] run_task(
       cache_restore(k, repo_root)
       return 0
     }
+    if cache_remote_fetch(k, repo_root) {
+      println("pkf: # \{task.name} (remote cache hit \{k.substring(start=0, end=8)})")
+      return 0
+    }
     key = Some(k)
   }
   // bash -c "cmd" placeholder for positional args: pkfire passes
@@ -1158,6 +1340,7 @@ async fn[X] run_task(
       Some(k) => {
         let resolved_outputs = expand_inputs(repo_root, task.outputs)
         cache_store(k, repo_root, resolved_outputs)
+        cache_remote_push(k)
       }
       None => ()
     }
