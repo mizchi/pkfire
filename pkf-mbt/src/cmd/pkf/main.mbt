@@ -502,9 +502,24 @@ fn looks_executable(bytes : Bytes) -> Bool {
 }
 
 ///|
+///|
+/// FFI: stat(2) → lower 12 bits of st_mode, or -1 on failure / Windows.
+#borrow(path)
+extern "C" fn stat_mode_ffi(path : Bytes) -> Int = "mizchi_pkf_stat_mode"
+
+///|
 fn detect_file_mode(path : String) -> Int {
-  // Returns 0o755 for files that look like executables (binary or
-  // shebang), 0o644 otherwise. Reads at most the magic prefix.
+  // Preferred: ask the OS via stat(2). The full mode (rwx + sticky)
+  // round-trips through cache_store / cache_restore that way, so files
+  // like `0o600` private keys or `0o444` generated read-only outputs
+  // keep their permissions.
+  let path_z = @utf8.encode(path + "\u{00}")
+  let m = stat_mode_ffi(path_z)
+  if m >= 0 {
+    return m
+  }
+  // Fallback (Windows or stat error): the previous magic-byte heuristic.
+  // 0o755 for ELF / Mach-O / PE / shebang, 0o644 otherwise.
   let bytes = @fs.read_file_to_bytes(path) catch {
     _ => Bytes::new(0)
   }
