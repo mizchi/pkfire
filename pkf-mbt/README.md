@@ -113,13 +113,24 @@ pkf list [-v] [--all]                   # tasks in authored order; -v adds param
 pkf graph [--all]                       # ASCII deps tree per public task
 pkf affected <path>...                  # print the run plan for the given changed files
 pkf affected --check                    # run declared workflowTests and assert plans
+pkf watch [task...]                     # re-run affected tasks on file change (Ctrl-C to stop)
 ```
+
+`pkf watch` monitors the working directory through `mizchi/fswatch` —
+FSEvents on macOS, inotify on Linux, polling fallback elsewhere. Events
+go through `compute_affected` to pick the same plan `pkf affected` would
+emit, then each task runs in topological order. Optional positional
+args scope the re-runs to that subset of tasks. Common build / VCS /
+cache directories (`_build`, `.git`, `node_modules`, `target`, `.cache`,
+editor swap files) are excluded so a build artifact doesn't trigger a
+re-run.
+
 
 `--all` includes `visibility = "internal"` tasks; otherwise they are hidden. Service tasks show in `list` with a `[service]` tag and are otherwise treated like regular tasks (apart from being rejected as direct `pkf run` targets).
 
 ## Known limitations
 
-- `pkf up`, `pkf affected`, `pkf watch` are absent.
+- `pkf up` is absent.
 - No watch mode.
 - No remote cache (`PKFIRE_REMOTE_CACHE`).
 - ~~`params` (typed CLI flags) are not consumed yet~~ — now supported in

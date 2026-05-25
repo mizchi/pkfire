@@ -2102,6 +2102,93 @@ async fn graph_cmd(args : ArrayView[String]) -> Int {
 }
 
 ///|
+/// Skip paths that should never trigger a re-run: build output, VCS state,
+/// dependency caches, OS metadata.
+fn watch_exclude(path : String) -> Bool {
+  path.contains("/_build/") ||
+  path.contains("/_build") ||
+  path.contains("/.git/") ||
+  path.contains("/.git") ||
+  path.contains("/node_modules/") ||
+  path.contains("/node_modules") ||
+  path.contains("/.cache/") ||
+  path.contains("/target/") ||
+  path.has_suffix("/.DS_Store") ||
+  path.has_suffix("~")
+}
+
+///|
+async fn[X] watch_cmd(
+  group : @async.TaskGroup[X],
+  args : ArrayView[String],
+) -> Int {
+  // `pkf watch [task...]` — optional task names scope the re-runs to a
+  // subset of the plan. With no scope, every affected task runs.
+  let scope_set : Map[String, Bool] = Map([], capacity=args.length())
+  for a in args {
+    if a.has_prefix("--") {
+      die("pkf watch: unknown flag `\{a}`")
+      return 2
+    }
+    scope_set[a] = true
+  }
+  let taskfile = locate_taskfile()
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let repo_root = "."
+  println("pkf watch: monitoring `.` (Ctrl-C to stop)")
+  let watcher = @fswatch.start([repo_root], exclude=watch_exclude)
+  for ;; {
+    let events = watcher.next()
+    if events.length() == 0 {
+      break // watcher closed
+    }
+    let seen : Map[String, Bool] = Map([], capacity=events.length())
+    let changed : Array[String] = []
+    for e in events {
+      if !seen.contains(e.path) {
+        seen[e.path] = true
+        changed.push(e.path)
+      }
+    }
+    let (_, affected) = compute_affected(plan, changed)
+    let to_run : Array[String] = []
+    for name in affected {
+      if scope_set.is_empty() || scope_set.contains(name) {
+        let t = plan.tasks.get(name)
+        if t is Some(task) && !task.service {
+          to_run.push(name)
+        }
+      }
+    }
+    if to_run.length() == 0 {
+      continue
+    }
+    let summary = if changed.length() == 1 {
+      "1 file changed"
+    } else {
+      "\{changed.length()} files changed"
+    }
+    println("pkf watch: \{summary}; running \{to_run.length()} task(s)")
+    for name in to_run {
+      let task = plan.tasks.get(name).unwrap()
+      let resolved_params = match
+        resolve_task_params(task, Map([], capacity=0)) {
+        Some(m) => m
+        None => continue
+      }
+      let code = run_task(group, plan, task, repo_root, resolved_params, [])
+      if code != 0 {
+        println(
+          "pkf watch: task `\{name}` failed with exit code \{code}; continuing",
+        )
+      }
+    }
+  }
+  0
+}
+
+///|
 ///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
@@ -2113,6 +2200,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       #|  list [-v] [--all]
       #|  graph [--all]
       #|  affected <path>... | --check
+      #|  watch [task...]
     println(msg)
     return 2
   }
@@ -2120,6 +2208,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
     "list" => list_cmd(args[1:])
     "graph" => graph_cmd(args[1:])
     "affected" => affected_cmd(args[1:])
+    "watch" => watch_cmd(group, args[1:])
     "run" => {
       let parsed = parse_run_args(args[1:])
       if parsed.target.length() == 0 {
