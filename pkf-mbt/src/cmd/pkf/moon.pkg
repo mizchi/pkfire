@@ -20,7 +20,7 @@ warnings = "-0029-0014-0024-0009"
 
 options(
   "is-main": true,
-  "native-stub": [ "stat_native.c" ],
+  "native-stub": [ "stat_native.c", "signal_native.c" ],
   targets: {
     "main.mbt": [ "native" ],
   },
