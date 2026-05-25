@@ -955,12 +955,14 @@ fn cache_store(
   root : String,
   outputs : Array[String],
 ) -> Unit {
+  // Single-archive format: every output goes into one `entry.tar.gz` blob
+  // under <cache_dir>/<key[0:2]>/<key[2:]>/. Tar headers carry the mode,
+  // so there's no separate manifest file. Wire-incompatible with go
+  // pkfire (BLAKE3 + zstd) on purpose.
   let dir = entry_dir(key)
   rm_rf(dir)
   mkdir_p(dir)
-  let outputs_dir = join_path(dir, "outputs")
-  mkdir_p(outputs_dir)
-  let manifest = StringBuilder::new(size_hint=outputs.length() * 64)
+  let tb = tar_new()
   for rel in outputs {
     let src = if root.length() == 0 || root == "." {
       rel
@@ -974,115 +976,57 @@ fn cache_store(
       _ => false
     }
     if is_dir {
-      // Directory outputs: recurse and copy each contained file.
       let inner : Array[String] = []
       walk_files(src, rel, inner)
       for nested in inner {
         let nested_src = join_path(root, nested)
-        let nested_dst = join_path(outputs_dir, nested)
-        copy_file(nested_src, nested_dst)
+        let content = @fs.read_file_to_bytes(nested_src) catch {
+          _ => continue
+        }
         let mode = detect_file_mode(nested_src)
-        write_manifest_entry(manifest, nested, mode)
+        tar_write_entry(tb, nested, content, mode)
       }
     } else {
-      let dst = join_path(outputs_dir, rel)
-      copy_file(src, dst)
+      let content = @fs.read_file_to_bytes(src) catch {
+        _ => continue
+      }
       let mode = detect_file_mode(src)
-      write_manifest_entry(manifest, rel, mode)
+      tar_write_entry(tb, rel, content, mode)
     }
   }
-  @fs.write_string_to_file(
-    join_path(dir, "manifest"),
-    manifest.to_string(),
-  ) catch {
+  let archive = @zlib.gzip_compress(tar_finish(tb))
+  @fs.write_bytes_to_file(join_path(dir, "entry.tar.gz"), archive) catch {
     _ => ()
-  }
-}
-
-///|
-fn write_manifest_entry(buf : StringBuilder, rel : String, mode : Int) -> Unit {
-  // Format: `<rel>\t<mode-octal>\n`. The tab + mode column is the
-  // backwards-compatible extension — older single-column manifests
-  // still parse via `parse_manifest_line` below (mode defaults to
-  // 0o644).
-  buf.write_string(rel)
-  buf.write_char('\t')
-  buf.write_string(int_to_octal(mode))
-  buf.write_char('\n')
-}
-
-///|
-fn int_to_octal(n : Int) -> String {
-  if n == 0 {
-    return "0"
-  }
-  let buf = StringBuilder::new(size_hint=4)
-  let mut v = n
-  let digits : Array[Char] = []
-  while v > 0 {
-    digits.push(Int::unsafe_to_char((v % 8) + '0'.to_int()))
-    v = v / 8
-  }
-  for i = digits.length() - 1; i >= 0; i = i - 1 {
-    buf.write_char(digits[i])
-  }
-  buf.to_string()
-}
-
-///|
-fn parse_octal(s : String) -> Int {
-  let mut v = 0
-  for i in 0..<s.length() {
-    let c = s[i].to_int()
-    if c >= '0'.to_int() && c <= '7'.to_int() {
-      v = v * 8 + (c - '0'.to_int())
-    } else {
-      break
-    }
-  }
-  v
-}
-
-///|
-fn parse_manifest_line(line : String) -> (String, Int) {
-  // Returns (rel, mode). Older single-column manifests fall back to
-  // 0o644 (no chmod applied at restore beyond what `write_bytes_to_file`
-  // produces by default).
-  match line.find("\t") {
-    Some(idx) => {
-      let rel = line.substring(start=0, end=idx)
-      let mode_str = line.substring(start=idx + 1, end=line.length())
-      (rel, parse_octal(mode_str))
-    }
-    None => (line, 0o644)
   }
 }
 
 ///|
 async fn cache_restore(key : String, root : String) -> Unit {
   let dir = entry_dir(key)
-  let outputs_dir = join_path(dir, "outputs")
-  let manifest_path = join_path(dir, "manifest")
-  let manifest = @fs.read_file_to_string(manifest_path) catch {
-    _ => ""
+  let archive_path = join_path(dir, "entry.tar.gz")
+  let gz = @fs.read_file_to_bytes(archive_path) catch {
+    _ => return
   }
-  for line in manifest.split("\n") {
-    let raw = line.to_string()
-    if raw.length() == 0 {
-      continue
-    }
-    let (rel, mode) = parse_manifest_line(raw)
-    let src = join_path(outputs_dir, rel)
+  let tar = try @zlib.gzip_decompress(gz) catch {
+    _ => return
+  }
+  for entry in tar_iter(tar) {
     let dst = if root.length() == 0 || root == "." {
-      rel
+      entry.name
     } else {
-      join_path(root, rel)
+      join_path(root, entry.name)
     }
-    copy_file(src, dst)
+    let parent = dirname(dst)
+    if parent.length() > 0 {
+      mkdir_p(parent)
+    }
+    @fs.write_bytes_to_file(dst, entry.content) catch {
+      _ => continue
+    }
     // Preserve the recorded mode (executable bit, etc.). Best-effort:
     // chmod failures are swallowed so a read-only target FS doesn't
     // abort the restore.
-    @xfs.chmod(dst.view(), mode) catch {
+    @xfs.chmod(dst.view(), entry.mode) catch {
       _ => ()
     }
   }
@@ -1170,57 +1114,24 @@ async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
 ///|
 async fn cache_remote_fetch(key : String, root : String) -> Bool {
   // Pull from the remote cache into the local CAS, then restore.
-  // Returns true on success — the caller then short-circuits the same
-  // way it would on a plain local hit. Manifest fetch failure is
-  // treated as remote miss; partial file failures abort the fetch so
-  // we don't half-restore.
+  // Single archive at <base>/cas/<key[0:2]>/<key[2:]>/entry.tar.gz —
+  // one HTTP round-trip per entry.
   let base = match remote_base() {
     Some(b) => b
     None => return false
   }
-  let entry_url = remote_entry_url(base, key)
-  let manifest_bytes = match remote_get_bytes(entry_url + "/manifest") {
+  let entry_url = remote_entry_url(base, key) + "/entry.tar.gz"
+  let archive = match remote_get_bytes(entry_url) {
     Some(b) => b
     None => return false
   }
-  // Manifest is UTF-8 newline-delimited paths; decode explicitly so
-  // we don't rely on the locale-sensitive `to_unchecked_string` path.
-  let manifest_str = match (try? @utf8.decode(manifest_bytes)) {
-    Ok(s) => s
-    Err(_) => return false
-  }
   let dir = entry_dir(key)
   mkdir_p(dir)
-  let outputs_dir = join_path(dir, "outputs")
-  mkdir_p(outputs_dir)
-  for line in manifest_str.split("\n") {
-    let rel = line.to_string()
-    if rel.length() == 0 {
-      continue
+  @fs.write_bytes_to_file(join_path(dir, "entry.tar.gz"), archive) catch {
+    _ => {
+      rm_rf(dir)
+      return false
     }
-    let file_url = entry_url + "/outputs/" + rel
-    let body = match remote_get_bytes(file_url) {
-      Some(b) => b
-      None => {
-        // Abort and roll back — the remote entry is inconsistent.
-        rm_rf(dir)
-        return false
-      }
-    }
-    let local_path = join_path(outputs_dir, rel)
-    let parent = dirname(local_path)
-    if parent.length() > 0 {
-      mkdir_p(parent)
-    }
-    @fs.write_bytes_to_file(local_path, body) catch {
-      _ => {
-        rm_rf(dir)
-        return false
-      }
-    }
-  }
-  @fs.write_string_to_file(join_path(dir, "manifest"), manifest_str) catch {
-    _ => ()
   }
   cache_restore(key, root)
   true
@@ -1228,41 +1139,23 @@ async fn cache_remote_fetch(key : String, root : String) -> Bool {
 
 ///|
 async fn cache_remote_push(key : String) -> Unit {
-  // Best-effort upload after a successful local store. Each failure
-  // is logged once and never propagates.
+  // Best-effort upload after a successful local store. Single PUT
+  // of the local entry.tar.gz. Failures are logged once.
   let base = match remote_base() {
     Some(b) => b
     None => return
   }
   let dir = entry_dir(key)
-  let manifest_path = join_path(dir, "manifest")
-  let manifest_str = @fs.read_file_to_string(manifest_path) catch {
-    _ => ""
+  let archive_path = join_path(dir, "entry.tar.gz")
+  let body = @fs.read_file_to_bytes(archive_path) catch {
+    _ => return
   }
-  let entry_url = remote_entry_url(base, key)
-  // Encode as UTF-8 explicitly — `String::to_bytes` returns UTF-16LE
-  // which would make the manifest unparseable on the fetch side.
-  let ok = remote_put_bytes(entry_url + "/manifest", @utf8.encode(manifest_str))
+  let entry_url = remote_entry_url(base, key) + "/entry.tar.gz"
+  let ok = remote_put_bytes(entry_url, body)
   if !ok {
-    println("pkf: remote cache PUT manifest failed for \{key.substring(start=0, end=8)} (ignored)")
-    return
-  }
-  let outputs_dir = join_path(dir, "outputs")
-  for line in manifest_str.split("\n") {
-    let rel = line.to_string()
-    if rel.length() == 0 {
-      continue
-    }
-    let local_path = join_path(outputs_dir, rel)
-    let body = @fs.read_file_to_bytes(local_path) catch {
-      _ => continue
-    }
-    let file_url = entry_url + "/outputs/" + rel
-    let put_ok = remote_put_bytes(file_url, body)
-    if !put_ok {
-      println("pkf: remote cache PUT \{rel} failed for \{key.substring(start=0, end=8)} (ignored)")
-      return
-    }
+    println(
+      "pkf: remote cache PUT failed for \{key.substring(start=0, end=8)} (ignored)",
+    )
   }
 }
 
