@@ -563,11 +563,69 @@ fn walk_files(root : String, rel_prefix : String, out : Array[String]) -> Unit {
 
 ///|
 fn glob_match(pattern : String, path : String) -> Bool {
-  // Split both into segments by `/`, then match segment-by-segment with
-  // `**` consuming zero or more.
-  let p_segs = pattern.split("/").collect()
-  let s_segs = path.split("/").collect()
-  glob_segs(p_segs, 0, s_segs, 0)
+  // Pre-expand `{a,b,c}` brace alternations into a flat list of patterns;
+  // segment-and-step matching is unchanged below.
+  for expanded in brace_expand(pattern) {
+    let p_segs = expanded.split("/").collect()
+    let s_segs = path.split("/").collect()
+    if glob_segs(p_segs, 0, s_segs, 0) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Recursively expand `{a,b,c}` brace alternations into a flat list. Nested
+/// braces are handled. Commas inside nested braces are not split-points.
+/// An unmatched `{` is treated as a literal (pattern returned as-is).
+fn brace_expand(pattern : String) -> Array[String] {
+  let mut open = -1
+  let mut close = -1
+  let mut depth = 0
+  for i in 0..<pattern.length() {
+    let c = pattern[i]
+    if c == '{' {
+      if open < 0 {
+        open = i
+      }
+      depth = depth + 1
+    } else if c == '}' {
+      depth = depth - 1
+      if depth == 0 {
+        close = i
+        break
+      }
+    }
+  }
+  if open < 0 || close < 0 {
+    return [pattern]
+  }
+  let before = pattern[:open].to_owned()
+  let body = pattern[open + 1:close].to_owned()
+  let after = pattern[close + 1:].to_owned()
+  let parts : Array[String] = []
+  let mut start = 0
+  let mut d = 0
+  for i in 0..<body.length() {
+    let c = body[i]
+    if c == '{' {
+      d = d + 1
+    } else if c == '}' {
+      d = d - 1
+    } else if c == ',' && d == 0 {
+      parts.push(body[start:i].to_owned())
+      start = i + 1
+    }
+  }
+  parts.push(body[start:].to_owned())
+  let result : Array[String] = []
+  for part in parts {
+    for sub in brace_expand(before + part + after) {
+      result.push(sub)
+    }
+  }
+  result
 }
 
 ///|
@@ -609,8 +667,8 @@ fn glob_segs(
 
 ///|
 fn glob_segment_matches(pat : String, seg : String) -> Bool {
-  // Single-segment matcher: supports `*` (any chars no slash) and `?`.
-  // No character classes for the MVP.
+  // Single-segment matcher: supports `*` (any chars no slash), `?`, and
+  // `[abc]` / `[!abc]` / `[a-z]` character classes.
   glob_seg_step(pat, 0, seg, 0)
 }
 
@@ -632,6 +690,60 @@ fn glob_seg_step(pat : String, pi : Int, seg : String, si : Int) -> Bool {
       }
       return false
     }
+    if pc == '[' {
+      // Locate the matching `]`. If absent, fall back to treating `[` as a
+      // literal so unbalanced patterns still match something predictable.
+      let class_start = if pi + 1 < pat.length() && pat[pi + 1] == '!' {
+        pi + 2
+      } else {
+        pi + 1
+      }
+      let mut class_end = -1
+      for j = class_start; j < pat.length(); j = j + 1 {
+        if pat[j] == ']' {
+          class_end = j
+          break
+        }
+      }
+      if class_end < 0 {
+        // Treat `[` as a literal.
+        if si >= seg.length() || pc != seg[si] {
+          return false
+        }
+        pi = pi + 1
+        si = si + 1
+        continue
+      }
+      if si >= seg.length() {
+        return false
+      }
+      let sc = seg[si]
+      let negate = class_start == pi + 2
+      let mut hit = false
+      let mut k = class_start
+      while k < class_end {
+        if k + 2 < class_end && pat[k + 1] == '-' {
+          let lo = pat[k]
+          let hi = pat[k + 2]
+          if sc >= lo && sc <= hi {
+            hit = true
+          }
+          k = k + 3
+        } else {
+          if pat[k] == sc {
+            hit = true
+          }
+          k = k + 1
+        }
+      }
+      let matched = if negate { !hit } else { hit }
+      if !matched {
+        return false
+      }
+      pi = class_end + 1
+      si = si + 1
+      continue
+    }
     if si >= seg.length() {
       return false
     }
@@ -647,8 +759,19 @@ fn glob_seg_step(pat : String, pi : Int, seg : String, si : Int) -> Bool {
 
 ///|
 fn expand_glob(root : String, pattern : String, out : Map[String, Bool]) -> Unit {
-  // Fast path: literal pattern with no wildcard.
-  if !pattern.contains("*") && !pattern.contains("?") {
+  // Pre-expand `{a,b}` brace alternations to the same flat pattern list
+  // glob_match uses internally; this keeps the literal-path fast path
+  // viable for each alternative.
+  if pattern.contains("{") {
+    for alt in brace_expand(pattern) {
+      expand_glob(root, alt, out)
+    }
+    return
+  }
+  // Fast path: literal pattern with no wildcard / class.
+  if !pattern.contains("*") &&
+    !pattern.contains("?") &&
+    !pattern.contains("[") {
     let full = if root.length() == 0 || root == "." {
       pattern
     } else {
