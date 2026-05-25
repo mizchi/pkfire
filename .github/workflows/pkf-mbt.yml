@@ -1,0 +1,74 @@
+name: pkf-mbt
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pkf-mbt/**"
+      - "examples/basic/**"
+      - ".github/workflows/pkf-mbt.yml"
+  pull_request:
+    paths:
+      - "pkf-mbt/**"
+      - "examples/basic/**"
+      - ".github/workflows/pkf-mbt.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: Build + smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install MoonBit CLI
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Moon version
+        run: moon version --all
+
+      - name: Moon update
+        working-directory: pkf-mbt
+        run: moon update
+
+      - name: Moon check
+        working-directory: pkf-mbt
+        # NOT --deny-warn — the initial pkf-mbt drop carries ~55 pre-existing
+        # warnings; cleaning those is tracked separately. CI catches actual
+        # errors (compile + smoke) for now.
+        run: moon check --target native
+
+      - name: Build pkf-mbt (release)
+        working-directory: pkf-mbt
+        run: moon build --target native --release
+
+      - name: Smoke - pkf list (examples/basic)
+        working-directory: examples/basic
+        run: ../../pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe list
+
+      - name: Smoke - pkf graph (examples/basic)
+        working-directory: examples/basic
+        run: ../../pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe graph
+
+      - name: Smoke - pkf run hello (cache miss + cache hit)
+        working-directory: examples/basic
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-mbt-cache
+        run: |
+          rm -rf "$PKFIRE_MBT_CACHE_DIR"
+          ../../pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe run hello
+          ../../pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe run hello
