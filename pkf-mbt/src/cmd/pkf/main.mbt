@@ -2327,6 +2327,95 @@ async fn[X] watch_cmd(
 }
 
 ///|
+/// FFI: install custom SIGINT/SIGTERM handler that flips a sig_atomic_t
+/// flag. Used only by `pkf up` — we don't want moonbitlang/async's
+/// global signal handling for other subcommands (it terminates the whole
+/// runtime, which is what `pkf run` wants).
+extern "C" fn pkf_signal_install_ffi() -> Int = "mizchi_pkf_signal_install"
+
+///|
+extern "C" fn pkf_signal_check_ffi() -> Int = "mizchi_pkf_signal_check"
+
+///|
+async fn[X] up_cmd(group : @async.TaskGroup[X], args : ArrayView[String]) -> Int {
+  // `pkf up [service...]` — bring up service tasks (or just the named
+  // subset) in the foreground, poll a SIGINT flag, tear them down on
+  // Ctrl-C.
+  let scope_set : Map[String, Bool] = Map([], capacity=args.length())
+  for a in args {
+    if a.has_prefix("--") {
+      die("pkf up: unknown flag `\{a}`")
+      return 2
+    }
+    scope_set[a] = true
+  }
+  let taskfile = locate_taskfile()
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  // Pick service tasks in authored order so dependents start after their
+  // backends (matches Apple pkfire's reuse semantics).
+  let services_to_start : Array[String] = []
+  for name in plan.task_order {
+    let task = match plan.tasks.get(name) {
+      Some(t) => t
+      None => continue
+    }
+    if !task.service {
+      continue
+    }
+    if scope_set.is_empty() || scope_set.contains(name) {
+      services_to_start.push(name)
+    }
+  }
+  if services_to_start.length() == 0 {
+    if scope_set.is_empty() {
+      println("pkf up: no `service = true` tasks declared")
+    } else {
+      println("pkf up: none of the named tasks are services")
+    }
+    return 0
+  }
+  // Install the signal handler *before* starting any service so a very
+  // fast Ctrl-C still hits our handler and not the runtime default.
+  if pkf_signal_install_ffi() != 0 {
+    println("pkf up: warning — could not install SIGINT/SIGTERM handler")
+  }
+  let running : Array[RunningService] = []
+  for name in services_to_start {
+    let task = plan.tasks.get(name).unwrap()
+    let resolved_params = match
+      resolve_task_params(task, Map([], capacity=0)) {
+      Some(m) => m
+      None => {
+        println("pkf up: skipping `\{name}` — param resolution failed")
+        continue
+      }
+    }
+    let svc = try start_service(group, plan, task, resolved_params) catch {
+      err => {
+        println("pkf up: failed to start `\{name}`: \{err}")
+        // Tear down whatever did start before bailing.
+        stop_services(running)
+        return 1
+      }
+    }
+    running.push(svc)
+  }
+  println("pkf up: \{running.length()} service(s) up. Ctrl-C to stop.")
+  // Poll the SIGINT flag. 250 ms cadence keeps Ctrl-C latency well
+  // below human-perceived "responsiveness" while burning ~no CPU.
+  for ;; {
+    if pkf_signal_check_ffi() != 0 {
+      break
+    }
+    @async.sleep(250)
+  }
+  println("\npkf up: signal received, shutting down...")
+  stop_services(running)
+  0
+}
+
+///|
 ///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
@@ -2339,6 +2428,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       #|  graph [--all]
       #|  affected <path>... | --check
       #|  watch [task...]
+      #|  up [service...]
     println(msg)
     return 2
   }
@@ -2347,6 +2437,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
     "graph" => graph_cmd(args[1:])
     "affected" => affected_cmd(args[1:])
     "watch" => watch_cmd(group, args[1:])
+    "up" => up_cmd(group, args[1:])
     "run" => {
       let parsed = parse_run_args(args[1:])
       if parsed.target.length() == 0 {
@@ -2360,7 +2451,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         Some(t) =>
           if t.service {
             die(
-              "task `\{target}` is a `service` (start it with `pkf up` once supported, not `pkf run`)",
+              "task `\{target}` is a `service` (start it with `pkf up`, not `pkf run`)",
             )
             return 2
           }

@@ -114,7 +114,17 @@ pkf graph [--all]                       # ASCII deps tree per public task
 pkf affected <path>...                  # print the run plan for the given changed files
 pkf affected --check                    # run declared workflowTests and assert plans
 pkf watch [task...]                     # re-run affected tasks on file change (Ctrl-C to stop)
+pkf up [service...]                     # bring up service = true tasks until Ctrl-C
 ```
+
+`pkf up` brings each `service = true` task up in declared order, waits
+for its `readyPort` / `readyCmd` probe to pass, then blocks until SIGINT
+or SIGTERM. On signal it runs the same `SIGTERM → grace → SIGKILL`
+teardown that `pkf run` uses for transient services. The signal handler
+is installed via a small C FFI (`signal_native.c`) so we avoid
+`moonbitlang/async`'s `set_global_cancellation_signals` (which
+terminates the whole event loop on receipt and never lets the user-side
+teardown branch run).
 
 `pkf watch` monitors the working directory through `mizchi/fswatch` —
 FSEvents on macOS, inotify on Linux, polling fallback elsewhere. Events
@@ -130,8 +140,6 @@ re-run.
 
 ## Known limitations
 
-- `pkf up` is absent.
-- No watch mode.
 - No remote cache (`PKFIRE_REMOTE_CACHE`).
 - ~~`params` (typed CLI flags) are not consumed yet~~ — now supported in
   phase 4: `pkf run greet --who=alice --lang_=ja`. Resolution is
