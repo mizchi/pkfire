@@ -41,11 +41,30 @@ jobs:
       - name: Moon version
         run: moon version --all
 
-      - name: Moon update
+      - name: Build mpkl CLI (package:// HTTP fetcher)
+        # pkf-mbt's embedded loader only reads pre-cached `package://`
+        # URIs from `~/.cache/pkl-mbt/package-2/`. For Taskfiles that
+        # `amends "package://..."` (which is the canonical pkfire
+        # pattern), the loader falls back to spawning `mpkl` on PATH.
+        # CI runners start with neither the cache nor the binary, so
+        # build mpkl from pkl-mbt sources to enable the fallback.
+        run: |
+          git clone --depth=1 https://github.com/mizchi/pkl-mbt.git /tmp/pkl-mbt
+          cd /tmp/pkl-mbt
+          moon update
+          moon build --target native --release
+          mkdir -p "$HOME/.local/bin"
+          cp _build/native/release/build/cmd/mpkl/mpkl.exe "$HOME/.local/bin/mpkl"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Mpkl version
+        run: mpkl --version || true
+
+      - name: Moon update (pkf-mbt)
         working-directory: pkf-mbt
         run: moon update
 
-      - name: Moon check
+      - name: Moon check (pkf-mbt)
         working-directory: pkf-mbt
         # NOT --deny-warn — the initial pkf-mbt drop carries ~55 pre-existing
         # warnings; cleaning those is tracked separately. CI catches actual
