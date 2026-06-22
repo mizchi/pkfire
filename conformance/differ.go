@@ -114,6 +114,28 @@ func pathOrRoot(path string) string {
 	return path
 }
 
+// stripJSONKeys removes the given top-level keys from a JSON object so
+// volatile values (e.g. absolute paths) don't break comparison.
+func stripJSONKeys(raw []byte, keys []string) []byte {
+	if len(keys) == 0 {
+		return raw
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	if m, ok := v.(map[string]any); ok {
+		for _, k := range keys {
+			delete(m, k)
+		}
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 // Compare applies a scenario's contract to a candidate Result against a
 // Golden, returning "" on match or the first failure description.
 func Compare(s Scenario, want Golden, got Result) string {
@@ -121,7 +143,9 @@ func Compare(s Scenario, want Golden, got Result) string {
 		return fmt.Sprintf("exit: want %d, got %d", want.Exit, got.Exit)
 	}
 	if s.Contract.JSON {
-		if d := DiffJSON(want.Stdout, got.Stdout, s.Contract.UnorderedPaths); d != "" {
+		w := stripJSONKeys(want.Stdout, s.Contract.JsonIgnorePaths)
+		g := stripJSONKeys(got.Stdout, s.Contract.JsonIgnorePaths)
+		if d := DiffJSON(w, g, s.Contract.UnorderedPaths); d != "" {
 			return "json: " + d
 		}
 	}

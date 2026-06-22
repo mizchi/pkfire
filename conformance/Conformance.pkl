@@ -9,6 +9,9 @@ class Contract {
   /// Dotted JSON paths whose arrays are order-insensitive (e.g. "edges").
   /// Anything not listed is compared in strict order.
   unorderedPaths: Listing<String> = new {}
+  /// Top-level JSON keys to delete from BOTH sides before deep-compare
+  /// (for volatile values like absolute paths).
+  jsonIgnorePaths: Listing<String> = new {}
   /// Assert the process exit code equals the golden exit code.
   exit: Boolean = true
   /// Normalized-stdout substrings that must all be present.
