@@ -1,6 +1,30 @@
 package conformance
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// requireBin returns the binary path from env or skips the test.
+func requireBin(t *testing.T, envVar string) string {
+	t.Helper()
+	p := os.Getenv(envVar)
+	if p == "" {
+		t.Skipf("%s not set; skipping", envVar)
+	}
+	return p
+}
+
+// repoRoot returns the repository root (parent of conformance/).
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Dir(wd)
+}
 
 func TestLoadScenarios(t *testing.T) {
 	scenarios, err := LoadScenarios("scenarios.pkl")
@@ -22,5 +46,25 @@ func TestLoadScenarios(t *testing.T) {
 	}
 	if !s.Contract.JSON {
 		t.Error("contract.json = false, want true")
+	}
+}
+
+func TestRunCapturesExitAndStdout(t *testing.T) {
+	bin := requireBin(t, "PKF_GO_BIN")
+	s := Scenario{
+		ID:      "version-probe",
+		Fixture: "examples/basic",
+		Argv:    []string{"version"},
+		Contract: Contract{Exit: true},
+	}
+	res, err := Run(bin, s, repoRoot(t))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Exit != 0 {
+		t.Errorf("exit = %d, want 0", res.Exit)
+	}
+	if len(res.Stdout) == 0 {
+		t.Error("stdout empty, want version string")
 	}
 }
