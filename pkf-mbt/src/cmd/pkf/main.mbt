@@ -61,6 +61,8 @@ struct WorkflowTest {
 ///|
 struct Plan {
   default_env : Map[String, String]
+  default_shell : String
+  default_shell_flags : Array[String]
   tasks : Map[String, Task]
   task_order : Array[String]
   workflow_tests : Array[WorkflowTest]
@@ -343,7 +345,7 @@ fn parse_plan(raw : String) -> Plan {
       }
     _ => ()
   }
-  Plan::{ default_env, tasks, task_order, workflow_tests }
+  Plan::{ default_env, default_shell, default_shell_flags, tasks, task_order, workflow_tests }
 }
 
 // ---------------------------------------------------------------------------
@@ -2738,6 +2740,166 @@ async fn[X] up_cmd(
 }
 
 ///|
+/// Scan the Taskfile source for the `amends "<URI>"` line.
+/// Returns (amends_uri, schema_version) — both may be None.
+/// The schema_version is extracted from the `pkfire@<version>` token
+/// in the URI (just the version string, e.g. "0.10.0").
+fn scan_amends_and_schema(taskfile_path : String) -> (String?, String?) {
+  let src = @fs.read_file_to_string(taskfile_path) catch {
+    _ => return (None, None)
+  }
+  let mut amends : String? = None
+  for line_view in src.split("\n") {
+    let line = line_view.to_string().trim_space().to_string()
+    if line.has_prefix("amends ") {
+      // Find the first `"` in the line.
+      let mut start = -1
+      for i in 0..<line.length() {
+        if line[i] == '"' {
+          start = i
+          break
+        }
+      }
+      if start >= 0 {
+        // Find the closing `"` after position start.
+        // Use a while loop since MoonBit range literals require constants.
+        let mut j = start + 1
+        let mut end = -1
+        while j < line.length() {
+          if line[j] == '"' {
+            end = j
+            break
+          }
+          j = j + 1
+        }
+        if end > start {
+          amends = Some(line.substring(start=start + 1, end=end))
+        }
+      }
+      break
+    }
+  }
+  let schema : String? = match amends {
+    Some(uri) => {
+      // Look for `pkfire@` in the URI and extract up to the next `#` or `"`.
+      match uri.find("pkfire@") {
+        Some(idx) => {
+          let after = uri.substring(start=idx + 7, end=uri.length())
+          // End at `#` or end of string.
+          let mut end = after.length()
+          for i in 0..<after.length() {
+            if after[i] == '#' || after[i] == '"' {
+              end = i
+              break
+            }
+          }
+          if end > 0 {
+            Some(after.substring(start=0, end=end))
+          } else {
+            None
+          }
+        }
+        None => None
+      }
+    }
+    None => None
+  }
+  (amends, schema)
+}
+
+///|
+async fn info_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
+  let mut json_flag = false
+  let mut all_flag = false
+  for arg in args {
+    match arg {
+      "--json" => json_flag = true
+      "--all" => all_flag = true
+      _ => {
+        if arg.has_prefix("--") {
+          die("pkf info: unknown flag `\{arg}`")
+          return 2
+        } else {
+          die("info takes no positional args, got `\{arg}`")
+          return 2
+        }
+      }
+    }
+  }
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let (amends, schema) = scan_amends_and_schema(taskfile)
+  if json_flag {
+    let root : Map[String, Json] = Map([], capacity=8)
+    root["taskfile"] = Json::string(taskfile)
+    match schema {
+      Some(v) => root["schemaVersion"] = Json::string(v)
+      None => ()
+    }
+    match amends {
+      Some(a) => root["amends"] = Json::string(a)
+      None => ()
+    }
+    // defaults: always emit since the schema defines bash/-c as defaults
+    // and parse_plan always carries shell/shellFlags.
+    let defaults_o : Map[String, Json] = Map([], capacity=3)
+    defaults_o["shell"] = Json::string(plan.default_shell)
+    defaults_o["shellFlags"] = jstr_array(plan.default_shell_flags)
+    if plan.default_env.length() > 0 {
+      let env_o : Map[String, Json] = Map([], capacity=plan.default_env.length())
+      for k, v in plan.default_env {
+        env_o[k] = Json::string(v)
+      }
+      defaults_o["env"] = Json::object(env_o)
+    }
+    root["defaults"] = Json::object(defaults_o)
+    let tasks_arr : Array[Json] = []
+    for t in sorted_visible_tasks(plan, all_flag) {
+      tasks_arr.push(task_to_json(t, false, None))
+    }
+    root["tasks"] = Json::array(tasks_arr)
+    if plan.workflow_tests.length() > 0 {
+      let wt_arr : Array[Json] = []
+      for wt in plan.workflow_tests {
+        let wt_o : Map[String, Json] = Map([], capacity=4)
+        wt_o["name"] = Json::string(wt.name)
+        if wt.changed.length() > 0 {
+          wt_o["changed"] = jstr_array(wt.changed)
+        }
+        if wt.tasks.length() > 0 {
+          wt_o["tasks"] = jstr_array(wt.tasks)
+        }
+        if wt.direct.length() > 0 {
+          wt_o["direct"] = jstr_array(wt.direct)
+        }
+        wt_arr.push(Json::object(wt_o))
+      }
+      root["workflowTests"] = Json::array(wt_arr)
+    }
+    println(Json::object(root).stringify())
+    return 0
+  }
+  // Plain text summary.
+  println("taskfile:      " + taskfile)
+  match schema {
+    Some(v) => println("schemaVersion: pkfire@" + v)
+    None =>
+      match amends {
+        Some(a) => println("amends:        " + a)
+        None => ()
+      }
+  }
+  println("defaults:      shell=" + plan.default_shell + " flags=" + join_list(plan.default_shell_flags))
+  let visible = sorted_visible_tasks(plan, all_flag)
+  println("tasks:         " + visible.length().to_string())
+  if plan.workflow_tests.length() > 0 {
+    println("workflowTests: " + plan.workflow_tests.length().to_string())
+  }
+  0
+}
+
+///|
 fn usage_text() -> String {
   let msg =
     #|usage: pkf <command> [args...]
@@ -2749,6 +2911,7 @@ fn usage_text() -> String {
     #|  affected <path>... | --check
     #|  watch [task...]
     #|  up [service...]
+    #|  info [--json] [--all]
   msg
 }
 
@@ -2944,6 +3107,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         }
       }
       0
+    }
+    "info" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      info_cmd(explicit_taskfile, rest[:])
     }
     "version" | "--version" | "-v" => {
       println(pkf_version())

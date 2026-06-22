@@ -1,0 +1,70 @@
+{
+  "taskfile": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-info-json-basic-2800775468/work/Taskfile.pkl",
+  "schemaVersion": "0.10.0",
+  "amends": "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl",
+  "defaults": {
+    "shell": "bash",
+    "shellFlags": [
+      "-c"
+    ]
+  },
+  "tasks": [
+    {
+      "name": "build",
+      "visibility": "public",
+      "cmd": "go build -o bin/app ./cmd/app",
+      "shell": "bash",
+      "shellFlags": [
+        "-c"
+      ],
+      "inputs": [
+        "**/*.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "outputs": [
+        "bin/app"
+      ],
+      "cache": true,
+      "service": false,
+      "quiet": false,
+      "acceptsArgs": false,
+      "inheritEnv": true
+    },
+    {
+      "name": "hello",
+      "description": "smoke task",
+      "visibility": "public",
+      "cmd": "echo hello from pkfire",
+      "shell": "bash",
+      "shellFlags": [
+        "-c"
+      ],
+      "cache": true,
+      "service": false,
+      "quiet": false,
+      "acceptsArgs": false,
+      "inheritEnv": true
+    },
+    {
+      "name": "test",
+      "visibility": "public",
+      "cmd": "go test ./...",
+      "shell": "bash",
+      "shellFlags": [
+        "-c"
+      ],
+      "deps": [
+        "build"
+      ],
+      "inputs": [
+        "**/*.go"
+      ],
+      "cache": true,
+      "service": false,
+      "quiet": false,
+      "acceptsArgs": false,
+      "inheritEnv": true
+    }
+  ]
+}

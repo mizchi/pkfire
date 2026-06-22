@@ -104,4 +104,10 @@ scenarios {
     argv { "describe"; "nope" }
     contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "unknown task" } }
   }
+  new {
+    id = "info-json-basic"
+    fixture = "examples/basic"
+    argv { "info"; "--json" }
+    contract = new { json = true; jsonIgnorePaths { "taskfile" } }
+  }
 }
