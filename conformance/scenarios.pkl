@@ -43,4 +43,12 @@ scenarios {
     argv { "bogus" }
     contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "run" } }
   }
+  new {
+    id = "list-from-subdir"
+    fixture = "examples/basic"
+    argv { "list" }
+    env { ["PKF_CONFORMANCE_SUBDIR"] = "sub" }
+    setup { "mkdir -p sub" }
+    contract = new { exit = true; mustContain { "hello" } }
+  }
 }

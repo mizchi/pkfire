@@ -11,6 +11,7 @@ import {
   "moonbitlang/async",
   "moonbitlang/core/buffer" @buffer,
   "moonbitlang/core/encoding/utf8" @utf8,
+  "moonbitlang/core/env" @env,
   "moonbitlang/core/json" @json,
   "moonbitlang/core/strconv" @strconv,
   "moonbitlang/x/crypto" @crypto,

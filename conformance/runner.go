@@ -64,8 +64,14 @@ func Run(bin string, s Scenario, repoRoot string) (Result, error) {
 		return Result{}, err
 	}
 
+	// PKF_CONFORMANCE_SUBDIR allows a scenario to run pkf from a subdirectory
+	// of the fixture root, exercising upward Taskfile discovery.
+	runDir := work
+	if sub, ok := s.Env["PKF_CONFORMANCE_SUBDIR"]; ok {
+		runDir = filepath.Join(work, sub)
+	}
 	cmd := exec.Command(bin, s.Argv...)
-	cmd.Dir = work
+	cmd.Dir = runDir
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
