@@ -19,3 +19,15 @@ func TestFSDeltaDetectsModify(t *testing.T) {
 		t.Errorf("delta = %v, want [a.txt]", got)
 	}
 }
+
+// A nil (no-change) delta and an empty-slice delta must marshal to the
+// same JSON so an fsDelta scenario does not fail on a phantom nil-vs-[]
+// type mismatch between golden and candidate.
+func TestMarshalDeltaNilAndEmptyEqual(t *testing.T) {
+	if got := string(MarshalDelta(nil)); got != "[]" {
+		t.Errorf("MarshalDelta(nil) = %q, want []", got)
+	}
+	if d := DiffJSON(MarshalDelta(nil), MarshalDelta([]string{}), nil); d != "" {
+		t.Errorf("nil vs empty delta reported diff: %s", d)
+	}
+}

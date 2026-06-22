@@ -16,7 +16,7 @@ jobs:
           cache: true
       - name: Install Pkl
         run: |
-          curl -L -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          curl -fsSL -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
           chmod +x /tmp/pkl && sudo mv /tmp/pkl /usr/local/bin/pkl
           pkl --version
       - name: Build Go oracle

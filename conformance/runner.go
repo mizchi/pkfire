@@ -155,7 +155,13 @@ func DeltaPaths(before, after map[string]string) []string {
 }
 
 // MarshalDelta renders a delta path list as stable JSON for golden storage.
+// A nil delta is normalized to an empty array so a no-change run (nil) and
+// an explicit empty delta ([]string{}) compare equal rather than tripping a
+// phantom null-vs-[] type mismatch.
 func MarshalDelta(paths []string) []byte {
+	if paths == nil {
+		paths = []string{}
+	}
 	b, _ := json.Marshal(paths)
 	return b
 }
