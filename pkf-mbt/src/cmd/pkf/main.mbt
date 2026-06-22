@@ -1498,23 +1498,32 @@ async fn[X] run_task(
     }
   }
   println("pkf: $ \{task.name}")
-  let code = match task.workdir {
-    Some(cwd) =>
-      @process.run_inherit(
-        task.shell.view(),
-        argv[:],
-        extra_env~,
-        inherit_env=task.inherit_env,
-        cwd=cwd.view(),
-      )
+  // C2: always run the task command in the Taskfile's directory (repo_root)
+  // so that inputs/outputs resolve relative to the project root, not the
+  // caller's cwd. If task.workdir is set, resolve it against repo_root.
+  let task_cwd = match task.workdir {
+    Some(wd) =>
+      if wd.has_prefix("/") {
+        wd
+      } else if repo_root.length() == 0 || repo_root == "." {
+        wd
+      } else {
+        repo_root + "/" + wd
+      }
     None =>
-      @process.run_inherit(
-        task.shell.view(),
-        argv[:],
-        extra_env~,
-        inherit_env=task.inherit_env,
-      )
+      if repo_root.length() == 0 {
+        "."
+      } else {
+        repo_root
+      }
   }
+  let code = @process.run_inherit(
+    task.shell.view(),
+    argv[:],
+    extra_env~,
+    inherit_env=task.inherit_env,
+    cwd=task_cwd.view(),
+  )
   stop_services(running)
   if code == 0 {
     match key {
@@ -2473,50 +2482,78 @@ fn usage_text() -> String {
 }
 
 ///|
+// Consume leading -f/--file/--file= flags (the flag region, before the
+// first positional). Stops at the first non-flag token; tokens that are
+// other flags are kept in the remaining slice. Mirrors Go's flag.Parse.
+fn extract_file_flag(args : ArrayView[String]) -> (String?, Array[String]) {
+  let remaining : Array[String] = []
+  let mut explicit : String? = None
+  let mut i = 0
+  let mut seen_positional = false
+  while i < args.length() {
+    let a = args[i]
+    if !seen_positional && (a == "-f" || a == "--file") {
+      if i + 1 < args.length() {
+        explicit = Some(args[i + 1])
+        i = i + 2
+      } else {
+        die("flag \{a} needs a value")
+        panic()
+      }
+      continue
+    }
+    if !seen_positional && a.has_prefix("--file=") {
+      explicit = Some(a.substring(start=7, end=a.length()))
+      i = i + 1
+      continue
+    }
+    if !a.has_prefix("-") {
+      seen_positional = true
+    }
+    remaining.push(a)
+    i = i + 1
+  }
+  (explicit, remaining)
+}
+
+///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
     println(usage_text())
     return 0
   }
-  // Global pre-pass: extract -f / --file <PATH> or --file=<PATH> before the
-  // subcommand so any subcommand can receive an explicit Taskfile override.
-  let mut explicit_taskfile : String? = None
-  let remaining : Array[String] = []
-  let mut i = 0
-  while i < args.length() {
-    let arg = args[i]
-    if arg == "-f" || arg == "--file" {
-      if i + 1 < args.length() {
-        explicit_taskfile = Some(args[i + 1])
-        i = i + 2
-      } else {
-        die("pkf: \{arg} requires a path argument")
-        return 2
-      }
-    } else if arg.has_prefix("--file=") {
-      explicit_taskfile = Some(arg.substring(start=7, end=arg.length()))
-      i = i + 1
-    } else {
-      remaining.push(arg)
-      i = i + 1
-    }
-  }
-  if remaining.length() < 1 {
-    println(usage_text())
-    return 0
-  }
-  match remaining[0] {
+  // Dispatch directly on args[0]. Each subcommand extracts -f/--file from
+  // its own leading flag region (Go flag semantics: flags before first
+  // positional). A -f/--file at argv[0] means the subcommand name is the
+  // flag value, which is unknown → fall through to unknown-subcommand.
+  match args[0] {
     "help" | "--help" | "-h" => {
       println(usage_text())
       0
     }
-    "list" => list_cmd(explicit_taskfile, remaining[1:])
-    "graph" => graph_cmd(explicit_taskfile, remaining[1:])
-    "affected" => affected_cmd(explicit_taskfile, remaining[1:])
-    "watch" => watch_cmd(explicit_taskfile, group, remaining[1:])
-    "up" => up_cmd(explicit_taskfile, group, remaining[1:])
+    "list" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      list_cmd(explicit_taskfile, rest[:])
+    }
+    "graph" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      graph_cmd(explicit_taskfile, rest[:])
+    }
+    "affected" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      affected_cmd(explicit_taskfile, rest[:])
+    }
+    "watch" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      watch_cmd(explicit_taskfile, group, rest[:])
+    }
+    "up" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      up_cmd(explicit_taskfile, group, rest[:])
+    }
     "run" => {
-      let parsed = parse_run_args(remaining[1:])
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      let parsed = parse_run_args(rest[:])
       if parsed.target.length() == 0 {
         die("pkf run: missing <task> argument")
       }

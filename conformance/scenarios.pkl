@@ -51,4 +51,18 @@ scenarios {
     setup { "mkdir -p sub" }
     contract = new { exit = true; mustContain { "hello" } }
   }
+  new {
+    id = "list-file-flag"
+    fixture = "examples/basic"
+    argv { "list"; "--file=Taskfile.pkl" }
+    contract = new { exit = true; mustContain { "hello" } }
+  }
+  new {
+    id = "run-output-from-subdir"
+    fixture = "examples/cat-io"
+    argv { "run"; "copy" }
+    env { ["PKF_CONFORMANCE_SUBDIR"] = "sub" }
+    setup { "mkdir -p sub"; "printf hi > src.txt" }
+    contract = new { exit = true; fsDelta = true }
+  }
 }
