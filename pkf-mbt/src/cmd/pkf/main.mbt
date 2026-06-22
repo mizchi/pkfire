@@ -2408,23 +2408,31 @@ async fn[X] up_cmd(group : @async.TaskGroup[X], args : ArrayView[String]) -> Int
 }
 
 ///|
+fn usage_text() -> String {
+  let msg =
+    #|usage: pkf <command> [args...]
+    #|
+    #|commands:
+    #|  run <task> [--name=value]... [-- positional...]
+    #|  list [-v] [--all]
+    #|  graph [--all]
+    #|  affected <path>... | --check
+    #|  watch [task...]
+    #|  up [service...]
+  msg
+}
+
 ///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
-    let msg =
-      #|usage: pkf <command> [args...]
-      #|
-      #|commands:
-      #|  run <task> [--name=value]... [-- positional...]
-      #|  list [-v] [--all]
-      #|  graph [--all]
-      #|  affected <path>... | --check
-      #|  watch [task...]
-      #|  up [service...]
-    println(msg)
-    return 2
+    println(usage_text())
+    return 0
   }
   match args[0] {
+    "help" | "--help" | "-h" => {
+      println(usage_text())
+      0
+    }
     "list" => list_cmd(args[1:])
     "graph" => graph_cmd(args[1:])
     "affected" => affected_cmd(args[1:])
@@ -2489,7 +2497,8 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       0
     }
     other => {
-      die("unknown subcommand `\{other}` (only `run` is supported in this MVP)")
+      eprintln("pkf: unknown subcommand `\{other}`")
+      eprintln(usage_text())
       1
     }
   }

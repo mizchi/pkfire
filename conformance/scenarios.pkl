@@ -25,4 +25,22 @@ scenarios {
     argv { "version" }
     contract = new { exit = true; stdoutNonEmpty = true }
   }
+  new {
+    id = "help"
+    fixture = "examples/basic"
+    argv { "help" }
+    contract = new { exit = true; stdoutNonEmpty = true; mustContain { "run" } }
+  }
+  new {
+    id = "no-args"
+    fixture = "examples/basic"
+    argv {}
+    contract = new { exit = true; stdoutNonEmpty = true }
+  }
+  new {
+    id = "unknown-subcommand"
+    fixture = "examples/basic"
+    argv { "bogus" }
+    contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "run" } }
+  }
 }
