@@ -10,7 +10,7 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-05-18
+## [0.11.0] - 2026-06-22
 
 ### Added
 
@@ -609,7 +609,8 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.10.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.11.0...HEAD
+[0.11.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.11.0
 [0.10.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.10.0
 [0.9.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.9.0
 [0.8.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.8.0
