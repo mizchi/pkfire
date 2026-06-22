@@ -358,7 +358,11 @@ fn jstr_array(xs : Array[String]) -> Json {
 }
 
 ///|
-fn task_to_json(t : Task, with_kind : Bool) -> Json {
+fn task_to_json(
+  t : Task,
+  with_kind : Bool,
+  keep : Map[String, Bool]?,
+) -> Json {
   let o : Map[String, Json] = Map([], capacity=16)
   o["name"] = Json::string(t.name)
   match t.description {
@@ -375,16 +379,55 @@ fn task_to_json(t : Task, with_kind : Bool) -> Json {
   if t.outputs.length() > 0 {
     o["outputs"] = jstr_array(t.outputs)
   }
-  if t.deps.length() > 0 {
-    o["deps"] = jstr_array(t.deps)
+  // deps: filter to visible set when keep is provided (graph --json).
+  // list --json (keep=None) emits deps unfiltered.
+  let visible_deps = match keep {
+    Some(k) => {
+      let filtered : Array[String] = []
+      for d in t.deps {
+        if k.get(d) is Some(true) {
+          filtered.push(d)
+        }
+      }
+      filtered
+    }
+    None => t.deps
+  }
+  if visible_deps.length() > 0 {
+    o["deps"] = jstr_array(visible_deps)
   }
   o["cache"] = jbool(t.cache)
   o["service"] = jbool(t.service)
   o["quiet"] = jbool(t.quiet)
+  // services: filter to visible set when keep is provided (graph --json).
+  let visible_services = match keep {
+    Some(k) => {
+      let filtered : Array[String] = []
+      for s in t.services {
+        if k.get(s) is Some(true) {
+          filtered.push(s)
+        }
+      }
+      filtered
+    }
+    None => t.services
+  }
+  if visible_services.length() > 0 {
+    o["services"] = jstr_array(visible_services)
+  }
   o["acceptsArgs"] = jbool(t.accepts_args)
   o["inheritEnv"] = jbool(t.inherit_env)
   if with_kind {
-    o["kind"] = Json::string("task")
+    let kind = if t.service {
+      "service"
+    } else if t.cmd == "" && t.deps.length() > 0 {
+      "aggregate"
+    } else if t.cmd == "" {
+      "noop"
+    } else {
+      "task"
+    }
+    o["kind"] = Json::string(kind)
   }
   Json::object(o)
 }
@@ -2253,7 +2296,7 @@ async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
   if json_flag {
     let arr : Array[Json] = []
     for t in sorted_visible_tasks(plan, show_all) {
-      arr.push(task_to_json(t, false))
+      arr.push(task_to_json(t, false, None))
     }
     let root : Map[String, Json] = Map([], capacity=1)
     root["tasks"] = Json::array(arr)
@@ -2379,17 +2422,25 @@ async fn graph_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int
   let plan = parse_plan(raw_json)
   if json_flag {
     let visible = sorted_visible_tasks(plan, show_all)
+    // Build the visible-name set for filtering deps/edges (mirrors Go's
+    // `keep` map passed to filterGraphRefs / writeGraphJSON).
+    let keep : Map[String, Bool] = Map([], capacity=visible.length())
+    for t in visible {
+      keep[t.name] = true
+    }
     let tasks_arr : Array[Json] = []
     for t in visible {
-      tasks_arr.push(task_to_json(t, true))
+      tasks_arr.push(task_to_json(t, true, Some(keep)))
     }
     let edges_arr : Array[Json] = []
     for t in visible {
       for dep in t.deps {
-        let e : Map[String, Json] = Map([], capacity=2)
-        e["from"] = Json::string(dep)
-        e["to"] = Json::string(t.name)
-        edges_arr.push(Json::object(e))
+        if keep.get(dep) is Some(true) {
+          let e : Map[String, Json] = Map([], capacity=2)
+          e["from"] = Json::string(dep)
+          e["to"] = Json::string(t.name)
+          edges_arr.push(Json::object(e))
+        }
       }
     }
     let root : Map[String, Json] = Map([], capacity=2)

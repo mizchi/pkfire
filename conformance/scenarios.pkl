@@ -74,4 +74,16 @@ scenarios {
       unorderedPaths { "edges" }
     }
   }
+  new {
+    id = "graph-json-kinds"
+    fixture = "examples/graph-kinds"
+    argv { "graph"; "--json" }
+    contract = new { json = true; unorderedPaths { "edges" } }
+  }
+  new {
+    id = "graph-json-kinds-all"
+    fixture = "examples/graph-kinds"
+    argv { "graph"; "--json"; "--all" }
+    contract = new { json = true; unorderedPaths { "edges" } }
+  }
 }
