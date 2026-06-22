@@ -121,6 +121,20 @@ func TestUpdateGolden(t *testing.T) {
 	}
 }
 
+func TestLedgerRendersRows(t *testing.T) {
+	rows := []LedgerRow{
+		{ID: "list-json-basic", Command: "list", Status: "PASS"},
+		{ID: "doctor-json-basic", Command: "doctor", Status: "RED", Detail: "json: (root): missing key \"checks\""},
+	}
+	md := RenderLedger(rows)
+	if !containsNormalized([]byte(md), "list-json-basic") {
+		t.Error("ledger missing scenario row")
+	}
+	if !containsNormalized([]byte(md), "1/2 passing") {
+		t.Errorf("ledger missing summary; got:\n%s", md)
+	}
+}
+
 // TestOracleSelfConsistency proves the differ machinery: the oracle
 // compared against its own committed golden must report zero diffs.
 // This is the hard gate that keeps Phase 0 CI green regardless of the
@@ -147,4 +161,54 @@ func TestOracleSelfConsistency(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCandidateParity runs the MoonBit candidate against the committed
+// goldens and writes the ledger. It does NOT fail the build on candidate
+// divergence (most scenarios are RED in Phase 0 by design); the oracle
+// self-consistency test is the hard gate. Set PKF_CONFORMANCE_STRICT=1 to
+// make candidate RED rows fail (used once parity is expected to be green).
+func TestCandidateParity(t *testing.T) {
+	bin := requireBin(t, "PKF_MBT_BIN")
+	scenarios, err := LoadScenarios("scenarios.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []LedgerRow
+	for _, s := range scenarios {
+		g, err := LoadGolden("golden", s)
+		if err != nil {
+			t.Fatalf("%s: load golden: %v", s.ID, err)
+		}
+		res, runErr := Run(bin, s, repoRoot(t))
+		row := LedgerRow{ID: s.ID, Command: firstArg(s.Argv), Status: "PASS"}
+		switch {
+		case runErr != nil:
+			row.Status, row.Detail = "RED", "run error: "+runErr.Error()
+		default:
+			if d := Compare(s, g, res); d != "" {
+				row.Status, row.Detail = "RED", d
+			}
+		}
+		rows = append(rows, row)
+	}
+	md := RenderLedger(rows)
+	if err := os.WriteFile("LEDGER.md", []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("\n%s", md)
+	if os.Getenv("PKF_CONFORMANCE_STRICT") == "1" {
+		for _, r := range rows {
+			if r.Status != "PASS" {
+				t.Errorf("strict: %s RED: %s", r.ID, r.Detail)
+			}
+		}
+	}
+}
+
+func firstArg(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return argv[0]
 }
