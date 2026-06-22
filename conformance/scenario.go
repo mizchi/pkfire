@@ -13,6 +13,7 @@ import (
 type Contract struct {
 	JSON              bool     `json:"json"`
 	UnorderedPaths    []string `json:"unorderedPaths"`
+	JsonIgnorePaths   []string `json:"jsonIgnorePaths"`
 	Exit              bool     `json:"exit"`
 	MustContain       []string `json:"mustContain"`
 	FSDelta           bool     `json:"fsDelta"`

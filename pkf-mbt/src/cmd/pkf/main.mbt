@@ -20,6 +20,7 @@ struct Param {
   ptype : String
   choices : Array[String]
   default : String?
+  description : String?
 }
 
 ///|
@@ -60,6 +61,8 @@ struct WorkflowTest {
 ///|
 struct Plan {
   default_env : Map[String, String]
+  default_shell : String
+  default_shell_flags : Array[String]
   tasks : Map[String, Task]
   task_order : Array[String]
   workflow_tests : Array[WorkflowTest]
@@ -269,7 +272,13 @@ fn parse_plan(raw : String) -> Plan {
                 Some(String(s)) => Some(s)
                 _ => None
               }
-              params.push(Param::{ name: pname, ptype, choices, default })
+              let pdesc = match p.get("description") {
+                Some(String(s)) => Some(s)
+                _ => None
+              }
+              params.push(
+                Param::{ name: pname, ptype, choices, default, description: pdesc },
+              )
             }
             _ => ()
           }
@@ -336,7 +345,7 @@ fn parse_plan(raw : String) -> Plan {
       }
     _ => ()
   }
-  Plan::{ default_env, tasks, task_order, workflow_tests }
+  Plan::{ default_env, default_shell, default_shell_flags, tasks, task_order, workflow_tests }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +426,17 @@ fn task_to_json(
   }
   o["acceptsArgs"] = jbool(t.accepts_args)
   o["inheritEnv"] = jbool(t.inherit_env)
+  match t.workdir {
+    Some(wd) => o["workdir"] = Json::string(wd)
+    None => ()
+  }
+  if t.params.length() > 0 {
+    let parr : Array[Json] = []
+    for p in t.params {
+      parr.push(param_to_json(p))
+    }
+    o["params"] = Json::array(parr)
+  }
   if with_kind {
     let kind = if t.service {
       "service"
@@ -429,6 +449,87 @@ fn task_to_json(
     }
     o["kind"] = Json::string(kind)
   }
+  Json::object(o)
+}
+
+///|
+fn param_to_json(p : Param) -> Json {
+  let o : Map[String, Json] = Map([], capacity=6)
+  o["name"] = Json::string(p.name)
+  let typ = if p.ptype.length() == 0 { "string" } else { p.ptype }
+  o["type"] = Json::string(typ)
+  match p.default {
+    Some(d) => o["default"] = Json::string(d)
+    None => ()
+  }
+  if p.choices.length() > 0 {
+    o["choices"] = jstr_array(p.choices)
+  }
+  match p.description {
+    Some(d) => o["description"] = Json::string(d)
+    None => ()
+  }
+  Json::object(o)
+}
+
+///|
+fn describe_to_json(t : Task) -> Json {
+  let o : Map[String, Json] = Map([], capacity=16)
+  o["name"] = Json::string(t.name)
+  match t.description {
+    Some(d) => o["description"] = Json::string(d)
+    None => ()
+  }
+  o["visibility"] = Json::string(t.visibility)
+  // service: omit when false (omitempty)
+  if t.service {
+    o["service"] = jbool(true)
+  }
+  match t.workdir {
+    Some(wd) => o["workdir"] = Json::string(wd)
+    None => ()
+  }
+  if t.params.length() > 0 {
+    let arr : Array[Json] = []
+    for p in t.params {
+      arr.push(param_to_json(p))
+    }
+    o["params"] = Json::array(arr)
+  }
+  // acceptsArgs: omit when false (omitempty)
+  if t.accepts_args {
+    o["acceptsArgs"] = jbool(true)
+  }
+  if t.inputs.length() > 0 {
+    o["inputs"] = jstr_array(t.inputs)
+  }
+  if t.outputs.length() > 0 {
+    o["outputs"] = jstr_array(t.outputs)
+  }
+  // cache: always present
+  o["cache"] = jbool(t.cache)
+  if t.deps.length() > 0 {
+    o["deps"] = jstr_array(t.deps)
+  }
+  if t.services.length() > 0 {
+    o["services"] = jstr_array(t.services)
+  }
+  o["cmd"] = Json::string(t.cmd)
+  if t.env.length() > 0 {
+    let env_o : Map[String, Json] = Map([], capacity=t.env.length())
+    for k, v in t.env {
+      env_o[k] = Json::string(v)
+    }
+    o["env"] = Json::object(env_o)
+  }
+  if t.tools.length() > 0 {
+    let tools_o : Map[String, Json] = Map([], capacity=t.tools.length())
+    for k, v in t.tools {
+      tools_o[k] = Json::string(v)
+    }
+    o["tools"] = Json::object(tools_o)
+  }
+  // specRef is not tracked in MoonBit's Task struct — omitted.
   Json::object(o)
 }
 
@@ -2650,6 +2751,166 @@ async fn[X] up_cmd(
 }
 
 ///|
+/// Scan the Taskfile source for the `amends "<URI>"` line.
+/// Returns (amends_uri, schema_version) — both may be None.
+/// The schema_version is extracted from the `pkfire@<version>` token
+/// in the URI (just the version string, e.g. "0.10.0").
+fn scan_amends_and_schema(taskfile_path : String) -> (String?, String?) {
+  let src = @fs.read_file_to_string(taskfile_path) catch {
+    _ => return (None, None)
+  }
+  let mut amends : String? = None
+  for line_view in src.split("\n") {
+    let line = line_view.to_string().trim_space().to_string()
+    if line.has_prefix("amends ") {
+      // Find the first `"` in the line.
+      let mut start = -1
+      for i in 0..<line.length() {
+        if line[i] == '"' {
+          start = i
+          break
+        }
+      }
+      if start >= 0 {
+        // Find the closing `"` after position start.
+        // Use a while loop since MoonBit range literals require constants.
+        let mut j = start + 1
+        let mut end = -1
+        while j < line.length() {
+          if line[j] == '"' {
+            end = j
+            break
+          }
+          j = j + 1
+        }
+        if end > start {
+          amends = Some(line.substring(start=start + 1, end=end))
+        }
+      }
+      break
+    }
+  }
+  let schema : String? = match amends {
+    Some(uri) => {
+      // Look for `pkfire@` in the URI and extract up to the next `#` or `"`.
+      match uri.find("pkfire@") {
+        Some(idx) => {
+          let after = uri.substring(start=idx + 7, end=uri.length())
+          // End at `#` or end of string.
+          let mut end = after.length()
+          for i in 0..<after.length() {
+            if after[i] == '#' || after[i] == '"' {
+              end = i
+              break
+            }
+          }
+          if end > 0 {
+            Some(after.substring(start=0, end=end))
+          } else {
+            None
+          }
+        }
+        None => None
+      }
+    }
+    None => None
+  }
+  (amends, schema)
+}
+
+///|
+async fn info_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
+  let mut json_flag = false
+  let mut all_flag = false
+  for arg in args {
+    match arg {
+      "--json" => json_flag = true
+      "--all" => all_flag = true
+      _ => {
+        if arg.has_prefix("--") {
+          die("pkf info: unknown flag `\{arg}`")
+          return 2
+        } else {
+          die("info takes no positional args, got `\{arg}`")
+          return 2
+        }
+      }
+    }
+  }
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let (amends, schema) = scan_amends_and_schema(taskfile)
+  if json_flag {
+    let root : Map[String, Json] = Map([], capacity=8)
+    root["taskfile"] = Json::string(taskfile)
+    match schema {
+      Some(v) => root["schemaVersion"] = Json::string(v)
+      None => ()
+    }
+    match amends {
+      Some(a) => root["amends"] = Json::string(a)
+      None => ()
+    }
+    // defaults: always emit since the schema defines bash/-c as defaults
+    // and parse_plan always carries shell/shellFlags.
+    let defaults_o : Map[String, Json] = Map([], capacity=3)
+    defaults_o["shell"] = Json::string(plan.default_shell)
+    defaults_o["shellFlags"] = jstr_array(plan.default_shell_flags)
+    if plan.default_env.length() > 0 {
+      let env_o : Map[String, Json] = Map([], capacity=plan.default_env.length())
+      for k, v in plan.default_env {
+        env_o[k] = Json::string(v)
+      }
+      defaults_o["env"] = Json::object(env_o)
+    }
+    root["defaults"] = Json::object(defaults_o)
+    let tasks_arr : Array[Json] = []
+    for t in sorted_visible_tasks(plan, all_flag) {
+      tasks_arr.push(task_to_json(t, false, None))
+    }
+    root["tasks"] = Json::array(tasks_arr)
+    if plan.workflow_tests.length() > 0 {
+      let wt_arr : Array[Json] = []
+      for wt in plan.workflow_tests {
+        let wt_o : Map[String, Json] = Map([], capacity=4)
+        wt_o["name"] = Json::string(wt.name)
+        if wt.changed.length() > 0 {
+          wt_o["changed"] = jstr_array(wt.changed)
+        }
+        if wt.tasks.length() > 0 {
+          wt_o["tasks"] = jstr_array(wt.tasks)
+        }
+        if wt.direct.length() > 0 {
+          wt_o["direct"] = jstr_array(wt.direct)
+        }
+        wt_arr.push(Json::object(wt_o))
+      }
+      root["workflowTests"] = Json::array(wt_arr)
+    }
+    println(Json::object(root).stringify())
+    return 0
+  }
+  // Plain text summary.
+  println("taskfile:      " + taskfile)
+  match schema {
+    Some(v) => println("schemaVersion: pkfire@" + v)
+    None =>
+      match amends {
+        Some(a) => println("amends:        " + a)
+        None => ()
+      }
+  }
+  println("defaults:      shell=" + plan.default_shell + " flags=" + join_list(plan.default_shell_flags))
+  let visible = sorted_visible_tasks(plan, all_flag)
+  println("tasks:         " + visible.length().to_string())
+  if plan.workflow_tests.length() > 0 {
+    println("workflowTests: " + plan.workflow_tests.length().to_string())
+  }
+  0
+}
+
+///|
 fn usage_text() -> String {
   let msg =
     #|usage: pkf <command> [args...]
@@ -2661,6 +2922,7 @@ fn usage_text() -> String {
     #|  affected <path>... | --check
     #|  watch [task...]
     #|  up [service...]
+    #|  info [--json] [--all]
   msg
 }
 
@@ -2788,6 +3050,86 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         }
       }
       0
+    }
+    "describe" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      // Detect --json flag; stop flag parsing at the first positional
+      // (mirrors Go's flag.Parse: flags-before-positionals only).
+      let mut json_flag = false
+      let task_names : Array[String] = []
+      let mut seen_positional = false
+      for a in rest {
+        if seen_positional {
+          // Everything after the first positional is a positional, even if
+          // it looks like a flag — matching Go's flag.Parse stop-at-first-
+          // positional semantics.
+          task_names.push(a)
+        } else if a == "--json" {
+          json_flag = true
+        } else if a.has_prefix("--") {
+          die("pkf describe: unknown flag `\{a}`")
+          return 2
+        } else {
+          seen_positional = true
+          task_names.push(a)
+        }
+      }
+      if task_names.length() == 0 {
+        die("usage: pkf describe [-f FILE] [--json] <task>")
+        return 2
+      }
+      if task_names.length() > 1 {
+        die("describe takes a single task name, got \{join_list(task_names)}")
+        return 2
+      }
+      let task_name = task_names[0]
+      let taskfile = locate_taskfile(explicit_taskfile)
+      let raw_json = eval_taskfile(taskfile)
+      let plan = parse_plan(raw_json)
+      let task = match plan.tasks.get(task_name) {
+        Some(t) => t
+        None => {
+          die("unknown task: \"\{task_name}\" (try `pkf list --all`)")
+          return 2
+        }
+      }
+      if json_flag {
+        println(describe_to_json(task).stringify())
+      } else {
+        // Plain text: readable multi-line summary.
+        println("task: " + task.name)
+        match task.description {
+          Some(d) => println("  description: " + d)
+          None => ()
+        }
+        println("  visibility: " + task.visibility)
+        println("  cache: " + task.cache.to_string())
+        println("  cmd: " + task.cmd)
+        if task.inputs.length() > 0 {
+          println("  inputs: " + join_list(task.inputs))
+        }
+        if task.outputs.length() > 0 {
+          println("  outputs: " + join_list(task.outputs))
+        }
+        if task.deps.length() > 0 {
+          println("  deps: " + join_list(task.deps))
+        }
+        if task.params.length() > 0 {
+          println("  params:")
+          for p in task.params {
+            let default = match p.default {
+              Some(d) => " (default: " + d + ")"
+              None => ""
+            }
+            println("    --" + p.name + " : " + p.ptype + default)
+          }
+        }
+      }
+      0
+    }
+    "info" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      info_cmd(explicit_taskfile, rest[:])
     }
     "version" | "--version" | "-v" => {
       println(pkf_version())

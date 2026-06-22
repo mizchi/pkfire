@@ -1,0 +1,9 @@
+{
+  "name": "app",
+  "visibility": "public",
+  "cache": true,
+  "deps": [
+    "base"
+  ],
+  "cmd": "echo app"
+}

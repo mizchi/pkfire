@@ -1,0 +1,30 @@
+{
+  "name": "deploy",
+  "description": "ship it",
+  "visibility": "public",
+  "workdir": "sub",
+  "params": [
+    {
+      "name": "region",
+      "type": "enum",
+      "default": "us",
+      "choices": [
+        "us",
+        "eu"
+      ],
+      "description": "target region"
+    }
+  ],
+  "acceptsArgs": true,
+  "inputs": [
+    "src/**"
+  ],
+  "outputs": [
+    "dist/**"
+  ],
+  "cache": true,
+  "cmd": "echo deploy",
+  "env": {
+    "ENV": "prod"
+  }
+}

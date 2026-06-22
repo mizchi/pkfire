@@ -213,6 +213,19 @@ func firstArg(argv []string) string {
 	return argv[0]
 }
 
+func TestCompareJSONIgnorePaths(t *testing.T) {
+	s := Scenario{Contract: Contract{JSON: true, JsonIgnorePaths: []string{"taskfile"}}}
+	want := Golden{Stdout: []byte(`{"taskfile":"/tmp/a/Taskfile.pkl","schemaVersion":"pkfire@0.10.0"}`)}
+	got := Result{Stdout: []byte(`{"taskfile":"/tmp/DIFFERENT/Taskfile.pkl","schemaVersion":"pkfire@0.10.0"}`)}
+	if d := Compare(s, want, got); d != "" {
+		t.Errorf("ignored path should not cause diff: %s", d)
+	}
+	got.Stdout = []byte(`{"taskfile":"/x","schemaVersion":"pkfire@0.11.0"}`)
+	if Compare(s, want, got) == "" {
+		t.Error("non-ignored field mismatch should diff")
+	}
+}
+
 func TestCompareStderrContract(t *testing.T) {
 	s := Scenario{Contract: Contract{Exit: true, MustContainStderr: []string{"usage"}, StdoutEmpty: true}}
 	want := Golden{Exit: 1, Stderr: []byte("pkf: usage: ...\n")}
