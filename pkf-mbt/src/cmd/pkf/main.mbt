@@ -2363,9 +2363,11 @@ fn render_graph_node(
 ///|
 async fn graph_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut show_all = false
+  let mut json_flag = false
   for arg in args {
     match arg {
       "--all" => show_all = true
+      "--json" => json_flag = true
       _ => {
         die("pkf graph: unknown flag `\{arg}`")
         return 2
@@ -2375,6 +2377,27 @@ async fn graph_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
+  if json_flag {
+    let visible = sorted_visible_tasks(plan, show_all)
+    let tasks_arr : Array[Json] = []
+    for t in visible {
+      tasks_arr.push(task_to_json(t, true))
+    }
+    let edges_arr : Array[Json] = []
+    for t in visible {
+      for dep in t.deps {
+        let e : Map[String, Json] = Map([], capacity=2)
+        e["from"] = Json::string(dep)
+        e["to"] = Json::string(t.name)
+        edges_arr.push(Json::object(e))
+      }
+    }
+    let root : Map[String, Json] = Map([], capacity=2)
+    root["tasks"] = Json::array(tasks_arr)
+    root["edges"] = Json::array(edges_arr)
+    println(Json::object(root).stringify())
+    return 0
+  }
   for name in plan.task_order {
     let task = match plan.tasks.get(name) {
       Some(t) => t
