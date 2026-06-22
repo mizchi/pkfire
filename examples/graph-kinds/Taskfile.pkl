@@ -1,0 +1,30 @@
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local helper = new Task {
+  name = "helper"
+  cmd = "echo helper"
+  visibility = "internal"
+}
+
+local lib = new Task {
+  name = "lib"
+  cmd = "echo lib"
+  deps { helper }
+}
+
+local web = new Task {
+  name = "web"
+  cmd = "sleep 1"
+  service = true
+}
+
+local all = new Task {
+  name = "all"
+  deps { lib; web }
+}
+
+local noop = new Task {
+  name = "noop"
+}
+
+tasks { helper; lib; web; all; noop }

@@ -39,6 +39,7 @@ struct Task {
   params : Array[Param]
   accepts_args : Bool
   service : Bool
+  quiet : Bool
   services : Array[String]
   ready_port : Int
   ready_cmd : String
@@ -222,6 +223,10 @@ fn parse_plan(raw : String) -> Plan {
       Some(v) => parse_bool(v, default=false)
       None => false
     }
+    let quiet = match task_entries.get("quiet") {
+      Some(v) => parse_bool(v, default=false)
+      None => false
+    }
     let services = match task_entries.get("services") {
       Some(v) => parse_string_array(v)
       None => []
@@ -287,6 +292,7 @@ fn parse_plan(raw : String) -> Plan {
       params,
       accepts_args,
       service,
+      quiet,
       services,
       ready_port,
       ready_cmd,
@@ -331,6 +337,140 @@ fn parse_plan(raw : String) -> Plan {
     _ => ()
   }
   Plan::{ default_env, tasks, task_order, workflow_tests }
+}
+
+// ---------------------------------------------------------------------------
+// JSON encoder helpers — used by `list --json` (and graph --json later).
+// ---------------------------------------------------------------------------
+
+///|
+fn jbool(b : Bool) -> Json {
+  Json::boolean(b)
+}
+
+///|
+fn jstr_array(xs : Array[String]) -> Json {
+  let arr : Array[Json] = []
+  for x in xs {
+    arr.push(Json::string(x))
+  }
+  Json::array(arr)
+}
+
+///|
+fn task_to_json(
+  t : Task,
+  with_kind : Bool,
+  keep : Map[String, Bool]?,
+) -> Json {
+  let o : Map[String, Json] = Map([], capacity=16)
+  o["name"] = Json::string(t.name)
+  match t.description {
+    Some(d) => o["description"] = Json::string(d)
+    None => ()
+  }
+  o["visibility"] = Json::string(t.visibility)
+  o["cmd"] = Json::string(t.cmd)
+  o["shell"] = Json::string(t.shell)
+  o["shellFlags"] = jstr_array(t.shell_flags)
+  if t.inputs.length() > 0 {
+    o["inputs"] = jstr_array(t.inputs)
+  }
+  if t.outputs.length() > 0 {
+    o["outputs"] = jstr_array(t.outputs)
+  }
+  // deps: filter to visible set when keep is provided (graph --json).
+  // list --json (keep=None) emits deps unfiltered.
+  let visible_deps = match keep {
+    Some(k) => {
+      let filtered : Array[String] = []
+      for d in t.deps {
+        if k.get(d) is Some(true) {
+          filtered.push(d)
+        }
+      }
+      filtered
+    }
+    None => t.deps
+  }
+  if visible_deps.length() > 0 {
+    o["deps"] = jstr_array(visible_deps)
+  }
+  o["cache"] = jbool(t.cache)
+  o["service"] = jbool(t.service)
+  o["quiet"] = jbool(t.quiet)
+  // services: filter to visible set when keep is provided (graph --json).
+  let visible_services = match keep {
+    Some(k) => {
+      let filtered : Array[String] = []
+      for s in t.services {
+        if k.get(s) is Some(true) {
+          filtered.push(s)
+        }
+      }
+      filtered
+    }
+    None => t.services
+  }
+  if visible_services.length() > 0 {
+    o["services"] = jstr_array(visible_services)
+  }
+  o["acceptsArgs"] = jbool(t.accepts_args)
+  o["inheritEnv"] = jbool(t.inherit_env)
+  if with_kind {
+    let kind = if t.service {
+      "service"
+    } else if t.cmd == "" && t.deps.length() > 0 {
+      "aggregate"
+    } else if t.cmd == "" {
+      "noop"
+    } else {
+      "task"
+    }
+    o["kind"] = Json::string(kind)
+  }
+  Json::object(o)
+}
+
+///|
+/// Lexicographic string comparison (char-by-char, shorter prefix wins).
+/// MoonBit's built-in String::compare sorts by length first, so we need
+/// this explicit comparator for alphabetical ordering.
+fn lex_cmp(a : String, b : String) -> Int {
+  let la = a.length()
+  let lb = b.length()
+  let min_len = if la < lb { la } else { lb }
+  for i in 0..<min_len {
+    let ca = a[i].to_int()
+    let cb = b[i].to_int()
+    if ca != cb {
+      return ca - cb
+    }
+  }
+  la - lb
+}
+
+///|
+fn sorted_visible_tasks(plan : Plan, include_all : Bool) -> Array[Task] {
+  let names : Array[String] = []
+  for name in plan.task_order {
+    match plan.tasks.get(name) {
+      Some(t) =>
+        if include_all || t.visibility != "internal" {
+          names.push(name)
+        }
+      None => ()
+    }
+  }
+  names.sort_by(fn(a, b) { lex_cmp(a, b) })
+  let out : Array[Task] = []
+  for n in names {
+    match plan.tasks.get(n) {
+      Some(t) => out.push(t)
+      None => ()
+    }
+  }
+  out
 }
 
 ///|
@@ -2138,10 +2278,12 @@ fn join_list(items : Array[String]) -> String {
 async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut verbose = false
   let mut show_all = false
+  let mut json_flag = false
   for arg in args {
     match arg {
       "-v" | "--verbose" => verbose = true
       "--all" => show_all = true
+      "--json" => json_flag = true
       _ => {
         die("pkf list: unknown flag `\{arg}`")
         return 2
@@ -2151,6 +2293,16 @@ async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
+  if json_flag {
+    let arr : Array[Json] = []
+    for t in sorted_visible_tasks(plan, show_all) {
+      arr.push(task_to_json(t, false, None))
+    }
+    let root : Map[String, Json] = Map([], capacity=1)
+    root["tasks"] = Json::array(arr)
+    println(Json::object(root).stringify())
+    return 0
+  }
   let visible : Array[String] = []
   for name in plan.task_order {
     let task = match plan.tasks.get(name) {
@@ -2254,9 +2406,11 @@ fn render_graph_node(
 ///|
 async fn graph_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut show_all = false
+  let mut json_flag = false
   for arg in args {
     match arg {
       "--all" => show_all = true
+      "--json" => json_flag = true
       _ => {
         die("pkf graph: unknown flag `\{arg}`")
         return 2
@@ -2266,6 +2420,35 @@ async fn graph_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
+  if json_flag {
+    let visible = sorted_visible_tasks(plan, show_all)
+    // Build the visible-name set for filtering deps/edges (mirrors Go's
+    // `keep` map passed to filterGraphRefs / writeGraphJSON).
+    let keep : Map[String, Bool] = Map([], capacity=visible.length())
+    for t in visible {
+      keep[t.name] = true
+    }
+    let tasks_arr : Array[Json] = []
+    for t in visible {
+      tasks_arr.push(task_to_json(t, true, Some(keep)))
+    }
+    let edges_arr : Array[Json] = []
+    for t in visible {
+      for dep in t.deps {
+        if keep.get(dep) is Some(true) {
+          let e : Map[String, Json] = Map([], capacity=2)
+          e["from"] = Json::string(dep)
+          e["to"] = Json::string(t.name)
+          edges_arr.push(Json::object(e))
+        }
+      }
+    }
+    let root : Map[String, Json] = Map([], capacity=2)
+    root["tasks"] = Json::array(tasks_arr)
+    root["edges"] = Json::array(edges_arr)
+    println(Json::object(root).stringify())
+    return 0
+  }
   for name in plan.task_order {
     let task = match plan.tasks.get(name) {
       Some(t) => t

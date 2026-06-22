@@ -65,4 +65,25 @@ scenarios {
     setup { "mkdir -p sub"; "printf hi > src.txt" }
     contract = new { exit = true; fsDelta = true }
   }
+  new {
+    id = "graph-json-basic"
+    fixture = "examples/basic"
+    argv { "graph"; "--json" }
+    contract = new {
+      json = true
+      unorderedPaths { "edges" }
+    }
+  }
+  new {
+    id = "graph-json-kinds"
+    fixture = "examples/graph-kinds"
+    argv { "graph"; "--json" }
+    contract = new { json = true; unorderedPaths { "edges" } }
+  }
+  new {
+    id = "graph-json-kinds-all"
+    fixture = "examples/graph-kinds"
+    argv { "graph"; "--json"; "--all" }
+    contract = new { json = true; unorderedPaths { "edges" } }
+  }
 }
