@@ -508,6 +508,17 @@ fn looks_executable(bytes : Bytes) -> Bool {
 extern "C" fn stat_mode_ffi(path : Bytes) -> Int = "mizchi_pkf_stat_mode"
 
 ///|
+/// FFI: write bytes to stderr (fd 2) verbatim.
+#borrow(s)
+extern "C" fn eprint_ffi(s : Bytes) -> Unit = "mizchi_pkf_eprint"
+
+///|
+/// Write a line to stderr (mirrors `println`, but fd 2).
+fn eprintln(message : String) -> Unit {
+  eprint_ffi(@utf8.encode(message + "\n"))
+}
+
+///|
 fn detect_file_mode(path : String) -> Int {
   // Preferred: ask the OS via stat(2). The full mode (rwx + sticky)
   // round-trips through cache_store / cache_restore that way, so files
