@@ -53,9 +53,9 @@ func TestLoadScenarios(t *testing.T) {
 func TestRunCapturesExitAndStdout(t *testing.T) {
 	bin := requireBin(t, "PKF_GO_BIN")
 	s := Scenario{
-		ID:      "version-probe",
-		Fixture: "examples/basic",
-		Argv:    []string{"version"},
+		ID:       "version-probe",
+		Fixture:  "examples/basic",
+		Argv:     []string{"version"},
 		Contract: Contract{Exit: true},
 	}
 	res, err := Run(bin, s, repoRoot(t))
