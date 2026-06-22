@@ -1,0 +1,10 @@
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local copy = new Task {
+  name = "copy"
+  cmd = "cat src.txt > out.txt"
+  inputs { "src.txt" }
+  outputs { "out.txt" }
+}
+
+tasks { copy }

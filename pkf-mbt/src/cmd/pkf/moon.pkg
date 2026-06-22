@@ -11,6 +11,7 @@ import {
   "moonbitlang/async",
   "moonbitlang/core/buffer" @buffer,
   "moonbitlang/core/encoding/utf8" @utf8,
+  "moonbitlang/core/env" @env,
   "moonbitlang/core/json" @json,
   "moonbitlang/core/strconv" @strconv,
   "moonbitlang/x/crypto" @crypto,
@@ -22,7 +23,7 @@ warnings = "-0029-0014-0024-0009"
 
 options(
   "is-main": true,
-  "native-stub": [ "stat_native.c", "signal_native.c" ],
+  "native-stub": [ "stat_native.c", "signal_native.c", "eprint_native.c" ],
   link: {
     "native": { "cc-link-flags": "-lz" },
   },

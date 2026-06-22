@@ -11,12 +11,15 @@ import (
 
 // Contract declares which comparisons apply to a scenario.
 type Contract struct {
-	JSON           bool     `json:"json"`
-	UnorderedPaths []string `json:"unorderedPaths"`
-	Exit           bool     `json:"exit"`
-	MustContain    []string `json:"mustContain"`
-	FSDelta        bool     `json:"fsDelta"`
-	Env            bool     `json:"env"`
+	JSON              bool     `json:"json"`
+	UnorderedPaths    []string `json:"unorderedPaths"`
+	Exit              bool     `json:"exit"`
+	MustContain       []string `json:"mustContain"`
+	FSDelta           bool     `json:"fsDelta"`
+	Env               bool     `json:"env"`
+	MustContainStderr []string `json:"mustContainStderr"`
+	StdoutEmpty       bool     `json:"stdoutEmpty"`
+	StdoutNonEmpty    bool     `json:"stdoutNonEmpty"`
 }
 
 // Scenario is one contract case.

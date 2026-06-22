@@ -212,3 +212,27 @@ func firstArg(argv []string) string {
 	}
 	return argv[0]
 }
+
+func TestCompareStderrContract(t *testing.T) {
+	s := Scenario{Contract: Contract{Exit: true, MustContainStderr: []string{"usage"}, StdoutEmpty: true}}
+	want := Golden{Exit: 1, Stderr: []byte("pkf: usage: ...\n")}
+	got := Result{Exit: 1, Stderr: []byte("pkf:   usage:  ...\n"), Stdout: nil}
+	if d := Compare(s, want, got); d != "" {
+		t.Errorf("expected match, got: %s", d)
+	}
+	got.Stdout = []byte("leaked")
+	if Compare(s, want, got) == "" {
+		t.Error("expected stdoutEmpty violation")
+	}
+}
+
+func TestCompareStdoutNonEmpty(t *testing.T) {
+	s := Scenario{Contract: Contract{Exit: true, StdoutNonEmpty: true}}
+	want := Golden{Exit: 0}
+	if Compare(s, want, Result{Exit: 0, Stdout: []byte("v1.2.3\n")}) != "" {
+		t.Error("non-empty stdout should satisfy stdoutNonEmpty")
+	}
+	if Compare(s, want, Result{Exit: 0, Stdout: []byte("   \n")}) == "" {
+		t.Error("whitespace-only stdout should violate stdoutNonEmpty")
+	}
+}

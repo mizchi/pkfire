@@ -66,8 +66,8 @@ struct Plan {
 
 ///|
 fn die(message : String) -> Unit {
-  println("pkf: \{message}")
-  @sys.exit(2)
+  eprintln("pkf: \{message}")
+  @sys.exit(1)
 }
 
 ///|
@@ -506,6 +506,17 @@ fn looks_executable(bytes : Bytes) -> Bool {
 /// FFI: stat(2) → lower 12 bits of st_mode, or -1 on failure / Windows.
 #borrow(path)
 extern "C" fn stat_mode_ffi(path : Bytes) -> Int = "mizchi_pkf_stat_mode"
+
+///|
+/// FFI: write bytes to stderr (fd 2) verbatim.
+#borrow(s)
+extern "C" fn eprint_ffi(s : Bytes) -> Unit = "mizchi_pkf_eprint"
+
+///|
+/// Write a line to stderr (mirrors `println`, but fd 2).
+fn eprintln(message : String) -> Unit {
+  eprint_ffi(@utf8.encode(message + "\n"))
+}
 
 ///|
 fn detect_file_mode(path : String) -> Int {
@@ -1487,23 +1498,32 @@ async fn[X] run_task(
     }
   }
   println("pkf: $ \{task.name}")
-  let code = match task.workdir {
-    Some(cwd) =>
-      @process.run_inherit(
-        task.shell.view(),
-        argv[:],
-        extra_env~,
-        inherit_env=task.inherit_env,
-        cwd=cwd.view(),
-      )
+  // C2: always run the task command in the Taskfile's directory (repo_root)
+  // so that inputs/outputs resolve relative to the project root, not the
+  // caller's cwd. If task.workdir is set, resolve it against repo_root.
+  let task_cwd = match task.workdir {
+    Some(wd) =>
+      if wd.has_prefix("/") {
+        wd
+      } else if repo_root.length() == 0 || repo_root == "." {
+        wd
+      } else {
+        repo_root + "/" + wd
+      }
     None =>
-      @process.run_inherit(
-        task.shell.view(),
-        argv[:],
-        extra_env~,
-        inherit_env=task.inherit_env,
-      )
+      if repo_root.length() == 0 {
+        "."
+      } else {
+        repo_root
+      }
   }
+  let code = @process.run_inherit(
+    task.shell.view(),
+    argv[:],
+    extra_env~,
+    inherit_env=task.inherit_env,
+    cwd=task_cwd.view(),
+  )
   stop_services(running)
   if code == 0 {
     match key {
@@ -1519,14 +1539,59 @@ async fn[X] run_task(
 }
 
 ///|
-fn locate_taskfile() -> String {
-  let path = "Taskfile.pkl"
-  if @fs.path_exists(path) {
-    path
-  } else {
-    die("Taskfile.pkl not found in current directory")
-    panic()
+/// Returns the parent directory of dir, or dir itself if dir is the filesystem root.
+/// Uses the existing dirname() helper; handles the root "/" sentinel.
+fn parent_dir(dir : String) -> String {
+  let d = dirname(dir)
+  // dirname returns "" when there is no slash (single component without a
+  // leading "/").  Treat that as the root sentinel so the walk terminates.
+  if d.length() == 0 { dir } else { d }
+}
+
+///|
+/// Locate Taskfile.pkl: use explicit path if given, otherwise walk up from cwd.
+/// Returns the absolute path to the Taskfile.pkl.
+fn locate_taskfile(explicit : String?) -> String {
+  match explicit {
+    Some(p) =>
+      if @fs.path_exists(p) {
+        p
+      } else {
+        die("Taskfile.pkl not found: \{p}")
+        panic()
+      }
+    None => {
+      let cwd = match @env.current_dir() {
+        Some(d) => d
+        None => {
+          die("Taskfile.pkl not found: could not determine current directory")
+          panic()
+        }
+      }
+      let mut dir = cwd
+      while true {
+        let candidate = dir + "/Taskfile.pkl"
+        if @fs.path_exists(candidate) {
+          return candidate
+        }
+        let p = parent_dir(dir)
+        if p == dir {
+          break
+        }
+        dir = p
+      }
+      die("Taskfile.pkl not found in current or any parent directory")
+      panic()
+    }
   }
+}
+
+///|
+/// Returns the directory containing the given Taskfile path.
+/// Falls back to "." for a bare filename with no directory component.
+fn taskfile_dir(taskfile : String) -> String {
+  let d = dirname(taskfile)
+  if d.length() == 0 { "." } else { d }
 }
 
 ///|
@@ -1713,6 +1778,11 @@ fn validate_param_value(p : Param, value : String) -> Bool {
       }
     _ => true
   }
+}
+
+///|
+fn pkf_version() -> String {
+  "0.0.1"
 }
 
 ///|
@@ -1943,7 +2013,7 @@ fn compute_affected(
 }
 
 ///|
-async fn affected_cmd(args : ArrayView[String]) -> Int {
+async fn affected_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut check_mode = false
   let mut changed_file : String? = None
   let positional : Array[String] = []
@@ -1962,7 +2032,7 @@ async fn affected_cmd(args : ArrayView[String]) -> Int {
     }
     i = i + 1
   }
-  let taskfile = locate_taskfile()
+  let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
   if check_mode {
@@ -2065,7 +2135,7 @@ fn join_list(items : Array[String]) -> String {
 // ---------------------------------------------------------------------------
 
 ///|
-async fn list_cmd(args : ArrayView[String]) -> Int {
+async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut verbose = false
   let mut show_all = false
   for arg in args {
@@ -2078,7 +2148,7 @@ async fn list_cmd(args : ArrayView[String]) -> Int {
       }
     }
   }
-  let taskfile = locate_taskfile()
+  let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
   let visible : Array[String] = []
@@ -2182,7 +2252,7 @@ fn render_graph_node(
 }
 
 ///|
-async fn graph_cmd(args : ArrayView[String]) -> Int {
+async fn graph_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut show_all = false
   for arg in args {
     match arg {
@@ -2193,7 +2263,7 @@ async fn graph_cmd(args : ArrayView[String]) -> Int {
       }
     }
   }
-  let taskfile = locate_taskfile()
+  let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
   for name in plan.task_order {
@@ -2233,6 +2303,7 @@ fn watch_exclude(path : String) -> Bool {
 
 ///|
 async fn[X] watch_cmd(
+  explicit_taskfile : String?,
   group : @async.TaskGroup[X],
   args : ArrayView[String],
 ) -> Int {
@@ -2246,10 +2317,10 @@ async fn[X] watch_cmd(
     }
     scope_set[a] = true
   }
-  let taskfile = locate_taskfile()
+  let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
-  let repo_root = "."
+  let repo_root = taskfile_dir(taskfile)
   println("pkf watch: monitoring `.` (Ctrl-C to stop)")
   let watcher = @fswatch.start([repo_root], exclude=watch_exclude)
   for ;; {
@@ -2313,7 +2384,11 @@ extern "C" fn pkf_signal_install_ffi() -> Int = "mizchi_pkf_signal_install"
 extern "C" fn pkf_signal_check_ffi() -> Int = "mizchi_pkf_signal_check"
 
 ///|
-async fn[X] up_cmd(group : @async.TaskGroup[X], args : ArrayView[String]) -> Int {
+async fn[X] up_cmd(
+  explicit_taskfile : String?,
+  group : @async.TaskGroup[X],
+  args : ArrayView[String],
+) -> Int {
   // `pkf up [service...]` — bring up service tasks (or just the named
   // subset) in the foreground, poll a SIGINT flag, tear them down on
   // Ctrl-C.
@@ -2325,7 +2400,7 @@ async fn[X] up_cmd(group : @async.TaskGroup[X], args : ArrayView[String]) -> Int
     }
     scope_set[a] = true
   }
-  let taskfile = locate_taskfile()
+  let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
   // Pick service tasks in authored order so dependents start after their
@@ -2392,35 +2467,98 @@ async fn[X] up_cmd(group : @async.TaskGroup[X], args : ArrayView[String]) -> Int
 }
 
 ///|
+fn usage_text() -> String {
+  let msg =
+    #|usage: pkf <command> [args...]
+    #|
+    #|commands:
+    #|  run <task> [--name=value]... [-- positional...]
+    #|  list [-v] [--all]
+    #|  graph [--all]
+    #|  affected <path>... | --check
+    #|  watch [task...]
+    #|  up [service...]
+  msg
+}
+
+///|
+// Consume leading -f/--file/--file= flags (the flag region, before the
+// first positional). Stops at the first non-flag token; tokens that are
+// other flags are kept in the remaining slice. Mirrors Go's flag.Parse.
+fn extract_file_flag(args : ArrayView[String]) -> (String?, Array[String]) {
+  let remaining : Array[String] = []
+  let mut explicit : String? = None
+  let mut i = 0
+  let mut seen_positional = false
+  while i < args.length() {
+    let a = args[i]
+    if !seen_positional && (a == "-f" || a == "--file") {
+      if i + 1 < args.length() {
+        explicit = Some(args[i + 1])
+        i = i + 2
+      } else {
+        die("flag \{a} needs a value")
+        panic()
+      }
+      continue
+    }
+    if !seen_positional && a.has_prefix("--file=") {
+      explicit = Some(a.substring(start=7, end=a.length()))
+      i = i + 1
+      continue
+    }
+    if !a.has_prefix("-") {
+      seen_positional = true
+    }
+    remaining.push(a)
+    i = i + 1
+  }
+  (explicit, remaining)
+}
+
 ///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
-    let msg =
-      #|usage: pkf <command> [args...]
-      #|
-      #|commands:
-      #|  run <task> [--name=value]... [-- positional...]
-      #|  list [-v] [--all]
-      #|  graph [--all]
-      #|  affected <path>... | --check
-      #|  watch [task...]
-      #|  up [service...]
-    println(msg)
-    return 2
+    println(usage_text())
+    return 0
   }
+  // Dispatch directly on args[0]. Each subcommand extracts -f/--file from
+  // its own leading flag region (Go flag semantics: flags before first
+  // positional). A -f/--file at argv[0] means the subcommand name is the
+  // flag value, which is unknown → fall through to unknown-subcommand.
   match args[0] {
-    "list" => list_cmd(args[1:])
-    "graph" => graph_cmd(args[1:])
-    "affected" => affected_cmd(args[1:])
-    "watch" => watch_cmd(group, args[1:])
-    "up" => up_cmd(group, args[1:])
+    "help" | "--help" | "-h" => {
+      println(usage_text())
+      0
+    }
+    "list" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      list_cmd(explicit_taskfile, rest[:])
+    }
+    "graph" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      graph_cmd(explicit_taskfile, rest[:])
+    }
+    "affected" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      affected_cmd(explicit_taskfile, rest[:])
+    }
+    "watch" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      watch_cmd(explicit_taskfile, group, rest[:])
+    }
+    "up" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      up_cmd(explicit_taskfile, group, rest[:])
+    }
     "run" => {
-      let parsed = parse_run_args(args[1:])
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      let parsed = parse_run_args(rest[:])
       if parsed.target.length() == 0 {
         die("pkf run: missing <task> argument")
       }
       let target = parsed.target
-      let taskfile = locate_taskfile()
+      let taskfile = locate_taskfile(explicit_taskfile)
       let raw_json = eval_taskfile(taskfile)
       let plan = parse_plan(raw_json)
       match plan.tasks.get(target) {
@@ -2437,7 +2575,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         }
       }
       let order = topo_sort_for(target, plan)
-      let repo_root = "."
+      let repo_root = taskfile_dir(taskfile)
       for name in order {
         let task = plan.tasks.get(name).unwrap()
         // CLI flags / positional args only apply to the explicit target.
@@ -2468,8 +2606,13 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       }
       0
     }
+    "version" | "--version" | "-v" => {
+      println(pkf_version())
+      0
+    }
     other => {
-      die("unknown subcommand `\{other}` (only `run` is supported in this MVP)")
+      eprintln("pkf: unknown subcommand `\{other}`")
+      eprintln(usage_text())
       1
     }
   }

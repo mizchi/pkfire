@@ -9,4 +9,60 @@ scenarios {
       json = true
     }
   }
+  new {
+    id = "no-taskfile-error"
+    fixture = "examples/empty-dir"
+    argv { "list" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "pkf:" }
+    }
+  }
+  new {
+    id = "version"
+    fixture = "examples/basic"
+    argv { "version" }
+    contract = new { exit = true; stdoutNonEmpty = true }
+  }
+  new {
+    id = "help"
+    fixture = "examples/basic"
+    argv { "help" }
+    contract = new { exit = true; stdoutNonEmpty = true; mustContain { "run" } }
+  }
+  new {
+    id = "no-args"
+    fixture = "examples/basic"
+    argv {}
+    contract = new { exit = true; stdoutNonEmpty = true }
+  }
+  new {
+    id = "unknown-subcommand"
+    fixture = "examples/basic"
+    argv { "bogus" }
+    contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "run" } }
+  }
+  new {
+    id = "list-from-subdir"
+    fixture = "examples/basic"
+    argv { "list" }
+    env { ["PKF_CONFORMANCE_SUBDIR"] = "sub" }
+    setup { "mkdir -p sub" }
+    contract = new { exit = true; mustContain { "hello" } }
+  }
+  new {
+    id = "list-file-flag"
+    fixture = "examples/basic"
+    argv { "list"; "--file=Taskfile.pkl" }
+    contract = new { exit = true; mustContain { "hello" } }
+  }
+  new {
+    id = "run-output-from-subdir"
+    fixture = "examples/cat-io"
+    argv { "run"; "copy" }
+    env { ["PKF_CONFORMANCE_SUBDIR"] = "sub" }
+    setup { "mkdir -p sub"; "printf hi > src.txt" }
+    contract = new { exit = true; fsDelta = true }
+  }
 }

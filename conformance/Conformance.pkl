@@ -17,6 +17,12 @@ class Contract {
   fsDelta: Boolean = false
   /// Compare the captured PKF_* env dump against golden.
   env: Boolean = false
+  /// Normalized substrings that must all appear in stderr.
+  mustContainStderr: Listing<String> = new {}
+  /// Assert stdout is empty (after whitespace-normalization).
+  stdoutEmpty: Boolean = false
+  /// Assert stdout is non-empty (after whitespace-normalization).
+  stdoutNonEmpty: Boolean = false
 }
 
 class Scenario {
