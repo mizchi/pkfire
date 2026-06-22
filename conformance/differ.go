@@ -135,6 +135,17 @@ func Compare(s Scenario, want Golden, got Result) string {
 			return "fsDelta: " + d
 		}
 	}
+	for _, sub := range s.Contract.MustContainStderr {
+		if !containsNormalized(got.Stderr, sub) {
+			return fmt.Sprintf("mustContainStderr: %q not found in normalized stderr", sub)
+		}
+	}
+	if s.Contract.StdoutEmpty && len(normalizeText(string(got.Stdout))) != 0 {
+		return fmt.Sprintf("stdoutEmpty: expected empty stdout, got %q", got.Stdout)
+	}
+	if s.Contract.StdoutNonEmpty && len(normalizeText(string(got.Stdout))) == 0 {
+		return "stdoutNonEmpty: expected non-empty stdout"
+	}
 	return ""
 }
 
