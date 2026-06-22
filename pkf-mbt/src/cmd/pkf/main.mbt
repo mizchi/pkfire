@@ -20,6 +20,7 @@ struct Param {
   ptype : String
   choices : Array[String]
   default : String?
+  description : String?
 }
 
 ///|
@@ -269,7 +270,13 @@ fn parse_plan(raw : String) -> Plan {
                 Some(String(s)) => Some(s)
                 _ => None
               }
-              params.push(Param::{ name: pname, ptype, choices, default })
+              let pdesc = match p.get("description") {
+                Some(String(s)) => Some(s)
+                _ => None
+              }
+              params.push(
+                Param::{ name: pname, ptype, choices, default, description: pdesc },
+              )
             }
             _ => ()
           }
@@ -429,6 +436,87 @@ fn task_to_json(
     }
     o["kind"] = Json::string(kind)
   }
+  Json::object(o)
+}
+
+///|
+fn param_to_json(p : Param) -> Json {
+  let o : Map[String, Json] = Map([], capacity=6)
+  o["name"] = Json::string(p.name)
+  let typ = if p.ptype.length() == 0 { "string" } else { p.ptype }
+  o["type"] = Json::string(typ)
+  match p.default {
+    Some(d) => o["default"] = Json::string(d)
+    None => ()
+  }
+  if p.choices.length() > 0 {
+    o["choices"] = jstr_array(p.choices)
+  }
+  match p.description {
+    Some(d) => o["description"] = Json::string(d)
+    None => ()
+  }
+  Json::object(o)
+}
+
+///|
+fn describe_to_json(t : Task) -> Json {
+  let o : Map[String, Json] = Map([], capacity=16)
+  o["name"] = Json::string(t.name)
+  match t.description {
+    Some(d) => o["description"] = Json::string(d)
+    None => ()
+  }
+  o["visibility"] = Json::string(t.visibility)
+  // service: omit when false (omitempty)
+  if t.service {
+    o["service"] = jbool(true)
+  }
+  match t.workdir {
+    Some(wd) => o["workdir"] = Json::string(wd)
+    None => ()
+  }
+  if t.params.length() > 0 {
+    let arr : Array[Json] = []
+    for p in t.params {
+      arr.push(param_to_json(p))
+    }
+    o["params"] = Json::array(arr)
+  }
+  // acceptsArgs: omit when false (omitempty)
+  if t.accepts_args {
+    o["acceptsArgs"] = jbool(true)
+  }
+  if t.inputs.length() > 0 {
+    o["inputs"] = jstr_array(t.inputs)
+  }
+  if t.outputs.length() > 0 {
+    o["outputs"] = jstr_array(t.outputs)
+  }
+  // cache: always present
+  o["cache"] = jbool(t.cache)
+  if t.deps.length() > 0 {
+    o["deps"] = jstr_array(t.deps)
+  }
+  if t.services.length() > 0 {
+    o["services"] = jstr_array(t.services)
+  }
+  o["cmd"] = Json::string(t.cmd)
+  if t.env.length() > 0 {
+    let env_o : Map[String, Json] = Map([], capacity=t.env.length())
+    for k, v in t.env {
+      env_o[k] = Json::string(v)
+    }
+    o["env"] = Json::object(env_o)
+  }
+  if t.tools.length() > 0 {
+    let tools_o : Map[String, Json] = Map([], capacity=t.tools.length())
+    for k, v in t.tools {
+      tools_o[k] = Json::string(v)
+    }
+    o["tools"] = Json::object(tools_o)
+  }
+  // specRef is not tracked in MoonBit's Task struct — omitted.
   Json::object(o)
 }
 
@@ -2785,6 +2873,74 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         if code != 0 {
           println("pkf: task `\{name}` failed with exit code \{code}")
           return code
+        }
+      }
+      0
+    }
+    "describe" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      // Detect --json flag and collect non-flag tokens as the task name.
+      let mut json_flag = false
+      let task_names : Array[String] = []
+      for a in rest {
+        if a == "--json" {
+          json_flag = true
+        } else if a.has_prefix("--") {
+          die("pkf describe: unknown flag `\{a}`")
+          return 2
+        } else {
+          task_names.push(a)
+        }
+      }
+      if task_names.length() == 0 {
+        die("usage: pkf describe [-f FILE] [--json] <task>")
+        return 2
+      }
+      if task_names.length() > 1 {
+        die("describe takes a single task name, got \{join_list(task_names)}")
+        return 2
+      }
+      let task_name = task_names[0]
+      let taskfile = locate_taskfile(explicit_taskfile)
+      let raw_json = eval_taskfile(taskfile)
+      let plan = parse_plan(raw_json)
+      let task = match plan.tasks.get(task_name) {
+        Some(t) => t
+        None => {
+          die("unknown task: \"\{task_name}\" (try `pkf list --all`)")
+          return 2
+        }
+      }
+      if json_flag {
+        println(describe_to_json(task).stringify())
+      } else {
+        // Plain text: readable multi-line summary.
+        println("task: " + task.name)
+        match task.description {
+          Some(d) => println("  description: " + d)
+          None => ()
+        }
+        println("  visibility: " + task.visibility)
+        println("  cache: " + task.cache.to_string())
+        println("  cmd: " + task.cmd)
+        if task.inputs.length() > 0 {
+          println("  inputs: " + join_list(task.inputs))
+        }
+        if task.outputs.length() > 0 {
+          println("  outputs: " + join_list(task.outputs))
+        }
+        if task.deps.length() > 0 {
+          println("  deps: " + join_list(task.deps))
+        }
+        if task.params.length() > 0 {
+          println("  params:")
+          for p in task.params {
+            let default = match p.default {
+              Some(d) => " (default: " + d + ")"
+              None => ""
+            }
+            println("    --" + p.name + " : " + p.ptype + default)
+          }
         }
       }
       0

@@ -1,0 +1,24 @@
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local deploy = new Task {
+  name = "deploy"
+  description = "ship it"
+  cmd = "echo deploy"
+  workdir = "sub"
+  acceptsArgs = true
+  inputs { "src/**" }
+  outputs { "dist/**" }
+  env { ["ENV"] = "prod" }
+  params {
+    new {
+      name = "region"
+      type = "enum"
+      choices { "us"; "eu" }
+      default = "us"
+      description = "target region"
+    }
+  }
+}
+local base = new Task { name = "base"; cmd = "echo base" }
+local app = new Task { name = "app"; cmd = "echo app"; deps { base } }
+tasks { deploy; base; app }

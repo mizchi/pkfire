@@ -86,4 +86,22 @@ scenarios {
     argv { "graph"; "--json"; "--all" }
     contract = new { json = true; unorderedPaths { "edges" } }
   }
+  new {
+    id = "describe-json-rich"
+    fixture = "examples/describe-rich"
+    argv { "describe"; "--json"; "deploy" }
+    contract = new { json = true }
+  }
+  new {
+    id = "describe-json-deps"
+    fixture = "examples/describe-rich"
+    argv { "describe"; "--json"; "app" }
+    contract = new { json = true }
+  }
+  new {
+    id = "describe-unknown"
+    fixture = "examples/basic"
+    argv { "describe"; "nope" }
+    contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "unknown task" } }
+  }
 }
