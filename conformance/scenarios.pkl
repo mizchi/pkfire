@@ -19,4 +19,10 @@ scenarios {
       mustContainStderr { "pkf:" }
     }
   }
+  new {
+    id = "version"
+    fixture = "examples/basic"
+    argv { "version" }
+    contract = new { exit = true; stdoutNonEmpty = true }
+  }
 }

@@ -1727,6 +1727,11 @@ fn validate_param_value(p : Param, value : String) -> Bool {
 }
 
 ///|
+fn pkf_version() -> String {
+  "0.0.1"
+}
+
+///|
 fn upcase(name : String) -> String {
   let buf = StringBuilder::new(size_hint=name.length())
   for i in 0..<name.length() {
@@ -2477,6 +2482,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
           return code
         }
       }
+      0
+    }
+    "version" | "--version" | "-v" => {
+      println(pkf_version())
       0
     }
     other => {
