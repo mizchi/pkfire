@@ -426,6 +426,17 @@ fn task_to_json(
   }
   o["acceptsArgs"] = jbool(t.accepts_args)
   o["inheritEnv"] = jbool(t.inherit_env)
+  match t.workdir {
+    Some(wd) => o["workdir"] = Json::string(wd)
+    None => ()
+  }
+  if t.params.length() > 0 {
+    let parr : Array[Json] = []
+    for p in t.params {
+      parr.push(param_to_json(p))
+    }
+    o["params"] = Json::array(parr)
+  }
   if with_kind {
     let kind = if t.service {
       "service"
@@ -3042,16 +3053,24 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
     }
     "describe" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
-      // Detect --json flag and collect non-flag tokens as the task name.
+      // Detect --json flag; stop flag parsing at the first positional
+      // (mirrors Go's flag.Parse: flags-before-positionals only).
       let mut json_flag = false
       let task_names : Array[String] = []
+      let mut seen_positional = false
       for a in rest {
-        if a == "--json" {
+        if seen_positional {
+          // Everything after the first positional is a positional, even if
+          // it looks like a flag — matching Go's flag.Parse stop-at-first-
+          // positional semantics.
+          task_names.push(a)
+        } else if a == "--json" {
           json_flag = true
         } else if a.has_prefix("--") {
           die("pkf describe: unknown flag `\{a}`")
           return 2
         } else {
+          seen_positional = true
           task_names.push(a)
         }
       }

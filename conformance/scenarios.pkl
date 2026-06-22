@@ -110,4 +110,7 @@ scenarios {
     argv { "info"; "--json" }
     contract = new { json = true; jsonIgnorePaths { "taskfile" } }
   }
+  new { id = "list-json-rich"; fixture = "examples/describe-rich"; argv { "list"; "--json" }; contract = new { json = true } }
+  new { id = "info-json-rich"; fixture = "examples/describe-rich"; argv { "info"; "--json" }; contract = new { json = true; jsonIgnorePaths { "taskfile" } } }
+  new { id = "describe-arg-after-json"; fixture = "examples/describe-rich"; argv { "describe"; "deploy"; "--json" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "single task name" } } }
 }
