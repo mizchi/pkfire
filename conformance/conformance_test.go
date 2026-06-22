@@ -249,3 +249,16 @@ func TestCompareStdoutNonEmpty(t *testing.T) {
 		t.Error("whitespace-only stdout should violate stdoutNonEmpty")
 	}
 }
+
+func TestStripJSONKeysRecursive(t *testing.T) {
+	s := Scenario{Contract: Contract{JSON: true, JsonIgnorePaths: []string{"path"}}}
+	want := Golden{Stdout: []byte(`{"findings":[{"path":"/tmp/a","line":3,"kind":"x"}]}`)}
+	got := Result{Stdout: []byte(`{"findings":[{"path":"/tmp/DIFF","line":3,"kind":"x"}]}`)}
+	if d := Compare(s, want, got); d != "" {
+		t.Errorf("nested path should be ignored: %s", d)
+	}
+	got.Stdout = []byte(`{"findings":[{"path":"/x","line":9,"kind":"x"}]}`)
+	if Compare(s, want, got) == "" {
+		t.Error("nested non-ignored mismatch (line) should diff")
+	}
+}
