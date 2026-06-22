@@ -390,6 +390,24 @@ fn task_to_json(t : Task, with_kind : Bool) -> Json {
 }
 
 ///|
+/// Lexicographic string comparison (char-by-char, shorter prefix wins).
+/// MoonBit's built-in String::compare sorts by length first, so we need
+/// this explicit comparator for alphabetical ordering.
+fn lex_cmp(a : String, b : String) -> Int {
+  let la = a.length()
+  let lb = b.length()
+  let min_len = if la < lb { la } else { lb }
+  for i in 0..<min_len {
+    let ca = a[i].to_int()
+    let cb = b[i].to_int()
+    if ca != cb {
+      return ca - cb
+    }
+  }
+  la - lb
+}
+
+///|
 fn sorted_visible_tasks(plan : Plan, include_all : Bool) -> Array[Task] {
   let names : Array[String] = []
   for name in plan.task_order {
@@ -401,7 +419,7 @@ fn sorted_visible_tasks(plan : Plan, include_all : Bool) -> Array[Task] {
       None => ()
     }
   }
-  names.sort()
+  names.sort_by(fn(a, b) { lex_cmp(a, b) })
   let out : Array[Task] = []
   for n in names {
     match plan.tasks.get(n) {
@@ -2217,10 +2235,12 @@ fn join_list(items : Array[String]) -> String {
 async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut verbose = false
   let mut show_all = false
+  let mut json_flag = false
   for arg in args {
     match arg {
       "-v" | "--verbose" => verbose = true
       "--all" => show_all = true
+      "--json" => json_flag = true
       _ => {
         die("pkf list: unknown flag `\{arg}`")
         return 2
@@ -2230,6 +2250,16 @@ async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
+  if json_flag {
+    let arr : Array[Json] = []
+    for t in sorted_visible_tasks(plan, show_all) {
+      arr.push(task_to_json(t, false))
+    }
+    let root : Map[String, Json] = Map([], capacity=1)
+    root["tasks"] = Json::array(arr)
+    println(Json::object(root).stringify())
+    return 0
+  }
   let visible : Array[String] = []
   for name in plan.task_order {
     let task = match plan.tasks.get(name) {
