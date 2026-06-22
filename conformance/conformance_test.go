@@ -68,3 +68,30 @@ func TestRunCapturesExitAndStdout(t *testing.T) {
 		t.Error("stdout empty, want version string")
 	}
 }
+
+func TestCaptureAndLoadGolden(t *testing.T) {
+	bin := requireBin(t, "PKF_GO_BIN")
+	scenarios, err := LoadScenarios("scenarios.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := scenarios[0] // list-json-basic
+	dir := t.TempDir()
+	res, err := Run(bin, s, repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CaptureGolden(dir, s, res); err != nil {
+		t.Fatalf("CaptureGolden: %v", err)
+	}
+	g, err := LoadGolden(dir, s)
+	if err != nil {
+		t.Fatalf("LoadGolden: %v", err)
+	}
+	if g.Exit != 0 {
+		t.Errorf("golden exit = %d, want 0", g.Exit)
+	}
+	if diff := DiffJSON(g.Stdout, res.Stdout, nil); diff != "" {
+		t.Errorf("round-tripped golden differs from capture: %s", diff)
+	}
+}
