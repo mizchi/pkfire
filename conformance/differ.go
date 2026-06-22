@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // DiffJSON parses want and got as JSON and returns "" if they are
@@ -101,4 +102,34 @@ func pathOrRoot(path string) string {
 		return "(root)"
 	}
 	return path
+}
+
+// Compare applies a scenario's contract to a candidate Result against a
+// Golden, returning "" on match or the first failure description.
+func Compare(s Scenario, want Golden, got Result) string {
+	if s.Contract.Exit && want.Exit != got.Exit {
+		return fmt.Sprintf("exit: want %d, got %d", want.Exit, got.Exit)
+	}
+	if s.Contract.JSON {
+		if d := DiffJSON(want.Stdout, got.Stdout, s.Contract.UnorderedPaths); d != "" {
+			return "json: " + d
+		}
+	}
+	for _, sub := range s.Contract.MustContain {
+		if !containsNormalized(got.Stdout, sub) {
+			return fmt.Sprintf("mustContain: %q not found in normalized stdout", sub)
+		}
+	}
+	return ""
+}
+
+// containsNormalized reports whether normalized stdout contains sub.
+// Normalization collapses runs of whitespace to a single space and trims
+// each line, so wording/spacing/color differences do not cause failures.
+func containsNormalized(stdout []byte, sub string) bool {
+	return strings.Contains(normalizeText(string(stdout)), normalizeText(sub))
+}
+
+func normalizeText(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,5 +94,57 @@ func TestCaptureAndLoadGolden(t *testing.T) {
 	}
 	if diff := DiffJSON(g.Stdout, res.Stdout, nil); diff != "" {
 		t.Errorf("round-tripped golden differs from capture: %s", diff)
+	}
+}
+
+var update = flag.Bool("update", false, "capture oracle goldens instead of diffing")
+
+// TestUpdateGolden regenerates committed goldens from the Go oracle.
+// Run explicitly with -update; a no-op otherwise.
+func TestUpdateGolden(t *testing.T) {
+	if !*update {
+		t.Skip("run with -update to regenerate goldens")
+	}
+	bin := requireBin(t, "PKF_GO_BIN")
+	scenarios, err := LoadScenarios("scenarios.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range scenarios {
+		res, err := Run(bin, s, repoRoot(t))
+		if err != nil {
+			t.Fatalf("%s: run: %v", s.ID, err)
+		}
+		if err := CaptureGolden("golden", s, res); err != nil {
+			t.Fatalf("%s: capture: %v", s.ID, err)
+		}
+	}
+}
+
+// TestOracleSelfConsistency proves the differ machinery: the oracle
+// compared against its own committed golden must report zero diffs.
+// This is the hard gate that keeps Phase 0 CI green regardless of the
+// candidate's parity level.
+func TestOracleSelfConsistency(t *testing.T) {
+	bin := requireBin(t, "PKF_GO_BIN")
+	scenarios, err := LoadScenarios("scenarios.pkl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range scenarios {
+		s := s
+		t.Run(s.ID, func(t *testing.T) {
+			g, err := LoadGolden("golden", s)
+			if err != nil {
+				t.Fatalf("load golden (run -update first): %v", err)
+			}
+			res, err := Run(bin, s, repoRoot(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := Compare(s, g, res); d != "" {
+				t.Errorf("oracle diverged from its own golden: %s", d)
+			}
+		})
 	}
 }

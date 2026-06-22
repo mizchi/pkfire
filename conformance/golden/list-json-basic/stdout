@@ -1,0 +1,61 @@
+{
+  "tasks": [
+    {
+      "name": "build",
+      "visibility": "public",
+      "cmd": "go build -o bin/app ./cmd/app",
+      "shell": "bash",
+      "shellFlags": [
+        "-c"
+      ],
+      "inputs": [
+        "**/*.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "outputs": [
+        "bin/app"
+      ],
+      "cache": true,
+      "service": false,
+      "quiet": false,
+      "acceptsArgs": false,
+      "inheritEnv": true
+    },
+    {
+      "name": "hello",
+      "description": "smoke task",
+      "visibility": "public",
+      "cmd": "echo hello from pkfire",
+      "shell": "bash",
+      "shellFlags": [
+        "-c"
+      ],
+      "cache": true,
+      "service": false,
+      "quiet": false,
+      "acceptsArgs": false,
+      "inheritEnv": true
+    },
+    {
+      "name": "test",
+      "visibility": "public",
+      "cmd": "go test ./...",
+      "shell": "bash",
+      "shellFlags": [
+        "-c"
+      ],
+      "deps": [
+        "build"
+      ],
+      "inputs": [
+        "**/*.go"
+      ],
+      "cache": true,
+      "service": false,
+      "quiet": false,
+      "acceptsArgs": false,
+      "inheritEnv": true
+    }
+  ]
+}
