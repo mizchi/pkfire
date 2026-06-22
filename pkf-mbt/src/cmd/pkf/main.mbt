@@ -39,6 +39,7 @@ struct Task {
   params : Array[Param]
   accepts_args : Bool
   service : Bool
+  quiet : Bool
   services : Array[String]
   ready_port : Int
   ready_cmd : String
@@ -222,6 +223,10 @@ fn parse_plan(raw : String) -> Plan {
       Some(v) => parse_bool(v, default=false)
       None => false
     }
+    let quiet = match task_entries.get("quiet") {
+      Some(v) => parse_bool(v, default=false)
+      None => false
+    }
     let services = match task_entries.get("services") {
       Some(v) => parse_string_array(v)
       None => []
@@ -287,6 +292,7 @@ fn parse_plan(raw : String) -> Plan {
       params,
       accepts_args,
       service,
+      quiet,
       services,
       ready_port,
       ready_cmd,
