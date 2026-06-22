@@ -116,4 +116,6 @@ scenarios {
   new { id = "completion-bash"; fixture = "examples/basic"; argv { "completion"; "bash" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "pkf bash completion" } } }
   new { id = "completion-zsh"; fixture = "examples/basic"; argv { "completion"; "zsh" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "#compdef pkf" } } }
   new { id = "completion-fish"; fixture = "examples/basic"; argv { "completion"; "fish" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "complete -c pkf" } } }
+  new { id = "lint-clean"; fixture = "examples/basic"; argv { "lint"; "--json" }; contract = new { json = true } }
+  new { id = "lint-dead"; fixture = "examples/lint-dead"; argv { "lint"; "--json" }; contract = new { json = true; exit = true; jsonIgnorePaths { "path" } } }
 }

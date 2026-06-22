@@ -1,0 +1,6 @@
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local used = new Task { name = "used"; cmd = "echo used" }
+local orphan = new Task { name = "orphan"; cmd = "echo orphan" }
+
+tasks { used }

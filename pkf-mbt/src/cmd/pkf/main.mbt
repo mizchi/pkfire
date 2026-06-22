@@ -2751,6 +2751,285 @@ async fn[X] up_cmd(
 }
 
 ///|
+struct LocalTaskDecl {
+  var_name : String
+  task_name : String
+  line : Int
+}
+
+///|
+/// Scan source text for `local <id> = new Task { ... }` declarations.
+/// Handles single-line and multi-line forms. Returns a list of
+/// (var_name, task_name, 1-based line number) tuples; task_name may be ""
+/// when the `name = "..."` pattern is not found within the block.
+///
+/// Algorithm:
+///   1. Split into lines; for each line, detect `local <id> = new Task`.
+///   2. Collect everything from `{` to the matching `}` (possibly spanning
+///      multiple lines) as the "body".
+///   3. Extract `name = "<value>"` from the body (first static occurrence).
+fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
+  let lines : Array[String] = []
+  for lv in src.split("\n") {
+    lines.push(lv.to_string())
+  }
+  let result : Array[LocalTaskDecl] = []
+  let mut i = 0
+  while i < lines.length() {
+    let line = lines[i]
+    // Detect the pattern: `local <id>` followed by `= new` and `Task` and `{`
+    // Strip leading whitespace for detection.
+    let trimmed = line.trim_space().to_string()
+    if trimmed.has_prefix("local ") {
+      // Extract the identifier after "local ".
+      let after_local = trimmed.substring(start=6, end=trimmed.length())
+      // Identifier ends at whitespace or '='.
+      let mut id_end = after_local.length()
+      for k in 0..<after_local.length() {
+        let c = after_local[k]
+        if c == ' ' || c == '\t' || c == '=' || c == ':' {
+          id_end = k
+          break
+        }
+      }
+      let var_name = after_local.substring(start=0, end=id_end)
+      if var_name.length() == 0 {
+        i = i + 1
+        continue
+      }
+      // Check that the rest of the declaration references `Task` and has `{`.
+      let rest = after_local.substring(start=id_end, end=after_local.length())
+      if !rest.contains("Task") || !rest.contains("{") {
+        // Could be multi-line: check if `new Task {` appears across next lines.
+        // Simplified: if no `Task` and `{` on this line, skip.
+        i = i + 1
+        continue
+      }
+      // Now collect the body from `{` to matching `}`.
+      // Find `{` in the original source line.
+      let line_start_in_src = find_line_offset(src, i)
+      let line_text_start = line_start_in_src
+      // Find the first `{` in or after the current line.
+      let mut open_pos = -1
+      let search_start = line_text_start
+      let mut j = search_start
+      while j < src.length() {
+        if src[j] == '{' {
+          open_pos = j
+          break
+        }
+        // Don't cross into the next statement (stop at newline if no `{` yet
+        // would mean no opening brace; but we already checked contains("{")).
+        j = j + 1
+      }
+      if open_pos < 0 {
+        i = i + 1
+        continue
+      }
+      // Find matching `}`.
+      let close_pos = find_matching_brace(src, open_pos)
+      if close_pos < 0 {
+        i = i + 1
+        continue
+      }
+      // Extract body (inclusive of braces).
+      let body = src.substring(start=open_pos, end=close_pos + 1)
+      // Find `name = "<value>"` inside body.
+      let task_name = extract_static_name(body)
+      result.push(LocalTaskDecl::{
+        var_name,
+        task_name: match task_name {
+          Some(n) => n
+          None => ""
+        },
+        line: i + 1, // 1-based
+      })
+      // Advance past the closing brace; figure out which line it's on.
+      let close_line = count_newlines_before(src, close_pos)
+      if close_line > i {
+        i = close_line + 1
+      } else {
+        i = i + 1
+      }
+    } else {
+      i = i + 1
+    }
+  }
+  result
+}
+
+///|
+/// Return the byte offset of the start of line `line_index` (0-based) in `src`.
+fn find_line_offset(src : String, line_index : Int) -> Int {
+  if line_index == 0 {
+    return 0
+  }
+  let mut count = 0
+  for i in 0..<src.length() {
+    if src[i] == '\n' {
+      count = count + 1
+      if count == line_index {
+        return i + 1
+      }
+    }
+  }
+  src.length()
+}
+
+///|
+/// Count how many newlines appear in `src` before position `pos`.
+fn count_newlines_before(src : String, pos : Int) -> Int {
+  let mut count = 0
+  for i in 0..<pos {
+    if i >= src.length() {
+      break
+    }
+    if src[i] == '\n' {
+      count = count + 1
+    }
+  }
+  count
+}
+
+///|
+/// Find the matching `}` for a `{` at position `open` in `src`.
+/// Returns -1 if not found.
+fn find_matching_brace(src : String, open : Int) -> Int {
+  let mut depth = 0
+  let mut i = open
+  while i < src.length() {
+    let c = src[i]
+    if c == '{' {
+      depth = depth + 1
+    } else if c == '}' {
+      depth = depth - 1
+      if depth == 0 {
+        return i
+      }
+    }
+    i = i + 1
+  }
+  -1
+}
+
+///|
+/// Extract the first `name = "<value>"` (no interpolation) from a block body.
+/// Returns None if not found or if the value contains `\(` (interpolation).
+fn extract_static_name(body : String) -> String? {
+  // Search for `name` followed by `=` and a quoted string.
+  let mut i = 0
+  while i < body.length() {
+    // Look for `name` token.
+    if i + 4 <= body.length() && body.substring(start=i, end=i + 4) == "name" {
+      // Must be preceded by non-identifier char (or start of string).
+      let ok_before = if i == 0 {
+        true
+      } else {
+        let c = body[i - 1]
+        !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '_'
+      }
+      if ok_before {
+        // Skip whitespace then `=`.
+        let mut j = i + 4
+        while j < body.length() && (body[j] == ' ' || body[j] == '\t') {
+          j = j + 1
+        }
+        if j < body.length() && body[j] == '=' {
+          j = j + 1
+          // Skip whitespace then `"`.
+          while j < body.length() && (body[j] == ' ' || body[j] == '\t') {
+            j = j + 1
+          }
+          if j < body.length() && body[j] == '"' {
+            // Collect until closing `"`.
+            let mut k = j + 1
+            let mut end_k = -1
+            while k < body.length() {
+              if body[k] == '"' {
+                end_k = k
+                break
+              }
+              k = k + 1
+            }
+            if end_k > j {
+              let value = body.substring(start=j + 1, end=end_k)
+              // Reject interpolated values.
+              if !value.contains("\\(") {
+                return Some(value)
+              }
+            }
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  None
+}
+
+///|
+async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
+  let mut json_flag = false
+  for arg in args {
+    match arg {
+      "--json" => json_flag = true
+      "--fix" | "--dry-run" => () // not implemented: silently ignore
+      _ => {
+        if arg.has_prefix("--") {
+          die("pkf lint: unknown flag `\{arg}`")
+          return 2
+        } else {
+          die("lint takes no positional args, got `\{arg}`")
+          return 2
+        }
+      }
+    }
+  }
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let src = @fs.read_file_to_string(taskfile) catch {
+    _ => {
+      die("could not read Taskfile source: \{taskfile}")
+      panic()
+    }
+  }
+  let decls = scan_local_task_decls(src)
+  let findings : Array[Json] = []
+  let mut error_count = 0
+  for decl in decls {
+    if decl.task_name.length() == 0 {
+      continue
+    }
+    if plan.tasks.get(decl.task_name) is None {
+      let f : Map[String, Json] = Map([], capacity=8)
+      f["path"] = Json::string(taskfile)
+      f["line"] = Json::number(decl.line.to_double())
+      f["level"] = Json::string("error")
+      f["kind"] = Json::string("dead-local-task")
+      f["task"] = Json::string(decl.task_name)
+      f["message"] = Json::string(
+        "local task \"\{decl.var_name}\" declares name \"\{decl.task_name}\" but is not included in tasks",
+      )
+      f["suggestion"] = Json::string(
+        "remove local task \"\{decl.var_name}\" or include it in tasks { ... }",
+      )
+      findings.push(Json::object(f))
+      error_count = error_count + 1
+    }
+  }
+  let root : Map[String, Json] = Map([], capacity=1)
+  root["findings"] = Json::array(findings)
+  println(Json::object(root).stringify())
+  if error_count > 0 {
+    let plural = if error_count == 1 { "" } else { "s" }
+    eprintln("pkf: lint found \{error_count} error\{plural}")
+    return 1
+  }
+  0
+}
+
+///|
 /// Scan the Taskfile source for the `amends "<URI>"` line.
 /// Returns (amends_uri, schema_version) — both may be None.
 /// The schema_version is extracted from the `pkfire@<version>` token
@@ -3579,6 +3858,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
     "info" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
       info_cmd(explicit_taskfile, rest[:])
+    }
+    "lint" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      lint_cmd(explicit_taskfile, rest[:])
     }
     "version" | "--version" | "-v" => {
       println(pkf_version())
