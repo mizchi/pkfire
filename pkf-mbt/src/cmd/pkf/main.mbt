@@ -339,6 +339,79 @@ fn parse_plan(raw : String) -> Plan {
   Plan::{ default_env, tasks, task_order, workflow_tests }
 }
 
+// ---------------------------------------------------------------------------
+// JSON encoder helpers — used by `list --json` (and graph --json later).
+// ---------------------------------------------------------------------------
+
+///|
+fn jbool(b : Bool) -> Json {
+  Json::boolean(b)
+}
+
+///|
+fn jstr_array(xs : Array[String]) -> Json {
+  let arr : Array[Json] = []
+  for x in xs {
+    arr.push(Json::string(x))
+  }
+  Json::array(arr)
+}
+
+///|
+fn task_to_json(t : Task, with_kind : Bool) -> Json {
+  let o : Map[String, Json] = Map([], capacity=16)
+  o["name"] = Json::string(t.name)
+  match t.description {
+    Some(d) => o["description"] = Json::string(d)
+    None => ()
+  }
+  o["visibility"] = Json::string(t.visibility)
+  o["cmd"] = Json::string(t.cmd)
+  o["shell"] = Json::string(t.shell)
+  o["shellFlags"] = jstr_array(t.shell_flags)
+  if t.inputs.length() > 0 {
+    o["inputs"] = jstr_array(t.inputs)
+  }
+  if t.outputs.length() > 0 {
+    o["outputs"] = jstr_array(t.outputs)
+  }
+  if t.deps.length() > 0 {
+    o["deps"] = jstr_array(t.deps)
+  }
+  o["cache"] = jbool(t.cache)
+  o["service"] = jbool(t.service)
+  o["quiet"] = jbool(t.quiet)
+  o["acceptsArgs"] = jbool(t.accepts_args)
+  o["inheritEnv"] = jbool(t.inherit_env)
+  if with_kind {
+    o["kind"] = Json::string("task")
+  }
+  Json::object(o)
+}
+
+///|
+fn sorted_visible_tasks(plan : Plan, include_all : Bool) -> Array[Task] {
+  let names : Array[String] = []
+  for name in plan.task_order {
+    match plan.tasks.get(name) {
+      Some(t) =>
+        if include_all || t.visibility != "internal" {
+          names.push(name)
+        }
+      None => ()
+    }
+  }
+  names.sort()
+  let out : Array[Task] = []
+  for n in names {
+    match plan.tasks.get(n) {
+      Some(t) => out.push(t)
+      None => ()
+    }
+  }
+  out
+}
+
 ///|
 fn topo_sort_for(target : String, plan : Plan) -> Array[String] {
   let visited : Map[String, Bool] = Map([], capacity=plan.tasks.length())
