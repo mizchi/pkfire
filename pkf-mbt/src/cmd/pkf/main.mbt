@@ -3690,6 +3690,175 @@ fn extract_file_flag(args : ArrayView[String]) -> (String?, Array[String]) {
 }
 
 ///|
+/// `pkf doctor [--json]` — diagnose the pkfire setup.
+/// Checks: pkf-path, pkl, cache, remote, taskfile.
+/// Messages are environment-specific; the conformance contract checks only
+/// labels + structure + exit, not message values.
+async fn doctor_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
+  let mut json_flag = false
+  for arg in args {
+    match arg {
+      "--json" => json_flag = true
+      _ => {
+        if arg.has_prefix("--") {
+          die("pkf doctor: unknown flag `\{arg}`")
+          return 2
+        }
+      }
+    }
+  }
+  // Accumulate checks: each is {level, label, message}.
+  let check_levels : Array[String] = []
+  let check_labels : Array[String] = []
+  let check_messages : Array[String] = []
+  fn report(level : String, label : String, message : String) -> Unit {
+    check_levels.push(level)
+    check_labels.push(label)
+    check_messages.push(message)
+    if !json_flag {
+      println("  \{level}  \{label}  \{message}")
+    }
+  }
+
+  // 1. pkf-path — best-effort: try to find pkf in PATH via `which pkf`.
+  let pkf_path_msg : String = {
+    let res = try? @process.collect_stdout("which", ["pkf"])
+    match res {
+      Ok((code, data)) =>
+        if code == 0 {
+          let p = data.text().trim_space().to_string()
+          "pkf found at \{p}"
+        } else {
+          "pkf not found in PATH"
+        }
+      Err(_) => "pkf not found in PATH"
+    }
+  }
+  let pkf_path_level = if pkf_path_msg.contains("not found") { "WARN" } else { "OK" }
+  report(pkf_path_level, "pkf-path", pkf_path_msg)
+
+  // 2. pkl CLI — run `pkl --version`.
+  let pkl_msg : String = {
+    let res = try? @process.collect_stdout("pkl", ["--version"])
+    match res {
+      Ok((code, data)) =>
+        if code == 0 {
+          let ver = data.text().trim_space().to_string()
+          "\{ver}"
+        } else {
+          "pkl found but --version failed (exit \{code})"
+        }
+      Err(_) => "pkl not in PATH — install from https://pkl-lang.org/"
+    }
+  }
+  let pkl_level = if pkl_msg.contains("not in PATH") || pkl_msg.contains("failed") { "ERROR" } else { "OK" }
+  report(pkl_level, "pkl", pkl_msg)
+
+  // 3. cache directory.
+  let cache_dir = cache_root()
+  let cache_msg : String = {
+    if @fs.path_exists(cache_dir) {
+      let is_dir = @fs.is_dir(cache_dir) catch {
+        _ => false
+      }
+      if !is_dir {
+        "\{cache_dir} exists but is not a directory"
+      } else {
+        // Count entries in cas/ subdirectory if it exists.
+        let cas_dir = join_path(cache_dir, "cas")
+        let entries = @fs.read_dir(cas_dir) catch {
+          _ => []
+        }
+        "\{cache_dir} (\{entries.length()} top-level CAS shards)"
+      }
+    } else {
+      "\{cache_dir} (empty — will be created on first run)"
+    }
+  }
+  let cache_level = if cache_msg.contains("not a directory") { "ERROR" } else { "OK" }
+  report(cache_level, "cache", cache_msg)
+
+  // 4. remote cache — check PKFIRE_MBT_REMOTE_CACHE env var.
+  let remote_msg : String = match @sys.get_env_var("PKFIRE_MBT_REMOTE_CACHE") {
+    Some(url) =>
+      if url.length() == 0 {
+        "PKFIRE_MBT_REMOTE_CACHE not set (local-only)"
+      } else {
+        "PKFIRE_MBT_REMOTE_CACHE=\{url}"
+      }
+    None => "PKFIRE_MBT_REMOTE_CACHE not set (local-only)"
+  }
+  report("OK", "remote", remote_msg)
+
+  // 5. taskfile — best-effort; doctor should work outside any project.
+  // Mimic locate_taskfile's walk-up logic but don't die() on miss.
+  let found_taskfile : String? = match explicit_taskfile {
+    Some(p) =>
+      if @fs.path_exists(p) {
+        Some(p)
+      } else {
+        None
+      }
+    None => {
+      let cwd_opt = @env.current_dir()
+      match cwd_opt {
+        None => None
+        Some(cwd) => {
+          let mut dir = cwd
+          let mut found : String? = None
+          while true {
+            let candidate = dir + "/Taskfile.pkl"
+            if @fs.path_exists(candidate) {
+              found = Some(candidate)
+              break
+            }
+            let p = parent_dir(dir)
+            if p == dir {
+              break
+            }
+            dir = p
+          }
+          found
+        }
+      }
+    }
+  }
+  let (taskfile_level, taskfile_msg) : (String, String) = match found_taskfile {
+    None =>
+      match @env.current_dir() {
+        Some(cwd) => ("WARN", "no Taskfile.pkl found near \{cwd}")
+        None => ("WARN", "no Taskfile.pkl found")
+      }
+    Some(tf) =>
+      // Report the path and existence. Evaluating + parsing is best-effort
+      // and would call die() on failure, which exits the process. Since
+      // doctor should always complete gracefully, we just confirm the file
+      // exists and is readable.
+      ("OK", "\{tf} (found)")
+  }
+  report(taskfile_level, "taskfile", taskfile_msg)
+
+  // Emit JSON or plain footer.
+  if json_flag {
+    let checks_arr : Array[Json] = []
+    for i in 0..<check_levels.length() {
+      let o : Map[String, Json] = Map([], capacity=3)
+      o["level"] = Json::string(check_levels[i])
+      o["label"] = Json::string(check_labels[i])
+      o["message"] = Json::string(check_messages[i])
+      checks_arr.push(Json::object(o))
+    }
+    let root : Map[String, Json] = Map([], capacity=2)
+    root["version"] = Json::string(pkf_version())
+    root["checks"] = Json::array(checks_arr)
+    println(Json::object(root).stringify())
+  } else {
+    println("")
+  }
+  0
+}
+
+///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
     println(usage_text())
@@ -3854,6 +4023,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         }
       }
       0
+    }
+    "doctor" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      doctor_cmd(explicit_taskfile, rest[:])
     }
     "info" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])

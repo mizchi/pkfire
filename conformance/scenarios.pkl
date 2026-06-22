@@ -118,4 +118,13 @@ scenarios {
   new { id = "completion-fish"; fixture = "examples/basic"; argv { "completion"; "fish" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "complete -c pkf" } } }
   new { id = "lint-clean"; fixture = "examples/basic"; argv { "lint"; "--json" }; contract = new { json = true } }
   new { id = "lint-dead"; fixture = "examples/lint-dead"; argv { "lint"; "--json" }; contract = new { json = true; exit = true; jsonIgnorePaths { "path" } } }
+  new {
+    id = "doctor-structural"
+    fixture = "examples/basic"
+    argv { "doctor"; "--json" }
+    contract = new {
+      exit = true
+      mustContain { "checks"; "level"; "label"; "message"; "pkl"; "cache"; "remote"; "taskfile"; "pkf-path" }
+    }
+  }
 }
