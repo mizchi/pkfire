@@ -9,4 +9,14 @@ scenarios {
       json = true
     }
   }
+  new {
+    id = "no-taskfile-error"
+    fixture = "examples/empty-dir"
+    argv { "list" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "pkf:" }
+    }
+  }
 }

@@ -66,8 +66,8 @@ struct Plan {
 
 ///|
 fn die(message : String) -> Unit {
-  println("pkf: \{message}")
-  @sys.exit(2)
+  eprintln("pkf: \{message}")
+  @sys.exit(1)
 }
 
 ///|
