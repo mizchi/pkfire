@@ -235,6 +235,20 @@ local preCommit: Task = new {
   deps { preflight }
 }
 
+local conformance: Task = new {
+  name = "conformance"
+  description = "Differential pkf contract harness (Go oracle vs MoonBit candidate)"
+  cmd =
+    """
+    set -euo pipefail
+    bin="$(mktemp -d)/pkf-go"
+    go build -o "$bin" ./cmd/pkf
+    cd conformance
+    PKF_GO_BIN="$bin" go test ./...
+    """
+  cache = false
+}
+
 workflowTests {
   new {
     name = "Go source changes run the developer gate"
@@ -273,4 +287,5 @@ tasks {
   tag
   preflight
   preCommit
+  conformance
 }
