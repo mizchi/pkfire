@@ -127,4 +127,13 @@ scenarios {
       mustContain { "checks"; "level"; "label"; "message"; "pkl"; "cache"; "remote"; "taskfile"; "pkf-path" }
     }
   }
+  new {
+    id = "explain-structural"
+    fixture = "examples/basic"
+    argv { "explain"; "build" }
+    contract = new {
+      exit = true
+      mustContain { "task:"; "action key:"; "cmd:"; "shell:"; "input patterns" }
+    }
+  }
 }

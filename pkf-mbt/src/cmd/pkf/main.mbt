@@ -3859,6 +3859,173 @@ async fn doctor_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> In
 }
 
 ///|
+/// `pkf explain <task>` — print the action-key surface for a single task.
+///
+/// Output is plain text; the action-key hash (SHA-256 here vs BLAKE3 in
+/// Go pkfire) and the absolute workdir are environment-specific, so the
+/// conformance scenario verifies structural markers only, not values.
+async fn explain_cmd(
+  explicit_taskfile : String?,
+  args : ArrayView[String],
+) -> Int {
+  // Collect positional task name; ignore --diff (out of scope) and
+  // reject any other unknown flags.
+  let positionals : Array[String] = []
+  for a in args {
+    if a == "--diff" {
+      // --diff is out of scope for pkf-mbt — silently skip.
+      ()
+    } else if a.has_prefix("--") {
+      die("pkf explain: unknown flag `\{a}`")
+      return 2
+    } else {
+      positionals.push(a)
+    }
+  }
+  if positionals.length() == 0 {
+    die("usage: pkf explain [-f FILE] <task>")
+    return 2
+  }
+  if positionals.length() > 1 {
+    die("pkf explain: too many task names; expected exactly one")
+    return 2
+  }
+  let task_name = positionals[0]
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let task = match plan.tasks.get(task_name) {
+    Some(t) => t
+    None => {
+      die("unknown task: \"\{task_name}\" (try `pkf list --all`)")
+      return 1
+    }
+  }
+  let repo_root = taskfile_dir(taskfile)
+  // Compute the effective workdir (abs path where the task runs).
+  let effective_workdir = match task.workdir {
+    Some(wd) =>
+      if wd.has_prefix("/") {
+        wd
+      } else if repo_root.length() == 0 || repo_root == "." {
+        wd
+      } else {
+        repo_root + "/" + wd
+      }
+    None =>
+      if repo_root.length() == 0 {
+        "."
+      } else {
+        repo_root
+      }
+  }
+  // Compute the action key for this task (with zero input hashes — no
+  // file I/O here, consistent with `explain` being a fast introspection
+  // command). The hash value intentionally differs from Go pkfire (SHA-256
+  // vs BLAKE3); the conformance scenario checks only that the field is
+  // present, not the value.
+  let action_key = compute_action_key(task, [], Map([], capacity=0), [])
+  // Reverse deps: O(n*m) scan over all tasks.
+  let dependents : Array[String] = []
+  for dep_name in plan.task_order {
+    match plan.tasks.get(dep_name) {
+      Some(other) => {
+        for d in other.deps {
+          if d == task_name {
+            dependents.push(dep_name)
+            break
+          }
+        }
+      }
+      None => ()
+    }
+  }
+  // Print the action-key surface — plain text.
+  println("task:        " + task.name)
+  println("action key:  " + action_key)
+  println("cache:       " + task.cache.to_string())
+  println("workdir:     " + effective_workdir + "  (Taskfile dir)")
+  if task.deps.length() == 0 {
+    println("deps:        (none)")
+  } else {
+    let joined_deps = {
+      let mut s = ""
+      for i, d in task.deps {
+        if i > 0 {
+          s = s + ", "
+        }
+        s = s + d
+      }
+      s
+    }
+    println("deps:        " + joined_deps)
+  }
+  if dependents.length() == 0 {
+    println("dependents:  (none)")
+  } else {
+    let joined = {
+      let mut s = ""
+      for i, d in dependents {
+        if i > 0 {
+          s = s + ", "
+        }
+        s = s + d
+      }
+      s
+    }
+    println("dependents:  " + joined)
+  }
+  println("")
+  println("cmd:")
+  println("  " + task.cmd)
+  println("")
+  println("shell:       " + task.shell)
+  let flags_joined = {
+    let mut s = ""
+    for i, f in task.shell_flags {
+      if i > 0 {
+        s = s + " "
+      }
+      s = s + f
+    }
+    s
+  }
+  println("shell flags: " + flags_joined)
+  println("")
+  println("env (\{task.env.length()}):")
+  if task.env.length() == 0 {
+    println("  (none)")
+  } else {
+    let env_keys = sorted_keys(task.env)
+    for k in env_keys {
+      let v = task.env.get(k).unwrap()
+      println("  " + k + "=" + v)
+    }
+  }
+  println("")
+  println("tools (\{task.tools.length()}):")
+  if task.tools.length() == 0 {
+    println("  (none)")
+  } else {
+    let tool_keys = sorted_keys(task.tools)
+    for k in tool_keys {
+      let v = task.tools.get(k).unwrap()
+      println("  " + k + "=" + v)
+    }
+  }
+  println("")
+  println("input patterns (\{task.inputs.length()}):")
+  if task.inputs.length() == 0 {
+    println("  (none)")
+  } else {
+    for pat in task.inputs {
+      println("  " + pat)
+    }
+  }
+  0
+}
+
+///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
     println(usage_text())
@@ -4055,6 +4222,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         }
       }
       0
+    }
+    "explain" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      explain_cmd(explicit_taskfile, rest[:])
     }
     other => {
       eprintln("pkf: unknown subcommand `\{other}`")
