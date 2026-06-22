@@ -113,4 +113,7 @@ scenarios {
   new { id = "list-json-rich"; fixture = "examples/describe-rich"; argv { "list"; "--json" }; contract = new { json = true } }
   new { id = "info-json-rich"; fixture = "examples/describe-rich"; argv { "info"; "--json" }; contract = new { json = true; jsonIgnorePaths { "taskfile" } } }
   new { id = "describe-arg-after-json"; fixture = "examples/describe-rich"; argv { "describe"; "deploy"; "--json" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "single task name" } } }
+  new { id = "completion-bash"; fixture = "examples/basic"; argv { "completion"; "bash" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "pkf bash completion" } } }
+  new { id = "completion-zsh"; fixture = "examples/basic"; argv { "completion"; "zsh" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "#compdef pkf" } } }
+  new { id = "completion-fish"; fixture = "examples/basic"; argv { "completion"; "fish" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "complete -c pkf" } } }
 }

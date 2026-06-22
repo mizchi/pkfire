@@ -2911,6 +2911,454 @@ async fn info_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
 }
 
 ///|
+fn completion_bash() -> String {
+  #|# pkf bash completion.
+  #|# Source this file, or save into /usr/local/etc/bash_completion.d/.
+  #|# Suggested install:  pkf completion bash > ~/.bash_completion.d/pkf
+  #|#
+  #|# Dynamic task-name completion calls back to `pkf list` (without -v
+  #|# so the output is one name per line, prefix-trimmable).
+  #|
+  #|_pkf() {
+  #|  local cur prev
+  #|  COMPREPLY=()
+  #|  cur="${COMP_WORDS[COMP_CWORD]}"
+  #|  prev="${COMP_WORDS[COMP_CWORD-1]}"
+  #|
+  #|  # First positional = subcommand.
+  #|  if [ "$COMP_CWORD" -eq 1 ]; then
+  #|    COMPREPLY=($(compgen -W "init list describe info run up doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
+  #|    return
+  #|  fi
+  #|
+  #|  local sub="${COMP_WORDS[1]}"
+  #|  case "$sub" in
+  #|    list)
+  #|      if [[ "$prev" == "--color" ]]; then
+  #|        COMPREPLY=($(compgen -W "auto always never" -- "$cur"))
+  #|      elif [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file -v --verbose --long --json --all --unsorted --source-order --color" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    lint)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    doctor)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    affected)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --since --files --explain --check --dry-run --no-cache --refresh --timing --quiet --keep-going --profile --watch -j --jobs" -- "$cur"))
+  #|        return
+  #|      fi
+  #|      local tasks
+  #|      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+  #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+  #|      ;;
+  #|    run)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --watch --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --on-fail --remote-only -j --jobs" -- "$cur"))
+  #|        return
+  #|      fi
+  #|      local tasks
+  #|      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+  #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+  #|      ;;
+  #|    clean|up)
+  #|      if [[ "$cur" == -* ]]; then return; fi
+  #|      local tasks
+  #|      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+  #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+  #|      ;;
+  #|    describe)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
+  #|        return
+  #|      fi
+  #|      local tasks
+  #|      tasks=$(pkf list --all 2>/dev/null | awk '{print $1}')
+  #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+  #|      ;;
+  #|    info)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --json --all" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    hooks)
+  #|      if [ "$COMP_CWORD" -eq 2 ]; then
+  #|        COMPREPLY=($(compgen -W "install uninstall list" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    cache)
+  #|      if [ "$COMP_CWORD" -eq 2 ]; then
+  #|        COMPREPLY=($(compgen -W "stats prune rm clear" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    completion)
+  #|      if [ "$COMP_CWORD" -eq 2 ]; then
+  #|        COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    graph)
+  #|      if [[ "$prev" == "--format" ]]; then
+  #|        COMPREPLY=($(compgen -W "dot mermaid tree json" -- "$cur"))
+  #|      elif [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --format --json --target --all --unsorted --source-order --depth" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    explain)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --diff" -- "$cur"))
+  #|        return
+  #|      fi
+  #|      local tasks
+  #|      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+  #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+  #|      ;;
+  #|    migrate)
+  #|      if [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file --to --dry-run --skip-verify" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|    pkl-cache)
+  #|      if [ "$COMP_CWORD" -eq 2 ]; then
+  #|        COMPREPLY=($(compgen -W "warm" -- "$cur"))
+  #|      elif [[ "$cur" == -* ]]; then
+  #|        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
+  #|      fi
+  #|      ;;
+  #|  esac
+  #|}
+  #|complete -F _pkf pkf
+}
+
+///|
+fn completion_zsh() -> String {
+  #|#compdef pkf
+  #|# pkf zsh completion.
+  #|# Suggested install:  pkf completion zsh > "${fpath[1]}/_pkf"
+  #|# then `compinit` (re-source ~/.zshrc).
+  #|
+  #|_pkf() {
+  #|  local -a subcommands
+  #|  subcommands=(
+  #|    'init:write a starter Taskfile.pkl'
+  #|    'list:list declared tasks'
+  #|    'describe:show a single task'\''s desc / params / inputs / outputs / cache / deps'
+  #|    'info:structured snapshot (schema version + defaults + tasks + workflowTests)'
+  #|    'run:run one or more tasks'
+  #|    'up:supervise long-running services'
+  #|    'doctor:diagnose pkfire setup'
+  #|    'lint:detect Taskfile issues'
+  #|    'format:pkl format -w wrapper'
+  #|    'hooks:manage .git/hooks shims'
+  #|    'affected:run tasks whose inputs changed since <ref>'
+  #|    'clean:remove declared outputs'
+  #|    'cache:inspect / clean the local CAS'
+  #|    'completion:emit shell completion script'
+  #|    'graph:emit DAG (dot / mermaid / tree / json)'
+  #|    'explain:dump or compare inputs to the action key'
+  #|    'migrate:rewrite Taskfile schema version'
+  #|    'pkl-cache:warm the local Pkl package cache'
+  #|    'version:print pkf version'
+  #|    'help:show usage'
+  #|  )
+  #|
+  #|  if (( CURRENT == 2 )); then
+  #|    _describe 'subcommand' subcommands
+  #|    return
+  #|  fi
+  #|
+  #|  case "${words[2]}" in
+  #|    list)
+  #|      if [[ "${words[$((CURRENT-1))]}" == "--color" ]]; then
+  #|        _values 'color' auto always never
+  #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'list option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '-v[show cmd preview and deps]' \
+  #|          '--verbose[show cmd preview and deps]' \
+  #|          '--long[show compact audit table]' \
+  #|          '--json[emit machine-readable output]' \
+  #|          '--all[include internal tasks]' \
+  #|          '--unsorted[use declaration order]' \
+  #|          '--source-order[use declaration order]' \
+  #|          '--color[when to color output]'
+  #|      fi
+  #|      ;;
+  #|    lint)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'lint option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--json[emit machine-readable output]' \
+  #|          '--fix[apply safe fixes]' \
+  #|          '--dry-run[show fixes without writing files]'
+  #|      fi
+  #|      ;;
+  #|    doctor)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'doctor option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--json[emit machine-readable output]' \
+  #|          '--fix[apply safe fixes]' \
+  #|          '--dry-run[show fixes without writing files]'
+  #|      fi
+  #|      ;;
+  #|    affected)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'affected option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--since[git ref to diff against]' \
+  #|          '--files[simulate changed file paths]' \
+  #|          '--explain[show matching input patterns]' \
+  #|          '--check[run workflowTests]' \
+  #|          '--dry-run[preview plan without running]' \
+  #|          '--no-cache[disable cache for this run]' \
+  #|          '--refresh[skip lookup but store outputs]' \
+  #|          '--timing[print task durations]' \
+  #|          '--quiet[suppress per-task log lines]' \
+  #|          '--keep-going[do not stop on first failure]' \
+  #|          '--profile[profile name for cache keys]' \
+  #|          '--watch[recompute affected set on change]' \
+  #|          '-j[max concurrent tasks]' \
+  #|          '--jobs[max concurrent tasks]'
+  #|      else
+  #|        local -a tasks
+  #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+  #|        _describe 'task' tasks
+  #|      fi
+  #|      ;;
+  #|    run)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'run option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--watch[re-run on input changes]' \
+  #|          '--dry-run[preview plan without running]' \
+  #|          '--print-hash[print action keys and exit]' \
+  #|          '--explain-cache[explain cache decisions and exit]' \
+  #|          '--no-cache[disable cache for this run]' \
+  #|          '--refresh[skip lookup but store outputs]' \
+  #|          '--timing[print task durations]' \
+  #|          '--quiet[suppress per-task log lines]' \
+  #|          '--keep-going[do not stop on first failure]' \
+  #|          '--profile[profile name for cache keys]' \
+  #|          '--on-fail[action on task failure]' \
+  #|          '--remote-only[consult only remote cache]' \
+  #|          '-j[max concurrent tasks]' \
+  #|          '--jobs[max concurrent tasks]'
+  #|      else
+  #|        local -a tasks
+  #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+  #|        _describe 'task' tasks
+  #|      fi
+  #|      ;;
+  #|    clean|up)
+  #|      local -a tasks
+  #|      tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+  #|      _describe 'task' tasks
+  #|      ;;
+  #|    describe)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'describe option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--json[emit machine-readable output]'
+  #|      else
+  #|        local -a tasks
+  #|        tasks=(${(f)"$(pkf list --all 2>/dev/null | awk '{print $1}')"})
+  #|        _describe 'task' tasks
+  #|      fi
+  #|      ;;
+  #|    info)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'info option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--json[emit machine-readable output]' \
+  #|          '--all[include internal tasks]'
+  #|      fi
+  #|      ;;
+  #|    hooks)
+  #|      if (( CURRENT == 3 )); then
+  #|        _values 'hooks subcommand' install uninstall list
+  #|      fi
+  #|      ;;
+  #|    cache)
+  #|      if (( CURRENT == 3 )); then
+  #|        _values 'cache subcommand' stats prune rm clear
+  #|      fi
+  #|      ;;
+  #|    completion)
+  #|      if (( CURRENT == 3 )); then
+  #|        _values 'shell' bash zsh fish
+  #|      fi
+  #|      ;;
+  #|    graph)
+  #|      if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
+  #|        _values 'format' dot mermaid tree json
+  #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'graph option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--format[output format]' \
+  #|          '--json[emit machine-readable output]' \
+  #|          '--target[render only one task subgraph]' \
+  #|          '--all[include internal tasks]' \
+  #|          '--unsorted[use declaration order]' \
+  #|          '--source-order[use declaration order]' \
+  #|          '--depth[limit dependency traversal]'
+  #|      fi
+  #|      ;;
+  #|    explain)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'explain option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--diff[compare against another Taskfile.pkl]'
+  #|      else
+  #|        local -a tasks
+  #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+  #|        _describe 'task' tasks
+  #|      fi
+  #|      ;;
+  #|    migrate)
+  #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'migrate option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]' \
+  #|          '--to[target schema version]' \
+  #|          '--dry-run[preview rewrite without writing]' \
+  #|          '--skip-verify[skip post-migration pkl eval]'
+  #|      fi
+  #|      ;;
+  #|    pkl-cache)
+  #|      if (( CURRENT == 3 )); then
+  #|        _values 'pkl-cache subcommand' warm
+  #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+  #|        _values 'pkl-cache option' \
+  #|          '-f[path to Taskfile.pkl]' \
+  #|          '--file[path to Taskfile.pkl]'
+  #|      fi
+  #|      ;;
+  #|  esac
+  #|}
+  #|
+  #|_pkf "$@"
+}
+
+///|
+fn completion_fish() -> String {
+  #|# pkf fish completion.
+  #|# Suggested install:  pkf completion fish > ~/.config/fish/completions/pkf.fish
+  #|
+  #|function __pkf_tasks
+  #|    pkf list 2>/dev/null | awk '{print $1}'
+  #|end
+  #|
+  #|# Subcommands when no subcommand has been picked yet.
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a init      -d 'write a starter Taskfile.pkl'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a list      -d 'list declared tasks'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a describe  -d 'show a single task surface'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a info      -d 'structured snapshot of the Taskfile'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a run       -d 'run one or more tasks'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a up        -d 'supervise long-running services'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a doctor    -d 'diagnose pkfire setup'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a lint      -d 'detect Taskfile issues'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a format    -d 'pkl format -w wrapper'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a hooks     -d 'manage .git/hooks shims'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a affected  -d 'run tasks whose inputs changed since <ref>'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a clean     -d 'remove declared outputs'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a cache     -d 'inspect / clean the local CAS'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a completion -d 'emit shell completion script'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a graph     -d 'emit DAG (dot / mermaid / tree / json)'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a explain   -d 'dump or compare inputs to the action key'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a migrate   -d 'rewrite Taskfile schema version'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a pkl-cache -d 'warm the local Pkl package cache'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a version   -d 'print pkf version'
+  #|complete -c pkf -f -n '__fish_use_subcommand' -a help      -d 'show usage'
+  #|
+  #|# Dynamic task names for the subcommands that take them.
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up explain describe' -a '(__pkf_tasks)'
+  #|
+  #|# Nested subcommand completions.
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from cache' -a 'stats prune rm clear'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l color -a 'auto always never'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -s v -l verbose -d 'show cmd preview and deps'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l long -d 'show compact audit table'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l json -d 'emit machine-readable output'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l all -d 'include internal tasks'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l unsorted -d 'use declaration order'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l source-order -d 'use declaration order'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l json -d 'emit machine-readable output'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l fix -d 'apply safe fixes'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l dry-run -d 'show fixes without writing files'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l json -d 'emit machine-readable output'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l fix -d 'apply safe fixes'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l dry-run -d 'show fixes without writing files'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l since -d 'git ref to diff against'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l files -d 'simulate changed file paths'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l explain -d 'show matching input patterns'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l check -d 'run workflowTests'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l dry-run -d 'preview plan without running'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l no-cache -d 'disable cache for this run'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l refresh -d 'skip lookup but store outputs'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l timing -d 'print task durations'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l quiet -d 'suppress per-task log lines'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l keep-going -d 'do not stop on first failure'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l profile -d 'profile name for cache keys'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l watch -d 'recompute affected set on change'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -s j -l jobs -d 'max concurrent tasks'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l watch -d 're-run on input changes'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l dry-run -d 'preview plan without running'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l print-hash -d 'print action keys and exit'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l explain-cache -d 'explain cache decisions and exit'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l no-cache -d 'disable cache for this run'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l refresh -d 'skip lookup but store outputs'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l timing -d 'print task durations'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l quiet -d 'suppress per-task log lines'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l on-fail -d 'action on task failure'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l remote-only -d 'consult only remote cache'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -s j -l jobs -d 'max concurrent tasks'
+  #|
+  #|# `pkf graph --format <TAB>`.
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree json'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l json -d 'emit machine-readable output'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l target -d 'render only one task subgraph'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l all -d 'include internal tasks'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l unsorted -d 'use declaration order'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l source-order -d 'use declaration order'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l depth -d 'limit dependency traversal'
+  #|
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -s f -l file -d 'path to Taskfile.pkl'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -l diff -d 'compare against another Taskfile.pkl'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from describe' -s f -l file -d 'path to Taskfile.pkl'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from describe' -l json -d 'emit machine-readable output'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from info' -s f -l file -d 'path to Taskfile.pkl'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from info' -l json -d 'emit machine-readable output'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from info' -l all -d 'include internal tasks'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -s f -l file -d 'path to Taskfile.pkl'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l to -d 'target schema version'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l dry-run -d 'preview rewrite without writing'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l skip-verify -d 'skip post-migration pkl eval'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from pkl-cache' -a warm -d 'pre-evaluate Pkl files'
+  #|complete -c pkf -f -n '__fish_seen_subcommand_from pkl-cache' -s f -l file -d 'path to Taskfile.pkl'
+}
+
+
+///|
 fn usage_text() -> String {
   let msg =
     #|usage: pkf <command> [args...]
@@ -2923,6 +3371,7 @@ fn usage_text() -> String {
     #|  watch [task...]
     #|  up [service...]
     #|  info [--json] [--all]
+    #|  completion <bash|zsh|fish>
   msg
 }
 
@@ -3133,6 +3582,22 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
     }
     "version" | "--version" | "-v" => {
       println(pkf_version())
+      0
+    }
+    "completion" => {
+      if args.length() < 2 {
+        die("usage: pkf completion <bash|zsh|fish>")
+        return 1
+      }
+      match args[1] {
+        "bash" => println(completion_bash())
+        "zsh" => println(completion_zsh())
+        "fish" => println(completion_fish())
+        _ => {
+          die("usage: pkf completion <bash|zsh|fish>")
+          return 1
+        }
+      }
       0
     }
     other => {
