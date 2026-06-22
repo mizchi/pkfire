@@ -1,0 +1,38 @@
+/// Typed schema for pkf conformance scenarios. Each Scenario is one
+/// (fixture, argv, env, pre-state) -> contract-assertion case, run
+/// against both the Go oracle and the MoonBit candidate.
+module pkfire.conformance.Conformance
+
+class Contract {
+  /// Compare stdout parsed as JSON, deep-equal against golden.
+  json: Boolean = false
+  /// Dotted JSON paths whose arrays are order-insensitive (e.g. "edges").
+  /// Anything not listed is compared in strict order.
+  unorderedPaths: Listing<String> = new {}
+  /// Assert the process exit code equals the golden exit code.
+  exit: Boolean = true
+  /// Normalized-stdout substrings that must all be present.
+  mustContain: Listing<String> = new {}
+  /// Compare the created/modified filesystem delta against golden.
+  fsDelta: Boolean = false
+  /// Compare the captured PKF_* env dump against golden.
+  env: Boolean = false
+}
+
+class Scenario {
+  /// Stable id; doubles as the golden directory name.
+  id: String(matches(Regex(#"^[a-z0-9][a-z0-9-]*$"#)))
+  /// Fixture dir relative to repo root; copied to a temp cwd per run.
+  fixture: String
+  /// Args passed to pkf (binary name excluded).
+  argv: Listing<String>
+  /// Extra environment variables for the pkf process.
+  env: Mapping<String, String> = new {}
+  /// Shell snippets run in the temp cwd before pkf (establish pre-state).
+  setup: Listing<String> = new {}
+  /// What to compare for this scenario.
+  contract: Contract
+}
+
+/// Filled in by scenarios.pkl.
+scenarios: Listing<Scenario>

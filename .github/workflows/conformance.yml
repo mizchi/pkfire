@@ -1,0 +1,27 @@
+name: conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Pkl
+        run: |
+          curl -fsSL -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          chmod +x /tmp/pkl && sudo mv /tmp/pkl /usr/local/bin/pkl
+          pkl --version
+      - name: Build Go oracle
+        run: go build -o "$RUNNER_TEMP/pkf-go" ./cmd/pkf
+      - name: Oracle self-consistency + unit gates
+        env:
+          PKF_GO_BIN: ${{ runner.temp }}/pkf-go
+        run: cd conformance && go test -v ./...

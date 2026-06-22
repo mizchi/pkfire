@@ -1,0 +1,12 @@
+amends "Conformance.pkl"
+
+scenarios {
+  new {
+    id = "list-json-basic"
+    fixture = "examples/basic"
+    argv { "list"; "--json" }
+    contract = new {
+      json = true
+    }
+  }
+}

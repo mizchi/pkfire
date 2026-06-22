@@ -11,6 +11,9 @@
 .out/
 *.pkl-expected.pcf.actual
 
+# conformance harness — generated parity scoreboard
+/conformance/LEDGER.md
+
 # editor
 .idea/
 .vscode/
