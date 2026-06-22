@@ -1732,6 +1732,79 @@ fn upcase(name : String) -> String {
 }
 
 ///|
+///|
+/// Classic Levenshtein edit distance — number of single-char inserts /
+/// deletes / substitutions to transform `a` into `b`. Used by
+/// `suggest_task_name` to find typo candidates for `pkf run <unknown>`.
+fn levenshtein(a : String, b : String) -> Int {
+  let m = a.length()
+  let n = b.length()
+  if m == 0 {
+    return n
+  }
+  if n == 0 {
+    return m
+  }
+  let stride = n + 1
+  let dp : Array[Int] = Array::make((m + 1) * stride, 0)
+  for i = 0; i <= m; i = i + 1 {
+    dp[i * stride] = i
+  }
+  for j = 0; j <= n; j = j + 1 {
+    dp[j] = j
+  }
+  for i = 1; i <= m; i = i + 1 {
+    for j = 1; j <= n; j = j + 1 {
+      let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 }
+      let del = dp[(i - 1) * stride + j] + 1
+      let ins = dp[i * stride + (j - 1)] + 1
+      let sub = dp[(i - 1) * stride + (j - 1)] + cost
+      let m1 = if del < ins { del } else { ins }
+      dp[i * stride + j] = if m1 < sub { m1 } else { sub }
+    }
+  }
+  dp[m * stride + n]
+}
+
+///|
+/// Print an "unknown task" diagnostic with up to 3 suggested near
+/// matches (Levenshtein distance ≤ max(2, len/3)). Output goes to
+/// stderr-equivalent (println) so it shows alongside the failure
+/// summary.
+fn suggest_task_name(target : String, plan : Plan) -> Unit {
+  let threshold = if target.length() / 3 > 2 { target.length() / 3 } else { 2 }
+  let pairs : Array[(Int, String)] = []
+  for name in plan.task_order {
+    let d = levenshtein(target, name)
+    if d <= threshold {
+      pairs.push((d, name))
+    }
+  }
+  println("pkf run: unknown task `\{target}`")
+  if pairs.length() == 0 {
+    return
+  }
+  // Simple selection sort — task counts are small.
+  for i = 0; i < pairs.length(); i = i + 1 {
+    let mut min_j = i
+    for j = i + 1; j < pairs.length(); j = j + 1 {
+      if pairs[j].0 < pairs[min_j].0 {
+        min_j = j
+      }
+    }
+    if min_j != i {
+      let tmp = pairs[i]
+      pairs[i] = pairs[min_j]
+      pairs[min_j] = tmp
+    }
+  }
+  let take = if pairs.length() < 3 { pairs.length() } else { 3 }
+  println("did you mean:")
+  for i = 0; i < take; i = i + 1 {
+    println("  \{pairs[i].1}")
+  }
+}
+
 // ---------------------------------------------------------------------------
 // `pkf affected` — given a set of changed file paths, compute the run plan.
 //
@@ -1936,11 +2009,21 @@ async fn affected_cmd(args : ArrayView[String]) -> Int {
       changed.push(p)
     }
     match changed_file {
-      Some(_) => {
-        // Reading from a file would require @fs streaming; leave as a
-        // future improvement.
-        die("pkf affected: --changed=<file> is not yet supported")
-        return 2
+      Some(path) => {
+        // Newline-separated paths — the canonical feed is
+        // `git diff --name-only`. Trim whitespace and skip blanks.
+        let content = @fs.read_file_to_string(path) catch {
+          _ => {
+            die("pkf affected: cannot read --changed=\{path}")
+            return 2
+          }
+        }
+        for line in content.split("\n") {
+          let s = line.to_string().trim_space().to_string()
+          if s.length() > 0 {
+            changed.push(s)
+          }
+        }
       }
       None => ()
     }
@@ -2348,7 +2431,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
             )
             return 2
           }
-        None => ()
+        None => {
+          suggest_task_name(target, plan)
+          return 2
+        }
       }
       let order = topo_sort_for(target, plan)
       let repo_root = "."
