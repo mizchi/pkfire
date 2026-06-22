@@ -32,3 +32,25 @@ func TestJSONEqualValueMismatch(t *testing.T) {
 		t.Error("value mismatch should produce a diff")
 	}
 }
+
+// Scalar type divergence (number vs string, bool vs string, null vs
+// string) is the exact Go-vs-MoonBit JSON drift this harness must catch.
+// A %v-stringifying differ would falsely treat these as equal.
+func TestJSONEqualScalarTypeMismatch(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+	}{
+		{"number-vs-string", `{"x":1}`, `{"x":"1"}`},
+		{"bool-vs-string", `{"x":true}`, `{"x":"true"}`},
+		{"null-vs-string", `{"x":null}`, `{"x":"<nil>"}`},
+		{"bool-vs-number", `{"x":true}`, `{"x":1}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if diff := DiffJSON([]byte(c.a), []byte(c.b), nil); diff == "" {
+				t.Errorf("%s: type mismatch reported equal (%s vs %s)", c.name, c.a, c.b)
+			}
+		})
+	}
+}

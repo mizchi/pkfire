@@ -3,6 +3,7 @@ package conformance
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -61,7 +62,10 @@ func jsonDiff(path string, want, got any, unordered map[string]bool) string {
 			gs := canonSorted(g)
 			for i := range ws {
 				if ws[i] != gs[i] {
-					return fmt.Sprintf("%s: unordered element %d differs: %s != %s", pathOrRoot(path), i, ws[i], gs[i])
+					// Indices are into the sorted (canonical) slices, so
+					// report the differing elements as a multiset mismatch
+					// rather than a misleading positional index.
+					return fmt.Sprintf("%s: multiset mismatch: want has %s, got has %s", pathOrRoot(path), ws[i], gs[i])
 				}
 			}
 			return ""
@@ -73,7 +77,13 @@ func jsonDiff(path string, want, got any, unordered map[string]bool) string {
 		}
 		return ""
 	default:
-		if fmt.Sprintf("%v", want) != fmt.Sprintf("%v", got) {
+		// Scalars from encoding/json are nil, bool, float64, or string.
+		// Compare types first so a stringified number/bool (a common
+		// Go-vs-MoonBit serialization drift) is not treated as equal.
+		if reflect.TypeOf(want) != reflect.TypeOf(got) {
+			return fmt.Sprintf("%s: type %T != %T", pathOrRoot(path), want, got)
+		}
+		if want != got {
 			return fmt.Sprintf("%s: %v != %v", pathOrRoot(path), want, got)
 		}
 		return ""

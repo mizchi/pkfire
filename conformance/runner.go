@@ -21,11 +21,15 @@ type Result struct {
 // the fixture (resolved relative to repoRoot) into the temp dir, points
 // PKFIRE_CACHE_DIR at a per-run cache, runs any setup snippets, then runs
 // `bin <argv...>` and captures stdout/stderr/exit.
+// The temp dir is removed when Run returns; any filesystem comparison
+// (fs-delta) is computed inside Run before then, so callers must not rely
+// on WorkDir's contents after Run returns.
 func Run(bin string, s Scenario, repoRoot string) (Result, error) {
 	tmp, err := os.MkdirTemp("", "pkfconf-"+s.ID+"-")
 	if err != nil {
 		return Result{}, err
 	}
+	defer os.RemoveAll(tmp)
 	work := filepath.Join(tmp, "work")
 	cache := filepath.Join(tmp, "cache")
 	if err := copyTree(filepath.Join(repoRoot, s.Fixture), work); err != nil {
