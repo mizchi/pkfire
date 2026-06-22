@@ -2,10 +2,14 @@ package conformance
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 )
 
 // Result is the captured outcome of one pkf invocation.
@@ -15,6 +19,8 @@ type Result struct {
 	Exit   int
 	// WorkDir is the temp cwd the run executed in (for fs-delta capture).
 	WorkDir string
+	// FSDelta is the sorted list of relative paths created or modified by the command.
+	FSDelta []string
 }
 
 // Run executes bin against scenario s in an isolated temp dir. It copies
@@ -53,6 +59,11 @@ func Run(bin string, s Scenario, repoRoot string) (Result, error) {
 		}
 	}
 
+	before, err := SnapshotTree(work)
+	if err != nil {
+		return Result{}, err
+	}
+
 	cmd := exec.Command(bin, s.Argv...)
 	cmd.Dir = work
 	cmd.Env = env
@@ -68,11 +79,17 @@ func Run(bin string, s Scenario, repoRoot string) (Result, error) {
 		}
 		exit = ee.ExitCode()
 	}
+
+	after, err := SnapshotTree(work)
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
 		Stdout:  stdout.Bytes(),
 		Stderr:  stderr.Bytes(),
 		Exit:    exit,
 		WorkDir: work,
+		FSDelta: DeltaPaths(before, after),
 	}, nil
 }
 
@@ -96,4 +113,49 @@ func copyTree(src, dst string) error {
 		}
 		return os.WriteFile(target, data, info.Mode().Perm())
 	})
+}
+
+// SnapshotTree returns a map of relative path -> sha256 hex for every
+// regular file under root. Used to compute fs deltas.
+func SnapshotTree(root string) (map[string]string, error) {
+	out := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(data)
+		out[rel] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	return out, err
+}
+
+// DeltaPaths returns the sorted set of paths whose content changed or
+// that were created between before and after snapshots.
+func DeltaPaths(before, after map[string]string) []string {
+	var changed []string
+	for p, h := range after {
+		if before[p] != h {
+			changed = append(changed, p)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// MarshalDelta renders a delta path list as stable JSON for golden storage.
+func MarshalDelta(paths []string) []byte {
+	b, _ := json.Marshal(paths)
+	return b
 }

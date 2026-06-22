@@ -130,6 +130,11 @@ func Compare(s Scenario, want Golden, got Result) string {
 			return fmt.Sprintf("mustContain: %q not found in normalized stdout", sub)
 		}
 	}
+	if s.Contract.FSDelta {
+		if d := DiffJSON(MarshalDelta(want.FSDelta), MarshalDelta(got.FSDelta), nil); d != "" {
+			return "fsDelta: " + d
+		}
+	}
 	return ""
 }
 
