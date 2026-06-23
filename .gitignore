@@ -1,6 +1,9 @@
 /bin/
 /dist/
 /pkf
+# release-workflow package artifacts (pkl-publish.yml emits these at repo root)
+/pkf-*.tar.gz
+/pkf-*.tar.gz.sha256
 /result
 /result-*
 *.test

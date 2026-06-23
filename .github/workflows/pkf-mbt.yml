@@ -33,12 +33,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install zlib dev headers (Ubuntu)
-        # mizchi/zlib's native backend links libz; ubuntu-latest already
-        # ships libz1 but not the zlib.h header. macOS has both in the SDK.
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y zlib1g-dev
-
       - name: Install MoonBit CLI
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash

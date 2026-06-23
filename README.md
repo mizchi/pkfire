@@ -79,9 +79,10 @@ jobs:
 ```
 
 The action downloads the matching `pkf` binary and the Pkl CLI for
-the runner (`linux/darwin × amd64/arm64`) and adds them to `PATH`.
-After it runs, the rest of the workflow calls `pkf` directly — no
-`go install`, no Pkl bootstrap.
+the runner (`linux-amd64`, `linux-arm64`, `darwin-arm64`) and adds them
+to `PATH`. Intel macOS (`darwin-amd64`) is not supported. After it runs,
+the rest of the workflow calls `pkf` directly — no `go install`, no Pkl
+bootstrap.
 
 > **Why `@v0.5.0` and not `@pkfire@0.11.0`?** GitHub Actions cannot
 > parse `uses: <repo>@<ref>` when the ref itself contains `@` — the
