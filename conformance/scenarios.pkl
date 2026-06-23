@@ -167,4 +167,13 @@ scenarios {
     argv { "cache"; "stats" }
     contract = new { exit = true; stdoutNonEmpty = true; mustContain { "cache" } }
   }
+  new {
+    id = "pkl-cache-warm-structural"
+    fixture = "examples/basic"
+    argv { "pkl-cache"; "warm" }
+    contract = new {
+      exit = true
+      mustContain { "warming "; "warmed "; "~/.pkl/cache is now populated" }
+    }
+  }
 }

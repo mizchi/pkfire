@@ -4761,6 +4761,13 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       }
       cache_cmd(cache_args)
     }
+    "pkl-cache" => {
+      let sub_args : Array[String] = []
+      for i in 1..<args.length() {
+        sub_args.push(args[i])
+      }
+      pkl_cache_cmd(sub_args[:])
+    }
     other => {
       eprintln("pkf: unknown subcommand `\{other}`")
       eprintln(usage_text())
@@ -5631,6 +5638,61 @@ fn cache_cmd(args : Array[String]) -> Int {
       1
     }
   }
+}
+
+///|
+/// pkl_cache_cmd pre-evaluates Pkl files so ~/.pkl/cache is populated
+/// before parallel jobs. Mirrors Go's cmdPklCache / pklCacheWarm.
+///
+/// Usage: pkf pkl-cache [warm] [-f FILE] [PATH...]
+///
+/// With no subcommand, defaults to warm (Go does the same).
+/// Unknown subcommands → die with exit 1.
+async fn pkl_cache_cmd(args : ArrayView[String]) -> Int {
+  // Default to warm when no subcommand given (mirrors Go).
+  let sub = if args.length() == 0 { "warm" } else { args[0] }
+  match sub {
+    "warm" => {
+      let warm_args = if args.length() == 0 { args } else { args[1:] }
+      pkl_cache_warm_cmd(warm_args)
+    }
+    _ => {
+      die("unknown pkl-cache subcommand \"\{sub}\" (want: warm)")
+      1
+    }
+  }
+}
+
+///|
+/// pkl_cache_warm_cmd evaluates each path via `pkl eval` to populate
+/// ~/.pkl/cache. When no paths are given, warms the located Taskfile.
+async fn pkl_cache_warm_cmd(args : ArrayView[String]) -> Int {
+  let (explicit_taskfile, rest) = extract_file_flag(args)
+  // Collect extra positional paths.
+  let extra_paths : Array[String] = []
+  for a in rest {
+    extra_paths.push(a)
+  }
+  // Build the list of paths to warm.
+  let paths : Array[String] = if extra_paths.length() > 0 {
+    extra_paths
+  } else {
+    [locate_taskfile(explicit_taskfile)]
+  }
+  let mut warmed = 0
+  for p in paths {
+    println("warming \{p}...")
+    // Run `pkl eval <p>`; discard output (inherit so stderr is visible).
+    // We use collect_output so stdout is suppressed but stderr still shows.
+    let (code, _stdout, _stderr) = @process.collect_output("pkl", ["eval", p][:])
+    if code != 0 {
+      die("pkl eval \{p}: exited with code \{code}")
+      return 1
+    }
+    warmed = warmed + 1
+  }
+  println("warmed \{warmed} file(s); ~/.pkl/cache is now populated")
+  0
 }
 
 ///|
