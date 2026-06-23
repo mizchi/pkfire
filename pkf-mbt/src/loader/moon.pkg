@@ -1,14 +1,19 @@
 import {
   "mizchi/pkl" @pkl,
+  "mizchi/x/http" @http,
   "moonbitlang/async",
+  "moonbitlang/async/http" @async_http,
+  "moonbitlang/async/socket",
   "moonbitlang/x/fs" @fs,
   "moonbitlang/x/sys" @sys,
 }
 
-warnings = "-0029-0014-0024-0009-0020"
+warnings = "-0029-0014-0024-0009-0020-0001"
 
 options(
   targets: {
     "loader.mbt": [ "native", "js" ],
+    "fetch.mbt": [ "native" ],
+    "fetch_wbtest.mbt": [ "native" ],
   },
 )
