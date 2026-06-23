@@ -44,6 +44,12 @@
           # Skip the in-sandbox `moon test` run; this derivation packages the
           # `pkf` binary, conformance is gated in CI.
           doCheck = false;
+
+          # Don't strip the MoonBit native binary: on x86_64-linux the
+          # default `strip -S -p` corrupts it (it runs but aborts/core-dumps
+          # at startup); macOS strip leaves it runnable. The binary is already
+          # release-built and links only libc, so stripping buys little.
+          dontStrip = true;
         };
 
         # `pkf` shells out to `pkl` at evaluation time. Wrap the binary so the
