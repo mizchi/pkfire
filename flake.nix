@@ -2,7 +2,11 @@
   description = "pkfire — typed task runner with Bazel-style incremental caching, configured in Pkl";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # Stable channel: nixpkgs-unstable ships glibc 2.42, against which the
+    # MoonBit native runtime aborts (silent SIGABRT at startup) on x86_64-linux.
+    # A stable release's older glibc matches what the official toolchain targets.
+    # Channel tarball (not github:) to avoid the unauthenticated GitHub API.
+    nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
     flake-utils.url = "github:numtide/flake-utils";
 
     # MoonBit toolchain + `buildMoonPackage` (reproducible source build inside
