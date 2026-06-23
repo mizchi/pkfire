@@ -136,14 +136,18 @@ local checkVersion: Task = new {
 local fmt: Task = new {
   name = "fmt"
   description = "Format all Pkl files in the repo"
-  cmd = "pkl format -w Taskfile.pkl pkl examples skills"
+  // examples/unformatted is intentionally non-canonical (conformance fixture).
+  cmd =
+    "pkl format -w Taskfile.pkl pkl skills examples/basic examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/lint-dead examples/lint-rules examples/lint-string-safe examples/monorepo examples/node examples/remote-cache-worker examples/rust examples/split-import examples/with-pkspec"
   cache = false
 }
 
 local fmtCheck: Task = new {
   name = "fmt:check"
   description = "Check Pkl formatting without writing changes"
-  cmd = "pkl format --diff-name-only Taskfile.pkl pkl examples skills"
+  // examples/unformatted is intentionally non-canonical (conformance fixture).
+  cmd =
+    "pkl format --diff-name-only Taskfile.pkl pkl skills examples/basic examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/lint-dead examples/lint-rules examples/lint-string-safe examples/monorepo examples/node examples/remote-cache-worker examples/rust examples/split-import examples/with-pkspec"
   inputs {
     "Taskfile.pkl"
     "pkl/**/*.pkl"

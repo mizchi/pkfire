@@ -4621,12 +4621,65 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       eprintln("        pkf run hello # smoke the generated example")
       0
     }
+    "format" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      format_cmd(explicit_taskfile, rest[:])
+    }
     other => {
       eprintln("pkf: unknown subcommand `\{other}`")
       eprintln(usage_text())
       1
     }
   }
+}
+
+///|
+/// format_cmd is a thin wrapper around `pkl format`.
+/// With no positional PATH args, it discovers the Taskfile and formats
+/// its directory — same walk-up behaviour as every other subcommand.
+/// --check flips to `pkl format --diff-name-only` (exit 11 on violations).
+async fn format_cmd(
+  explicit_taskfile : String?,
+  args : ArrayView[String],
+) -> Int {
+  let mut check = false
+  let paths : Array[String] = []
+  for arg in args {
+    match arg {
+      "--check" => check = true
+      "-h" | "--help" => {
+        println("pkf format — wrapper for 'pkl format -w'")
+        println("")
+        println("usage:")
+        println("  pkf format [-f FILE] [--check] [PATH...]")
+        println("")
+        println("flags:")
+        println("  -f, --file FILE  Taskfile.pkl path (used when no PATH is given)")
+        println("      --check      report unformatted files without writing (exit 11 if any)")
+        return 0
+      }
+      _ =>
+        if !arg.has_prefix("-") {
+          paths.push(arg)
+        }
+    }
+  }
+  // If no explicit paths, discover the Taskfile and use its directory.
+  if paths.length() == 0 {
+    let taskfile = locate_taskfile(explicit_taskfile)
+    let dir = taskfile_dir(taskfile)
+    paths.push(dir)
+  }
+  let pkl_args : Array[String] = ["format"]
+  if check {
+    pkl_args.push("--diff-name-only")
+  } else {
+    pkl_args.push("-w")
+  }
+  for p in paths {
+    pkl_args.push(p)
+  }
+  @process.run_inherit("pkl", pkl_args[:])
 }
 
 ///|

@@ -139,4 +139,5 @@ scenarios {
     }
   }
   new { id = "init-writes"; fixture = "examples/empty-dir"; argv { "init" }; contract = new { exit = true; fsDelta = true; mustContainStderr { "wrote Taskfile.pkl" } } }
+  new { id = "format-rewrites"; fixture = "examples/unformatted"; argv { "format" }; contract = new { exit = true; fsDelta = true } }
 }
