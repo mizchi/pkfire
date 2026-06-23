@@ -4625,6 +4625,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
       format_cmd(explicit_taskfile, rest[:])
     }
+    "migrate" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      migrate_cmd(explicit_taskfile, rest[:])
+    }
     other => {
       eprintln("pkf: unknown subcommand `\{other}`")
       eprintln(usage_text())
@@ -4680,6 +4684,176 @@ async fn format_cmd(
     pkl_args.push(p)
   }
   @process.run_inherit("pkl", pkl_args[:])
+}
+
+///|
+/// replace_pkfire_version replaces all occurrences of `pkfire@<semver>` in the
+/// given source string with `pkfire@<new_ver>`. The semver token is defined as
+/// digits and dots immediately following the `pkfire@` marker — mirroring Go's
+/// `pkfire@\d+\.\d+\.\d+` regexp.
+///
+/// Returns (new_body, changed) where changed is false when the source already
+/// contains the target version exclusively (i.e. every occurrence already has
+/// `pkfire@<new_ver>`).
+fn replace_pkfire_version(src : String, new_ver : String) -> (String, Bool) {
+  let marker = "pkfire@"
+  let mlen = marker.length()
+  let buf = StringBuilder::new(size_hint=src.length())
+  let mut i = 0
+  let mut changed = false
+  while i < src.length() {
+    // Look for the marker starting at i.
+    let remaining = src.length() - i
+    if remaining >= mlen && src[i:i + mlen].to_string() == marker {
+      // Scan the version token: digits and dots.
+      let mut j = i + mlen
+      while j < src.length() {
+        let c = src[j]
+        if (c >= '0' && c <= '9') || c == '.' {
+          j = j + 1
+        } else {
+          break
+        }
+      }
+      let old_ver = src[i + mlen:j].to_string()
+      if old_ver != new_ver {
+        changed = true
+      }
+      buf.write_string(marker)
+      buf.write_string(new_ver)
+      i = j
+    } else {
+      let c = src[i]
+      buf.write_char(c.to_int().unsafe_to_char())
+      i = i + 1
+    }
+  }
+  (buf.to_string(), changed)
+}
+
+///|
+/// `pkf migrate --to=<ver> [-f FILE] [--dry-run] [--skip-verify]`
+/// Rewrites the `pkfire@<old>` token in the amends URI to `<ver>`.
+/// `--dry-run` prints the changed lines without writing.
+/// `--skip-verify` skips the post-rewrite `pkl eval` check.
+async fn migrate_cmd(
+  explicit_taskfile : String?,
+  args : ArrayView[String],
+) -> Int {
+  // Parse flags.
+  let mut to : String? = None
+  let mut dry_run = false
+  let mut skip_verify = false
+  let mut i = 0
+  while i < args.length() {
+    let a = args[i]
+    if a == "--dry-run" {
+      dry_run = true
+    } else if a == "--skip-verify" {
+      skip_verify = true
+    } else if a == "-h" || a == "--help" {
+      println("pkf migrate — rewrite Taskfile.pkl's amends URI to a new schema version")
+      println("")
+      println("usage:")
+      println("  pkf migrate --to=<ver> [-f FILE] [--dry-run] [--skip-verify]")
+      println("")
+      println("flags:")
+      println("      --to VER       target schema version (e.g. --to=0.11.0)")
+      println("  -f, --file FILE    Taskfile.pkl path")
+      println("      --dry-run      print the new amends line without writing")
+      println("      --skip-verify  skip the post-rewrite pkl eval verification")
+      return 0
+    } else if a.has_prefix("--to=") {
+      to = Some(a[5:].to_string())
+    } else if a == "--to" {
+      i = i + 1
+      if i >= args.length() {
+        eprintln("pkf: --to requires a value")
+        return 1
+      }
+      to = Some(args[i])
+    } else if a.has_prefix("--") {
+      eprintln("pkf: migrate: unknown flag `\{a}`")
+      return 1
+    }
+    i = i + 1
+  }
+  let ver = match to {
+    Some(v) => v
+    None => {
+      eprintln("pkf: --to=<version> is required (e.g. --to=0.5.0)")
+      return 1
+    }
+  }
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let src = @fs.read_file_to_string(taskfile) catch {
+    e => {
+      eprintln("pkf: migrate: failed to read \{taskfile}: \{e}")
+      return 1
+    }
+  }
+  // Check that the file has a pkfire@ reference.
+  if src.find("pkfire@") == None {
+    eprintln(
+      "pkf: no pkfire@<version> reference found in \{taskfile} — is it amending the published schema?",
+    )
+    return 1
+  }
+  let (new_body, changed) = replace_pkfire_version(src, ver)
+  if !changed {
+    println(
+      "\{taskfile} already pins pkfire@\{ver} — nothing to migrate",
+    )
+    return 0
+  }
+  if dry_run {
+    println("would migrate \{taskfile}")
+    // Show the diff: lines that changed.
+    let old_lines : Array[String] = []
+    for lv in src.split("\n") {
+      old_lines.push(lv.to_string())
+    }
+    let new_lines : Array[String] = []
+    for lv in new_body.split("\n") {
+      new_lines.push(lv.to_string())
+    }
+    let mut li = 0
+    while li < old_lines.length() && li < new_lines.length() {
+      let old_line = old_lines[li]
+      let new_line = new_lines[li]
+      if old_line != new_line {
+        println("  -\{old_line}")
+        println("  +\{new_line}")
+      }
+      li = li + 1
+    }
+    return 0
+  }
+  // Write the file.
+  @fs.write_bytes_to_file(taskfile, @utf8.encode(new_body)) catch {
+    e => {
+      eprintln("pkf: write \{taskfile}: \{e}")
+      return 1
+    }
+  }
+  println("migrated \{taskfile} → pkfire@\{ver}")
+  if skip_verify {
+    return 0
+  }
+  // Run `pkl eval` to verify.
+  let pkl_code = @process.run_inherit("pkl", ["eval", taskfile][:])
+  if pkl_code != 0 {
+    // Revert the file.
+    @fs.write_bytes_to_file(taskfile, @utf8.encode(src)) catch {
+      _ => ()
+    }
+    eprintln(
+      "pkf: post-migration `pkl eval` failed (file reverted): exit \{pkl_code}",
+    )
+    return 1
+  }
+  println("verified: \{taskfile} evaluates against pkfire@\{ver}")
+  0
 }
 
 ///|
