@@ -3173,7 +3173,7 @@ fn lint_rendered_tasks(
   for name, _ in plan.tasks {
     names.push(name)
   }
-  names.sort()
+  names.sort_by(fn(a, b) { lex_cmp(a, b) })
   let findings : Array[LintFinding] = []
   fn mk(
     line : Int,
@@ -4387,6 +4387,57 @@ fn init_template() -> String {
 }
 
 ///|
+///|
+/// Expand glob patterns in `targets` against the task map.
+/// Returns expanded list if any target contains `*` or `?`; else returns empty
+/// (caller falls back to literal lookup).
+fn expand_task_patterns(
+  targets : Array[String],
+  tasks : Map[String, Task],
+) -> Array[String] {
+  let mut any_pattern = false
+  for t in targets {
+    if t.contains("*") || t.contains("?") {
+      any_pattern = true
+      break
+    }
+  }
+  if !any_pattern {
+    return []
+  }
+  let seen : Map[String, Bool] = Map([], capacity=tasks.length())
+  let out : Array[String] = []
+  let all_names : Array[String] = []
+  for name, _ in tasks {
+    all_names.push(name)
+  }
+  all_names.sort_by(fn(a, b) { lex_cmp(a, b) })
+  for t in targets {
+    if !t.contains("*") && !t.contains("?") {
+      if !seen.contains(t) {
+        seen[t] = true
+        out.push(t)
+      }
+      continue
+    }
+    let mut matched = false
+    for name in all_names {
+      if glob_match(t, name) {
+        matched = true
+        if !seen.contains(name) {
+          seen[name] = true
+          out.push(name)
+        }
+      }
+    }
+    if !matched {
+      // Keep literal so the "unknown task" path surfaces the error.
+      out.push(t)
+    }
+  }
+  out
+}
+
 /// clean_cmd removes the declared `outputs` of one or more tasks.
 /// Mirrors Go's cmdClean: literal output paths joined with task_root,
 /// existence-checked via @fs.path_exists, then removed via rm_rf.
@@ -4427,9 +4478,12 @@ async fn clean_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int
         names.push(name)
       }
     }
-    names.sort()
+    names.sort_by(fn(a, b) { lex_cmp(a, b) })
   } else {
-    for n in requested {
+    // Expand glob patterns if any target contains * or ?
+    let expanded = expand_task_patterns(requested, plan.tasks)
+    let actual_requested = if expanded.length() > 0 { expanded } else { requested }
+    for n in actual_requested {
       match plan.tasks.get(n) {
         Some(_) => names.push(n)
         None => {
@@ -4723,6 +4777,9 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
           println("  -f, --file FILE   destination (default: ./Taskfile.pkl)")
           println("      --force       overwrite if FILE already exists")
           return 0
+        } else if !a.has_prefix("-") {
+          eprintln("pkf: init takes no positional args, got [\{a}]")
+          return 1
         }
         i = i + 1
       }
@@ -4822,52 +4879,81 @@ async fn format_cmd(
   for p in paths {
     pkl_args.push(p)
   }
-  @process.run_inherit("pkl", pkl_args[:])
+  let pkl_exit = @process.run_inherit("pkl", pkl_args[:])
+  if pkl_exit != 0 {
+    eprintln("pkf: pkl format exited \{pkl_exit}")
+    return 1
+  }
+  0
 }
 
 ///|
-/// replace_pkfire_version replaces all occurrences of `pkfire@<semver>` in the
-/// given source string with `pkfire@<new_ver>`. The semver token is defined as
-/// digits and dots immediately following the `pkfire@` marker — mirroring Go's
-/// `pkfire@\d+\.\d+\.\d+` regexp.
+/// replace_pkfire_version replaces occurrences of `pkfire@N.N.N` (exactly 3
+/// numeric parts) in the given source string with `pkfire@<new_ver>`. Tokens
+/// that don't have exactly 3 numeric parts (e.g. `pkfire@0.4` or
+/// `pkfire@1.2.3.4`) are left untouched.
 ///
-/// Returns (new_body, changed) where changed is false when the source already
-/// contains the target version exclusively (i.e. every occurrence already has
-/// `pkfire@<new_ver>`).
-fn replace_pkfire_version(src : String, new_ver : String) -> (String, Bool) {
+/// Returns (new_body, changed, found) where:
+///   found   = true  iff at least one valid `pkfire@N.N.N` token was seen
+///   changed = true  iff at least one token was rewritten (old ≠ new_ver)
+fn replace_pkfire_version(src : String, new_ver : String) -> (String, Bool, Bool) {
   let marker = "pkfire@"
   let mlen = marker.length()
   let buf = StringBuilder::new(size_hint=src.length())
   let mut i = 0
   let mut changed = false
+  let mut found = false
   while i < src.length() {
-    // Look for the marker starting at i.
     let remaining = src.length() - i
     if remaining >= mlen && src[i:i + mlen].to_string() == marker {
-      // Scan the version token: digits and dots.
-      let mut j = i + mlen
-      while j < src.length() {
-        let c = src[j]
-        if (c >= '0' && c <= '9') || c == '.' {
+      // Try to parse exactly N.N.N after the marker.
+      let j0 = i + mlen
+      let mut j = j0
+      // Part 1: digits
+      while j < src.length() && src[j] >= '0' && src[j] <= '9' {
+        j = j + 1
+      }
+      let part1_len = j - j0
+      if part1_len > 0 && j < src.length() && src[j] == '.' {
+        j = j + 1
+        let j1 = j
+        // Part 2: digits
+        while j < src.length() && src[j] >= '0' && src[j] <= '9' {
           j = j + 1
-        } else {
-          break
+        }
+        let part2_len = j - j1
+        if part2_len > 0 && j < src.length() && src[j] == '.' {
+          j = j + 1
+          let j2 = j
+          // Part 3: digits
+          while j < src.length() && src[j] >= '0' && src[j] <= '9' {
+            j = j + 1
+          }
+          let part3_len = j - j2
+          if part3_len > 0 {
+            // Valid 3-part version found.
+            found = true
+            let old_ver = src[i + mlen:j].to_string()
+            if old_ver != new_ver {
+              changed = true
+            }
+            buf.write_string(marker)
+            buf.write_string(new_ver)
+            i = j
+            continue
+          }
         }
       }
-      let old_ver = src[i + mlen:j].to_string()
-      if old_ver != new_ver {
-        changed = true
-      }
+      // Not a valid 3-part version — write marker verbatim and continue.
       buf.write_string(marker)
-      buf.write_string(new_ver)
-      i = j
+      i = i + mlen
     } else {
       let c = src[i]
       buf.write_char(c.to_int().unsafe_to_char())
       i = i + 1
     }
   }
-  (buf.to_string(), changed)
+  (buf.to_string(), changed, found)
 }
 
 ///|
@@ -4931,14 +5017,13 @@ async fn migrate_cmd(
       return 1
     }
   }
-  // Check that the file has a pkfire@ reference.
-  if src.find("pkfire@") == None {
+  let (new_body, changed, found) = replace_pkfire_version(src, ver)
+  if !found {
     eprintln(
       "pkf: no pkfire@<version> reference found in \{taskfile} — is it amending the published schema?",
     )
     return 1
   }
-  let (new_body, changed) = replace_pkfire_version(src, ver)
   if !changed {
     println(
       "\{taskfile} already pins pkfire@\{ver} — nothing to migrate",
@@ -5357,6 +5442,10 @@ fn walk_cas_entries(
   cas_dir : String,
   cb : (String, String, Int64, Int64) -> Unit,
 ) -> Unit {
+  // Guard: if cas directory doesn't exist yet (cold cache), skip silently.
+  if !@fs.path_exists(cas_dir) {
+    return
+  }
   let prefixes = @fs.read_dir(cas_dir) catch {
     _ => return
   }

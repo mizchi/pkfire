@@ -176,4 +176,8 @@ scenarios {
       mustContain { "warming "; "warmed "; "~/.pkl/cache is now populated" }
     }
   }
+  new { id = "clean-glob"; fixture = "examples/clean-glob"; argv { "clean"; "gen*" }; setup { "touch genA.out"; "touch genB.out" }; contract = new { exit = true; fsDelta = true } }
+  new { id = "format-check-fail"; fixture = "examples/unformatted"; argv { "format"; "--check" }; contract = new { exit = true; mustContainStderr { "pkl format exited" } } }
+  new { id = "migrate-noref-error"; fixture = "examples/migrate-2part"; argv { "migrate"; "--to=0.11.0" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "no" } } }
+  new { id = "init-positional-error"; fixture = "examples/empty-dir"; argv { "init"; "stray" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "positional" } } }
 }
