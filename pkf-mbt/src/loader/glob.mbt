@@ -5,6 +5,38 @@
 // alternation — the same surface the rest of pkf already accepts.
 
 ///|
+/// Lexicographic string comparison (char-by-char, shorter prefix wins).
+/// MoonBit's built-in `String::compare` / `Array::sort` sort by LENGTH first,
+/// but Apple Pkl keys an `import*` Mapping LEXICOGRAPHICALLY and that key order
+/// is final (the evaluator does not re-sort). Ported from `lex_cmp` in
+/// `cmd/pkf/main.mbt` (different package, not importable here).
+fn lex_cmp(a : String, b : String) -> Int {
+  let la = a.length()
+  let lb = b.length()
+  let min_len = if la < lb { la } else { lb }
+  for i in 0..<min_len {
+    let ca = a[i].to_int()
+    let cb = b[i].to_int()
+    if ca != cb {
+      return ca - cb
+    }
+  }
+  la - lb
+}
+
+///|
+/// True if any `/`-separated segment of `pattern` contains a `**` token. Apple
+/// Pkl treats `**` as crossing `/` (including the in-segment `**.pkl` form),
+/// with a files-first-then-recurse per-directory ordering that this embedded
+/// matcher does not reproduce byte-exactly. Rather than ship the current
+/// silently-incomplete single-level `**` match, the loader rejects such
+/// patterns cleanly (see `expand_import_glob` in loader.mbt). No real Taskfile
+/// in scope uses `**` import globs.
+fn pattern_has_doublestar(pattern : String) -> Bool {
+  pattern.contains("**")
+}
+
+///|
 /// Match a slash-separated relative `path` against a glob `pattern`.
 fn glob_match(pattern : String, path : String) -> Bool {
   for expanded in brace_expand(pattern) {
@@ -218,7 +250,9 @@ fn glob_expand_relative(
       unique.push(m)
     }
   }
-  unique.sort()
+  // Apple Pkl keys the Mapping LEXICOGRAPHICALLY (not length-first), and that
+  // registration order is the final key order. Use the char-by-char comparator.
+  unique.sort_by(fn(a, b) { lex_cmp(a, b) })
   unique
 }
 
@@ -248,8 +282,13 @@ fn collect_glob_alt(
   } else {
     path_join(base_dir, prefix_rel)
   }
-  walk_glob(walk_root, prefix_rel, pattern, out)
+  walk_glob(walk_root, prefix_rel, pattern, out, 0)
 }
+
+///|
+/// Recursion depth cap for `walk_glob`. `@fs.is_dir` follows symlinks, so a
+/// self-referential link (`a/link -> a`) would otherwise infinite-recurse.
+let walk_glob_max_depth : Int = 64
 
 ///|
 fn seg_has_glob(seg : String) -> Bool {
@@ -274,7 +313,12 @@ fn walk_glob(
   rel_prefix : String,
   pattern : String,
   out : Array[String],
+  depth : Int,
 ) -> Unit raise {
+  // Guard against symlink cycles (`is_dir` follows links): cap recursion depth.
+  if depth > walk_glob_max_depth {
+    return
+  }
   let entries = @fs.read_dir(dir) catch {
     _ => return
   }
@@ -295,7 +339,7 @@ fn walk_glob(
       out.push(rel)
     }
     if is_dir {
-      walk_glob(full, rel, pattern, out)
+      walk_glob(full, rel, pattern, out, depth + 1)
     }
   }
 }

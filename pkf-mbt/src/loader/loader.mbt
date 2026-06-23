@@ -349,6 +349,14 @@ async fn expand_import_glob(
       "glob import `\{pattern}` over a non-local module dir is not supported by the embedded loader (in `\{from}`)",
     )
   }
+  // Apple Pkl's `**` crosses `/` (including the in-segment `**.pkl` form) with a
+  // files-first-then-recurse per-directory key order that this matcher does not
+  // reproduce byte-exactly. Reject cleanly rather than silently partial-match.
+  if pattern_has_doublestar(pattern) {
+    raise LoaderError(
+      "embedded loader does not support `**` recursive glob imports: \{pattern}",
+    )
+  }
   let base_dir = dir_of(from)
   let walk_root = if base_dir.length() == 0 { "." } else { base_dir }
   let matches = glob_expand_relative(walk_root, pattern) catch {
@@ -400,6 +408,10 @@ fn push_stack(stack : Array[String], path : String) -> Array[String] {
 /// and non-glob imports recursively, populating the session from local
 /// files and the cached `package://` cache directory.
 pub async fn eval_module_path(path : String) -> @pkl.EvalResult raise LoaderError {
+  // Clear the process-global sandbox IO cache (import_globs / read_globs / etc.)
+  // so stale glob registrations from a prior eval in the same process (the
+  // conformance harness, `pkf watch`) can't leak into this one.
+  @pkl.reset_sandbox_io_cache()
   let session = @pkl.AnalysisSession::new()
   let loaded : Map[String, Unit] = Map([], capacity=8)
   load_recursive(session, path, [], loaded)
