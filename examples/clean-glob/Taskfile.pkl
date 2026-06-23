@@ -1,0 +1,21 @@
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local genA = new Task {
+  name = "genA"
+  cmd = "touch genA.out"
+  outputs { "genA.out" }
+}
+
+local genB = new Task {
+  name = "genB"
+  cmd = "touch genB.out"
+  outputs { "genB.out" }
+}
+
+local build = new Task {
+  name = "build"
+  cmd = "echo build"
+  outputs { "build.out" }
+}
+
+tasks { genA; genB; build }

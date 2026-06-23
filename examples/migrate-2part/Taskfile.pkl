@@ -1,0 +1,8 @@
+amends "https://raw.githubusercontent.com/mizchi/pkfire/main/pkl/Taskfile.pkl"
+
+local hello = new Task {
+  name = "hello"
+  cmd = "echo hello"
+}
+
+tasks { hello }

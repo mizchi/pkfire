@@ -1,0 +1,3 @@
+wrote Taskfile.pkl
+  next: pkf list      # see declared tasks
+        pkf run hello # smoke the generated example

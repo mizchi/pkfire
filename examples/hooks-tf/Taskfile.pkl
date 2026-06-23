@@ -1,0 +1,14 @@
+/// Fixture for hooks install/uninstall/list conformance tests.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local pre_commit = new Task {
+  name = "pre-commit"
+  cmd = "echo running pre-commit"
+}
+
+local pre_push = new Task {
+  name = "pre-push"
+  cmd = "echo running pre-push"
+}
+
+tasks { pre_commit; pre_push }

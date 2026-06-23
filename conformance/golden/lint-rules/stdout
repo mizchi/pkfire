@@ -1,7 +1,7 @@
 {
   "findings": [
     {
-      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-2108004351/work/Taskfile.pkl",
+      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
       "line": 5,
       "level": "error",
       "kind": "noop-task",
@@ -10,7 +10,7 @@
       "suggestion": "add deps for an umbrella task, add cmd for an executable task, or remove the task"
     },
     {
-      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-2108004351/work/Taskfile.pkl",
+      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
       "line": 10,
       "level": "error",
       "kind": "outputs-without-inputs",
@@ -20,7 +20,7 @@
       "fixable": true
     },
     {
-      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-2108004351/work/Taskfile.pkl",
+      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
       "line": 17,
       "level": "error",
       "kind": "service-without-readiness",
@@ -29,7 +29,7 @@
       "suggestion": "add readyPort when the service opens a TCP port, otherwise add readyCmd"
     },
     {
-      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-2108004351/work/Taskfile.pkl",
+      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
       "line": 24,
       "level": "warning",
       "kind": "inputs-without-cache",
@@ -38,7 +38,7 @@
       "suggestion": "remove cache = false once the task is deterministic, or remove inputs if they are only decorative"
     },
     {
-      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-2108004351/work/Taskfile.pkl",
+      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
       "line": 32,
       "level": "warning",
       "kind": "build-without-outputs",

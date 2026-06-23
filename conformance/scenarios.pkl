@@ -138,4 +138,46 @@ scenarios {
       mustContain { "task:"; "action key:"; "cmd:"; "shell:"; "input patterns" }
     }
   }
+  new { id = "init-writes"; fixture = "examples/empty-dir"; argv { "init" }; contract = new { exit = true; fsDelta = true; mustContainStderr { "wrote Taskfile.pkl" } } }
+  new { id = "format-rewrites"; fixture = "examples/unformatted"; argv { "format" }; contract = new { exit = true; fsDelta = true } }
+  new { id = "migrate-rewrites"; fixture = "examples/migrate-src"; argv { "migrate"; "--to=0.11.0"; "--skip-verify" }; contract = new { exit = true; fsDelta = true } }
+  new { id = "migrate-dry-run"; fixture = "examples/migrate-src"; argv { "migrate"; "--to=0.11.0"; "--dry-run" }; contract = new { exit = true; mustContain { "0.11.0" } } }
+  new {
+    id = "hooks-install"
+    fixture = "examples/hooks-tf"
+    argv { "hooks"; "install" }
+    setup { "git init -q" }
+    contract = new {
+      exit = true
+      fsDelta = true
+      mustContain { "pre-commit" }
+      mustContainStderr { "cache=true" }
+    }
+  }
+  new {
+    id = "clean-removes-outputs"
+    fixture = "examples/cat-io"
+    argv { "clean" }
+    setup { "printf hi > src.txt"; "printf out > out.txt" }
+    contract = new { exit = true; fsDelta = true }
+  }
+  new {
+    id = "cache-stats-structural"
+    fixture = "examples/basic"
+    argv { "cache"; "stats" }
+    contract = new { exit = true; stdoutNonEmpty = true; mustContain { "cache" } }
+  }
+  new {
+    id = "pkl-cache-warm-structural"
+    fixture = "examples/basic"
+    argv { "pkl-cache"; "warm" }
+    contract = new {
+      exit = true
+      mustContain { "warming "; "warmed "; "~/.pkl/cache is now populated" }
+    }
+  }
+  new { id = "clean-glob"; fixture = "examples/clean-glob"; argv { "clean"; "gen*" }; setup { "touch genA.out"; "touch genB.out" }; contract = new { exit = true; fsDelta = true } }
+  new { id = "format-check-fail"; fixture = "examples/unformatted"; argv { "format"; "--check" }; contract = new { exit = true; mustContainStderr { "pkl format exited" } } }
+  new { id = "migrate-noref-error"; fixture = "examples/migrate-2part"; argv { "migrate"; "--to=0.11.0" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "no" } } }
+  new { id = "init-positional-error"; fixture = "examples/empty-dir"; argv { "init"; "stray" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "positional" } } }
 }

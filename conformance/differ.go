@@ -179,6 +179,9 @@ func Compare(s Scenario, want Golden, got Result) string {
 		if d := DiffJSON(MarshalDelta(want.FSDelta), MarshalDelta(got.FSDelta), nil); d != "" {
 			return "fsDelta: " + d
 		}
+		if d := DiffJSON(MarshalDelta(want.FSDeleted), MarshalDelta(got.FSDeleted), nil); d != "" {
+			return "fsDeleted: " + d
+		}
 	}
 	for _, sub := range s.Contract.MustContainStderr {
 		if !containsNormalized(got.Stderr, sub) {

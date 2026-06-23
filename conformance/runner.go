@@ -21,6 +21,8 @@ type Result struct {
 	WorkDir string
 	// FSDelta is the sorted list of relative paths created or modified by the command.
 	FSDelta []string
+	// FSDeleted is the sorted list of relative paths removed by the command.
+	FSDeleted []string
 }
 
 // Run executes bin against scenario s in an isolated temp dir. It copies
@@ -91,11 +93,12 @@ func Run(bin string, s Scenario, repoRoot string) (Result, error) {
 		return Result{}, err
 	}
 	return Result{
-		Stdout:  stdout.Bytes(),
-		Stderr:  stderr.Bytes(),
-		Exit:    exit,
-		WorkDir: work,
-		FSDelta: DeltaPaths(before, after),
+		Stdout:    stdout.Bytes(),
+		Stderr:    stderr.Bytes(),
+		Exit:      exit,
+		WorkDir:   work,
+		FSDelta:   DeltaPaths(before, after),
+		FSDeleted: DeletedPaths(before, after),
 	}, nil
 }
 
@@ -158,6 +161,19 @@ func DeltaPaths(before, after map[string]string) []string {
 	}
 	sort.Strings(changed)
 	return changed
+}
+
+// DeletedPaths returns the sorted set of paths present in before but
+// absent in after (files removed by the command).
+func DeletedPaths(before, after map[string]string) []string {
+	var deleted []string
+	for p := range before {
+		if _, ok := after[p]; !ok {
+			deleted = append(deleted, p)
+		}
+	}
+	sort.Strings(deleted)
+	return deleted
 }
 
 // MarshalDelta renders a delta path list as stable JSON for golden storage.

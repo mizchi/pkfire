@@ -1,0 +1,17 @@
+/// Example Taskfile for migrate subcommand conformance tests.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local hello = new Task {
+  name = "hello"
+  cmd = "echo hello"
+  description = "say hello"
+}
+
+local build = new Task {
+  name = "build"
+  cmd = "echo build"
+  inputs { "**/*.go" }
+  outputs { "bin/app" }
+}
+
+tasks { hello; build }
