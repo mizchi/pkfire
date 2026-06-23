@@ -88,11 +88,9 @@ jobs:
             runs-on: ubuntu-latest
           - target: linux-arm64
             runs-on: ubuntu-24.04-arm
-          # macos-13 (last native Intel image) was retired Dec 2025;
-          # macos-15-intel is the final x86_64 macOS runner GitHub offers
-          # (available until Aug 2027). Builds darwin-amd64.
-          - target: darwin-amd64
-            runs-on: macos-15-intel
+          # No darwin-amd64: the MoonBit toolchain has no x86_64 macOS
+          # build (`Unsupported platform: Darwin x86_64`) and moon does
+          # not honour CC for cross-arch, so Intel macOS is unsupported.
           - target: darwin-arm64
             runs-on: macos-14
     name: build (${{ matrix.target }})
@@ -213,7 +211,6 @@ jobs:
             "pkldist/$tag.zip.sha256" \
             dist/pkf-linux-amd64.tar.gz dist/pkf-linux-amd64.tar.gz.sha256 \
             dist/pkf-linux-arm64.tar.gz dist/pkf-linux-arm64.tar.gz.sha256 \
-            dist/pkf-darwin-amd64.tar.gz dist/pkf-darwin-amd64.tar.gz.sha256 \
             dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256
         # Action-friendly `v<ver>` + floating `v<major>` tags are
         # synced by `.github/workflows/v-tags.yml`, which fires via

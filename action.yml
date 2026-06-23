@@ -101,7 +101,10 @@ runs:
           Linux-X64)   plat=linux-amd64;  pkl_plat=linux-amd64 ;;
           Linux-ARM64) plat=linux-arm64;  pkl_plat=linux-aarch64 ;;
           macOS-ARM64) plat=darwin-arm64; pkl_plat=macos-aarch64 ;;
-          macOS-X64)   plat=darwin-amd64; pkl_plat=macos-amd64 ;;
+          macOS-X64)
+            echo "::error::Intel macOS (darwin-amd64) is not supported — the MoonBit toolchain has no x86_64 macOS build. Use an Apple Silicon runner."
+            exit 1
+            ;;
           *)
             echo "::error::unsupported runner ${RUNNER_OS}-${RUNNER_ARCH}"
             exit 1
