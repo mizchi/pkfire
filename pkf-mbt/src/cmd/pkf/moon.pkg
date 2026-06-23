@@ -7,7 +7,7 @@ import {
   "mizchi/x/process" @process,
   "mizchi/x/signal" @signal,
   "mizchi/x/socket" @socket,
-  "mizchi/zlib/native" @zlib,
+  "mizchi/zlib" @zlib,
   "moonbitlang/async",
   "moonbitlang/core/buffer" @buffer,
   "moonbitlang/core/encoding/utf8" @utf8,
@@ -24,9 +24,6 @@ warnings = "-0029-0014-0024-0009"
 options(
   "is-main": true,
   "native-stub": [ "stat_native.c", "signal_native.c", "eprint_native.c" ],
-  link: {
-    "native": { "cc-link-flags": "-lz" },
-  },
   targets: {
     "main.mbt": [ "native" ],
     "tar.mbt": [ "native" ],
