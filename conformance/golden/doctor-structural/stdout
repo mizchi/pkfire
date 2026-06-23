@@ -14,7 +14,7 @@
     {
       "level": "OK",
       "label": "cache",
-      "message": "/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-doctor-structural-2447032223/cache (0 B across 0 entries)"
+      "message": "/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-doctor-structural-3119513507/cache (0 B across 0 entries)"
     },
     {
       "level": "OK",
@@ -24,7 +24,7 @@
     {
       "level": "OK",
       "label": "taskfile",
-      "message": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-doctor-structural-2447032223/work/Taskfile.pkl (3 tasks; amends package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl)"
+      "message": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-doctor-structural-3119513507/work/Taskfile.pkl (3 tasks; amends package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl)"
     }
   ]
 }

@@ -749,6 +749,20 @@ fn looks_executable(bytes : Bytes) -> Bool {
 extern "C" fn stat_mode_ffi(path : Bytes) -> Int = "mizchi_pkf_stat_mode"
 
 ///|
+/// FFI: stat(2) → st_mtime as seconds since epoch, or 0 on failure.
+#borrow(path)
+extern "C" fn file_mtime_sec(path : Bytes) -> Int64 = "mizchi_pkf_mtime_sec"
+
+///|
+/// FFI: stat(2) → st_size as bytes, or -1 on failure.
+#borrow(path)
+extern "C" fn file_size_bytes(path : Bytes) -> Int64 = "mizchi_pkf_file_size"
+
+///|
+/// FFI: time(2) → current wall-clock time as seconds since epoch.
+extern "C" fn now_sec() -> Int64 = "mizchi_pkf_now_sec"
+
+///|
 /// FFI: write bytes to stderr (fd 2) verbatim.
 #borrow(s)
 extern "C" fn eprint_ffi(s : Bytes) -> Unit = "mizchi_pkf_eprint"
@@ -4740,6 +4754,13 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
       hooks_cmd(explicit_taskfile, rest[:])
     }
+    "cache" => {
+      let cache_args : Array[String] = []
+      for i in 1..<args.length() {
+        cache_args.push(args[i])
+      }
+      cache_cmd(cache_args)
+    }
     other => {
       eprintln("pkf: unknown subcommand `\{other}`")
       eprintln(usage_text())
@@ -5250,6 +5271,365 @@ fn pad_right(s : String, width : Int) -> String {
       buf.write_char(' ')
     }
     buf.to_string()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cache subcommand — inspect / clean the local CAS.
+//
+// `pkf cache <stats|prune|rm|clear>` mirrors Go's cmdCache.
+// The MoonBit cache lives in $PKFIRE_MBT_CACHE_DIR (default
+// ~/.cache/pkfire-mbt) and uses a cas/<aa>/<rest>/entry.tar.gz layout.
+// Stats/prune use the new mtime/size C FFIs added to stat_native.c.
+// ---------------------------------------------------------------------------
+
+///|
+fn human_bytes(n : Int64) -> String {
+  let unit : Int64 = 1024
+  if n < unit {
+    return n.to_string() + " B"
+  }
+  let mut div = unit
+  let mut exp = 0
+  let mut x = n / unit
+  while x >= unit {
+    div = div * unit
+    exp = exp + 1
+    x = x / unit
+  }
+  let suffixes = ["K", "M", "G", "T", "P", "E"]
+  let suffix = if exp < suffixes.length() { suffixes[exp] } else { "?" }
+  // Simple 1-decimal formatting.
+  let scaled_10 = (n * 10L) / div
+  let whole = scaled_10 / 10L
+  let frac = scaled_10 % 10L
+  whole.to_string() + "." + frac.to_string() + " " + suffix + "B"
+}
+
+///|
+fn format_duration_sec(sec : Int64) -> String {
+  if sec < 60L {
+    return sec.to_string() + "s"
+  } else if sec < 3600L {
+    return (sec / 60L).to_string() + "m"
+  } else if sec < 86400L {
+    return (sec / 3600L).to_string() + "h"
+  } else {
+    return (sec / 86400L).to_string() + "d"
+  }
+}
+
+///|
+fn format_timestamp(sec : Int64) -> String {
+  // Produce a rough ISO-8601 date from a Unix timestamp.
+  // We don't have stdlib time, so emit a decimal epoch for brevity.
+  // Go emits RFC3339; we emit "YYYY-MM-DD (approx)" via epoch arithmetic.
+  let days_since_epoch = sec / 86400L
+  // Simple Gregorian approximation from Julian Day Number.
+  let jdn = days_since_epoch + 2440588L // Unix epoch = JDN 2440588
+  let a = jdn + 32044L
+  let b = (4L * a + 3L) / 146097L
+  let c = a - (146097L * b) / 4L
+  let d = (4L * c + 3L) / 1461L
+  let e = c - (1461L * d) / 4L
+  let m = (5L * e + 2L) / 153L
+  let year = 100L * b + d - 4800L + m / 10L
+  let month = m + 3L - 12L * (m / 10L)
+  let day = e - (153L * m + 2L) / 5L + 1L
+  let yy = year.to_string()
+  let mm = if month < 10L { "0" + month.to_string() } else { month.to_string() }
+  let dd = if day < 10L { "0" + day.to_string() } else { day.to_string() }
+  yy + "-" + mm + "-" + dd
+}
+
+///|
+/// Walk the CAS directory and call `cb` for each entry.
+/// Entry path: <cas_dir>/<prefix2>/<rest>/entry.tar.gz
+/// cb receives (hex_key, entry_dir, archive_size_bytes, mtime_sec).
+fn walk_cas_entries(
+  cas_dir : String,
+  cb : (String, String, Int64, Int64) -> Unit,
+) -> Unit {
+  let prefixes = @fs.read_dir(cas_dir) catch {
+    _ => return
+  }
+  for prefix in prefixes {
+    if prefix.length() != 2 {
+      continue
+    }
+    let prefix_dir = join_path(cas_dir, prefix)
+    let is_dir = @fs.is_dir(prefix_dir) catch {
+      _ => false
+    }
+    if !is_dir {
+      continue
+    }
+    let rests = @fs.read_dir(prefix_dir) catch {
+      _ => continue
+    }
+    for rest in rests {
+      let entry_dir = join_path(prefix_dir, rest)
+      let is_entry_dir = @fs.is_dir(entry_dir) catch {
+        _ => false
+      }
+      if !is_entry_dir {
+        continue
+      }
+      let archive_path = join_path(entry_dir, "entry.tar.gz")
+      let path_z = @utf8.encode(archive_path + "\u{00}")
+      let size = file_size_bytes(path_z)
+      let mtime = file_mtime_sec(path_z)
+      cb(prefix + rest, entry_dir, if size < 0L { 0L } else { size }, mtime)
+    }
+  }
+}
+
+///|
+fn cache_stats_cmd(cas_dir : String) -> Int {
+  let mut count = 0
+  let mut total_size : Int64 = 0L
+  let mut oldest : Int64 = 0L
+  let mut newest : Int64 = 0L
+  walk_cas_entries(cas_dir, fn(_, _, size, mtime) {
+    count = count + 1
+    total_size = total_size + size
+    if oldest == 0L || mtime < oldest {
+      oldest = mtime
+    }
+    if mtime > newest {
+      newest = mtime
+    }
+  })
+  println("cache dir: \{cache_root()}")
+  println("entries:   \{count}")
+  println("size:      \{human_bytes(total_size)}")
+  if count > 0 {
+    let now = now_sec()
+    println(
+      "oldest:    \{format_timestamp(oldest)} (\{format_duration_sec(now - oldest)} ago)",
+    )
+    println(
+      "newest:    \{format_timestamp(newest)} (\{format_duration_sec(now - newest)} ago)",
+    )
+  }
+  0
+}
+
+///|
+fn parse_duration_to_sec(s : String) -> Int64 {
+  // Supports: Nd (days), Nh (hours), Nm (minutes), Ns (seconds).
+  if s.has_suffix("d") {
+    let num_str = s[:s.length() - 1].to_string()
+    match (try? @strconv.parse_int(num_str, base=10)) {
+      Ok(n) => return n.to_int64() * 86400L
+      Err(_) => ()
+    }
+  } else if s.has_suffix("h") {
+    let num_str = s[:s.length() - 1].to_string()
+    match (try? @strconv.parse_int(num_str, base=10)) {
+      Ok(n) => return n.to_int64() * 3600L
+      Err(_) => ()
+    }
+  } else if s.has_suffix("m") {
+    let num_str = s[:s.length() - 1].to_string()
+    match (try? @strconv.parse_int(num_str, base=10)) {
+      Ok(n) => return n.to_int64() * 60L
+      Err(_) => ()
+    }
+  } else if s.has_suffix("s") {
+    let num_str = s[:s.length() - 1].to_string()
+    match (try? @strconv.parse_int(num_str, base=10)) {
+      Ok(n) => return n.to_int64()
+      Err(_) => ()
+    }
+  }
+  // Default fallback: treat as seconds.
+  match (try? @strconv.parse_int(s, base=10)) {
+    Ok(n) => return n.to_int64()
+    Err(_) => ()
+  }
+  // Default 30d if unrecognized.
+  30L * 86400L
+}
+
+///|
+fn cache_prune_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
+  let mut older_than = "30d"
+  let mut dry_run = false
+  for arg in args {
+    if arg == "--dry-run" {
+      dry_run = true
+    } else if arg.has_prefix("--older-than=") {
+      older_than = arg.substring(start=13, end=arg.length())
+    } else if arg == "--older-than" {
+      // Space-separated value not supported without lookahead in ArrayView;
+      // users should use --older-than=VAL form.
+      ()
+    }
+  }
+  // Parse the next arg after --older-than (space-separated form).
+  let mut i = 0
+  while i < args.length() {
+    if args[i] == "--older-than" && i + 1 < args.length() {
+      older_than = args[i + 1]
+      i = i + 2
+      continue
+    }
+    i = i + 1
+  }
+  let threshold_sec = parse_duration_to_sec(older_than)
+  let cutoff = now_sec() - threshold_sec
+  let mut removed = 0
+  let mut freed : Int64 = 0L
+  walk_cas_entries(cas_dir, fn(hex, entry_dir, size, mtime) {
+    if mtime > cutoff {
+      return
+    }
+    freed = freed + size
+    removed = removed + 1
+    let short_hex = if hex.length() > 12 {
+      hex.substring(start=0, end=12)
+    } else {
+      hex
+    }
+    let age = now_sec() - mtime
+    if dry_run {
+      println(
+        "would remove \{short_hex} (\{human_bytes(size)}, \{format_duration_sec(age)} old)",
+      )
+      return
+    }
+    rm_rf(entry_dir)
+    println(
+      "removed \{short_hex} (\{human_bytes(size)}, \{format_duration_sec(age)} old)",
+    )
+  })
+  println("")
+  if dry_run {
+    println("would remove \{removed} entries (\{human_bytes(freed)})")
+  } else {
+    println("removed \{removed} entries (\{human_bytes(freed)} freed)")
+  }
+  0
+}
+
+///|
+fn cache_rm_cmd(cas_dir : String, keys : Array[String]) -> Int {
+  if keys.length() == 0 {
+    eprintln("pkf: usage: pkf cache rm <action-key-hex>")
+    return 1
+  }
+  let mut removed = 0
+  for key in keys {
+    if key.length() < 2 {
+      eprintln("pkf: cache rm: action key \"\{key}\" too short (need >= 2 hex chars)")
+      return 1
+    }
+    let prefix2 = key[:2].to_string()
+    let bucket = join_path(cas_dir, prefix2)
+    if key.length() >= 64 {
+      // Full 64-char hex: direct path.
+      let rest = key[2:].to_string()
+      let entry_dir = join_path(bucket, rest)
+      if !@fs.path_exists(entry_dir) {
+        eprintln("[pkf] cache rm: no entry at \{key}")
+        continue
+      }
+      rm_rf(entry_dir)
+      println("removed \{key}")
+      removed = removed + 1
+    } else {
+      // Prefix match.
+      let rest_prefix = key[2:].to_string()
+      let candidates = @fs.read_dir(bucket) catch {
+        _ => {
+          eprintln("[pkf] cache rm: no entry matching \{key}")
+          continue
+        }
+      }
+      let matches : Array[String] = []
+      for cand in candidates {
+        if cand.has_prefix(rest_prefix) {
+          matches.push(cand)
+        }
+      }
+      if matches.length() == 0 {
+        eprintln("[pkf] cache rm: no entry matching \{key}")
+        continue
+      } else if matches.length() > 1 {
+        eprintln(
+          "pkf: cache rm: prefix \"\{key}\" matches \{matches.length()} entries; disambiguate",
+        )
+        return 1
+      }
+      let entry_dir = join_path(bucket, matches[0])
+      rm_rf(entry_dir)
+      println("removed \{key}")
+      removed = removed + 1
+    }
+  }
+  println("")
+  println("removed \{removed} entries")
+  0
+}
+
+///|
+fn cache_clear_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
+  let mut yes = false
+  for arg in args {
+    if arg == "--yes" {
+      yes = true
+    }
+  }
+  if !@fs.path_exists(cas_dir) {
+    println("cache already empty")
+    return 0
+  }
+  if !yes {
+    eprintln(
+      "pkf: refusing to clear \{cas_dir} without --yes (use --yes for scripts)",
+    )
+    return 1
+  }
+  rm_rf(cas_dir)
+  println("cleared \{cas_dir}")
+  0
+}
+
+///|
+fn cache_cmd(args : Array[String]) -> Int {
+  if args.length() == 0 {
+    println("pkf cache — inspect / clean the local CAS")
+    println("")
+    println("usage:")
+    println("  pkf cache <stats|prune|rm|clear> [args]")
+    println("")
+    println("subcommands:")
+    println("  stats                                 print cache dir, entry count, total size, oldest/newest mtime")
+    println("  prune [--older-than DUR] [--dry-run]  drop entries older than DUR (default 30d)")
+    println("  rm <action-key-hex>...                remove specific entries")
+    println("  clear [--yes]                         remove every entry")
+    return 0
+  }
+  let sub = args[0]
+  let cas_dir = join_path(cache_root(), "cas")
+  match sub {
+    "stats" => cache_stats_cmd(cas_dir)
+    "prune" => cache_prune_cmd(cas_dir, args[1:])
+    "rm" => {
+      let keys : Array[String] = []
+      for i in 1..<args.length() {
+        keys.push(args[i])
+      }
+      cache_rm_cmd(cas_dir, keys)
+    }
+    "clear" => cache_clear_cmd(cas_dir, args[1:])
+    other => {
+      die(
+        "unknown cache subcommand \"\{other}\" (want stats|prune|rm|clear)",
+      )
+      1
+    }
   }
 }
 

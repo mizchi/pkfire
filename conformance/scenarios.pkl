@@ -161,4 +161,10 @@ scenarios {
     setup { "printf hi > src.txt"; "printf out > out.txt" }
     contract = new { exit = true; fsDelta = true }
   }
+  new {
+    id = "cache-stats-structural"
+    fixture = "examples/basic"
+    argv { "cache"; "stats" }
+    contract = new { exit = true; stdoutNonEmpty = true; mustContain { "cache" } }
+  }
 }
