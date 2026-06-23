@@ -50,5 +50,17 @@ jobs:
 
       - name: Smoke test
         run: |
+          set +e
+          bin="$(readlink -f ./result/bin/pkf)"
+          echo "=== file ==="; file "$bin"
+          echo "=== ldd ==="; ldd "$bin" 2>&1 || true
+          echo "=== run: pkf version (capture) ==="
+          "$bin" version; echo "version exit=$?"
+          echo "=== run unwrapped binary directly (bypass wrapper) ==="
+          real="$(dirname "$bin")/.pkf-wrapped"
+          if [ -x "$real" ]; then file "$real"; "$real" version; echo "real exit=$?"; fi
+          echo "=== strace tail (last syscalls before abort) ==="
+          if command -v strace >/dev/null; then strace -f -e trace=signal,exit_group,write "$bin" version 2>&1 | tail -25 || true; else echo "(no strace)"; fi
+          echo "=== original assertions ==="
           ./result/bin/pkf version
           ./result/bin/pkf help
