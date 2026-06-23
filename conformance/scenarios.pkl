@@ -142,4 +142,16 @@ scenarios {
   new { id = "format-rewrites"; fixture = "examples/unformatted"; argv { "format" }; contract = new { exit = true; fsDelta = true } }
   new { id = "migrate-rewrites"; fixture = "examples/migrate-src"; argv { "migrate"; "--to=0.11.0"; "--skip-verify" }; contract = new { exit = true; fsDelta = true } }
   new { id = "migrate-dry-run"; fixture = "examples/migrate-src"; argv { "migrate"; "--to=0.11.0"; "--dry-run" }; contract = new { exit = true; mustContain { "0.11.0" } } }
+  new {
+    id = "hooks-install"
+    fixture = "examples/hooks-tf"
+    argv { "hooks"; "install" }
+    setup { "git init -q" }
+    contract = new {
+      exit = true
+      fsDelta = true
+      mustContain { "pre-commit" }
+      mustContainStderr { "cache=true" }
+    }
+  }
 }

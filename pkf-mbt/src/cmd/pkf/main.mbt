@@ -4629,6 +4629,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
       migrate_cmd(explicit_taskfile, rest[:])
     }
+    "hooks" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      hooks_cmd(explicit_taskfile, rest[:])
+    }
     other => {
       eprintln("pkf: unknown subcommand `\{other}`")
       eprintln(usage_text())
@@ -4854,6 +4858,292 @@ async fn migrate_cmd(
   }
   println("verified: \{taskfile} evaluates against pkfire@\{ver}")
   0
+}
+
+// ---------------------------------------------------------------------------
+// hooks subcommand — manage .git/hooks shims that delegate to pkf run.
+// ---------------------------------------------------------------------------
+
+///| The pkfHookMarker sentinel written into every managed shim.
+///  Uninstall refuses to remove hooks that don't contain it.
+let pkf_hook_marker : String = "# managed by pkf hooks install"
+
+///| Recognised git client-side hook names (server-side hooks excluded).
+let git_hook_events : Array[String] = [
+  "pre-commit",
+  "prepare-commit-msg",
+  "commit-msg",
+  "post-commit",
+  "pre-rebase",
+  "post-checkout",
+  "post-merge",
+  "pre-push",
+  "post-rewrite",
+]
+
+///| Render the shim script for a single git hook event.
+fn hook_script(event : String) -> String {
+  "#!/bin/sh\n" + pkf_hook_marker + "\nexec pkf run " + event + " -- \"$@\"\n"
+}
+
+///| Walk up from `start_dir` looking for a `.git` entry; return the hooks
+///  directory. Returns None when not inside a git repository.
+fn find_git_hooks_dir(start_dir : String) -> String? {
+  let mut dir = start_dir
+  for {
+    let git = join_path(dir, ".git")
+    if @fs.path_exists(git) {
+      let is_dir = @fs.is_dir(git) catch {
+        _ => false
+      }
+      if is_dir {
+        return Some(join_path(git, "hooks"))
+      } else {
+        // .git is a file (worktree / submodule): parse `gitdir: <path>`.
+        let data = @fs.read_file_to_string(git) catch {
+          _ => return None
+        }
+        let line = data.trim_space().to_string()
+        let prefix = "gitdir:"
+        let raw = if line.has_prefix(prefix) {
+          line.substring(start=prefix.length(), end=line.length()).trim_space().to_string()
+        } else {
+          line
+        }
+        let abs_raw = if raw.has_prefix("/") {
+          raw
+        } else {
+          join_path(dir, raw)
+        }
+        return Some(join_path(abs_raw, "hooks"))
+      }
+    }
+    let parent = dirname(dir)
+    if parent == dir || parent.length() == 0 {
+      break
+    }
+    dir = parent
+  }
+  None
+}
+
+///| `pkf hooks install|uninstall|list [-f FILE] [--force]`
+async fn hooks_cmd(
+  explicit_taskfile : String?,
+  args : ArrayView[String],
+) -> Int {
+  if args.length() == 0 {
+    eprintln("pkf: usage: pkf hooks <install|uninstall|list> [-f FILE] [--force]")
+    return 1
+  }
+  let sub = args[0]
+  if sub == "-h" || sub == "--help" {
+    println("pkf hooks — manage .git/hooks shims")
+    println("")
+    println("usage:")
+    println("  pkf hooks <install|uninstall|list> [-f FILE] [--force]")
+    println("")
+    println("subcommands:")
+    println("  install     create .git/hooks/<event> shims for tasks named pre-commit, pre-push, commit-msg, ...")
+    println("  uninstall   remove the shims installed by 'pkf hooks install'")
+    println("  list        list every git event that has an installed shim")
+    println("")
+    println("flags:")
+    println("  -f, --file FILE  Taskfile.pkl path")
+    println("      --force      overwrite hooks not managed by pkfire")
+    return 0
+  }
+
+  // Parse remaining flags after the subcommand.
+  let mut force = false
+  let positionals : Array[String] = []
+  let mut i = 1
+  while i < args.length() {
+    let a = args[i]
+    if a == "--force" {
+      force = true
+    } else if a == "-h" || a == "--help" {
+      // help handled above via sub == --help; honour here too
+      println("pkf hooks — manage .git/hooks shims")
+      return 0
+    } else if a.has_prefix("-") && a != "-f" && a != "--file" && !a.has_prefix("--file=") {
+      // Unknown flag
+      eprintln("pkf: hooks: unknown flag `\{a}`")
+      return 1
+    } else if !a.has_prefix("-") {
+      positionals.push(a)
+    }
+    i = i + 1
+  }
+  if positionals.length() > 0 {
+    eprintln("pkf: hooks \{sub} takes no positional args, got \{positionals[0]}")
+    return 1
+  }
+
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let task_dir = taskfile_dir(taskfile)
+
+  let hooks_dir = match find_git_hooks_dir(task_dir) {
+    Some(d) => d
+    None => {
+      eprintln("pkf: not inside a git repository (no .git found from \{task_dir})")
+      return 1
+    }
+  }
+
+  match sub {
+    "install" => hooks_install(plan, hooks_dir, force)
+    "uninstall" => hooks_uninstall(hooks_dir)
+    "list" => hooks_list(plan, hooks_dir)
+    _ => {
+      eprintln("pkf: unknown hooks subcommand \"\{sub}\" (want install|uninstall|list)")
+      1
+    }
+  }
+}
+
+///| Join an Array[String] with a separator (used for events list).
+fn join_with(items : Array[String], sep : String) -> String {
+  let buf = StringBuilder::new(size_hint=64)
+  for i, item in items {
+    if i > 0 {
+      buf.write_string(sep)
+    }
+    buf.write_string(item)
+  }
+  buf.to_string()
+}
+
+///| Install pkfire-managed hook shims for every task whose name is a
+///  recognised git hook event. Matches Go's hooksInstall exactly.
+async fn hooks_install(plan : Plan, hooks_dir : String, force : Bool) -> Int {
+  // Ensure the hooks directory exists.
+  mkdir_p(hooks_dir)
+  let mut matched = 0
+  let mut wrote = 0
+  let mut skipped = 0
+  for event in git_hook_events {
+    match plan.tasks.get(event) {
+      None => continue
+      Some(task) => {
+        matched = matched + 1
+        if task.cache {
+          eprintln("[pkf] warning: task \"\{event}\" has cache=true; hooks typically want cache=false")
+        }
+        let path = join_path(hooks_dir, event)
+        let want = hook_script(event)
+        let existing_opt = (try? @fs.read_file_to_string(path))
+        match existing_opt {
+          Ok(existing) =>
+            if existing == want {
+              // Bit-identical: silent idempotent no-op.
+              continue
+            } else if existing.contains(pkf_hook_marker) {
+              // Pkfire-managed but stale — overwrite + report.
+              ()
+            } else {
+              // Written by someone else.
+              if !force {
+                eprintln("[pkf] \{event}: not managed by pkfire, skipping (use --force to overwrite)")
+                skipped = skipped + 1
+                continue
+              }
+            }
+          Err(_) =>
+            // File does not exist (or unreadable): write it.
+            ()
+        }
+        @fs.write_bytes_to_file(path, @utf8.encode(want)) catch {
+          e => {
+            eprintln("pkf: write \{path}: \{e}")
+            return 1
+          }
+        }
+        // Set executable bit 0o755 via @xfs.chmod.
+        @xfs.chmod(path.view(), 0o755) catch {
+          _ => ()
+        }
+        println("installed \{path} → pkf run \{event}")
+        wrote = wrote + 1
+      }
+    }
+  }
+  ignore(wrote)
+  ignore(skipped)
+  if matched == 0 {
+    println("no installable hooks: the Taskfile declares no task named after a git hook event")
+    println("  recognized events: " + join_with(git_hook_events, ", "))
+  }
+  0
+}
+
+///| Remove pkfire-managed hook shims. Non-pkfire hooks are left alone.
+fn hooks_uninstall(hooks_dir : String) -> Int {
+  let mut removed = 0
+  for event in git_hook_events {
+    let path = join_path(hooks_dir, event)
+    match (try? @fs.read_file_to_string(path)) {
+      Err(_) => continue
+      Ok(data) => {
+        if !data.contains(pkf_hook_marker) {
+          eprintln("[pkf] \{event}: not managed by pkfire, leaving alone")
+          continue
+        }
+        @fs.remove_file(path) catch {
+          e => {
+            eprintln("pkf: remove \{path}: \{e}")
+            return 1
+          }
+        }
+        println("removed \{path}")
+        removed = removed + 1
+      }
+    }
+  }
+  if removed == 0 {
+    println("no pkfire-managed hooks found")
+  }
+  0
+}
+
+///| List the install state of every recognised git hook event.
+fn hooks_list(plan : Plan, hooks_dir : String) -> Int {
+  println("hooks dir: \{hooks_dir}\n")
+  for event in git_hook_events {
+    let has_task = plan.tasks.get(event) is Some(_)
+    let task_state = if has_task { "task declared" } else { "no task" }
+    let state = match (try? @fs.read_file_to_string(join_path(hooks_dir, event))) {
+      Ok(data) =>
+        if data.contains(pkf_hook_marker) {
+          "installed (pkfire)"
+        } else {
+          "installed (other)"
+        }
+      Err(_) => "—"
+    }
+    // Match Go's %-20s  %-20s  %s column layout.
+    let e_pad = pad_right(event, 20)
+    let s_pad = pad_right(state, 20)
+    println("  \{e_pad}  \{s_pad}  \{task_state}")
+  }
+  0
+}
+
+///| Right-pad a string to `width` chars with spaces.
+fn pad_right(s : String, width : Int) -> String {
+  let len = s.length()
+  if len >= width {
+    s
+  } else {
+    let buf = StringBuilder::new(size_hint=width)
+    buf.write_string(s)
+    for _ in 0..<(width - len) {
+      buf.write_char(' ')
+    }
+    buf.to_string()
+  }
 }
 
 ///|
