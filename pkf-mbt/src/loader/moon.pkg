@@ -1,9 +1,11 @@
 import {
   "mizchi/pkl" @pkl,
   "mizchi/x/http" @http,
+  "mizchi/zlib" @zlib,
   "moonbitlang/async",
   "moonbitlang/async/http" @async_http,
   "moonbitlang/async/socket",
+  "moonbitlang/core/encoding/utf8" @utf8,
   "moonbitlang/x/fs" @fs,
   "moonbitlang/x/sys" @sys,
 }
@@ -15,5 +17,7 @@ options(
     "loader.mbt": [ "native", "js" ],
     "fetch.mbt": [ "native" ],
     "fetch_wbtest.mbt": [ "native" ],
+    "zip.mbt": [ "native" ],
+    "zip_wbtest.mbt": [ "native" ],
   },
 )
