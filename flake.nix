@@ -62,9 +62,15 @@
         # MoonBit output as `bin/pkf` (renamed from pkf.exe).
         pkfire = pkfMbt.overrideAttrs (old: {
           nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.makeWrapper ];
+          # `moonbitlang/async`'s TLS module dlopen()s OpenSSL during
+          # moonbit_init (global init runs unconditionally at startup); if
+          # libssl isn't findable the binary core-dumps before main
+          # (moonbit_panic ← tls.load__openssl). The Nix closure has no
+          # system OpenSSL, so put it on LD_LIBRARY_PATH via the wrapper.
           postInstall = (old.postInstall or "") + ''
             wrapProgram $out/bin/pkf \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pkl ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pkl ]} \
+              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}
           '';
           meta = (old.meta or { }) // (with pkgs.lib; {
             description = "Typed task runner with Bazel-style incremental caching, configured in Pkl";
