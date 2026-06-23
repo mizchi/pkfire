@@ -1,0 +1,37 @@
+/// Fixture exercising the 5 rendered-task lint rules, one per task.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+// noop-task: neither cmd nor deps.
+local noop = new Task {
+  name = "noop"
+}
+
+// outputs-without-inputs: cache (default true) + outputs, no inputs.
+local generate = new Task {
+  name = "generate"
+  cmd = "echo gen > out.txt"
+  outputs { "out.txt" }
+}
+
+// service-without-readiness: service=true with no readyPort/readyCmd.
+local serve = new Task {
+  name = "serve"
+  cmd = "python -m http.server 8000"
+  service = true
+}
+
+// inputs-without-cache: cache=false but declares inputs (non-service, has cmd).
+local check = new Task {
+  name = "check"
+  cmd = "echo check"
+  cache = false
+  inputs { "**/*.txt" }
+}
+
+// build-without-outputs: build-like cmd, cached (default), no outputs.
+local build = new Task {
+  name = "build"
+  cmd = "go build ./..."
+}
+
+tasks { noop; generate; serve; check; build }

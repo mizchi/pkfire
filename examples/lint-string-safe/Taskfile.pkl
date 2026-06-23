@@ -1,0 +1,18 @@
+/// Fixture proving the source brace-scan masks comments and string contents:
+/// the `local ghost = new Task { ... }` text below lives inside a `"""..."""`
+/// block and a `cmd` with a literal `{`, so it must NOT be reported as a
+/// dead-local task.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local listed = new Task {
+  name = "listed"
+  cmd = "echo '{ not a brace block }' && echo done"
+  description =
+    """
+    This doc string deliberately embeds Pkl-looking source:
+    local ghost = new Task { name = "ghost"; cmd = "echo boo" }
+    The masker must blank it so ghost is never flagged dead-local.
+    """
+}
+
+tasks { listed }

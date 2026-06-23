@@ -114,8 +114,9 @@ func pathOrRoot(path string) string {
 	return path
 }
 
-// stripJSONKeys removes the given top-level keys from a JSON object so
-// volatile values (e.g. absolute paths) don't break comparison.
+// stripJSONKeys removes the given keys from a JSON value at any depth so
+// volatile values (e.g. absolute paths inside nested arrays/objects) don't
+// break comparison.
 func stripJSONKeys(raw []byte, keys []string) []byte {
 	if len(keys) == 0 {
 		return raw
@@ -124,11 +125,31 @@ func stripJSONKeys(raw []byte, keys []string) []byte {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return raw
 	}
-	if m, ok := v.(map[string]any); ok {
-		for _, k := range keys {
-			delete(m, k)
-		}
+	set := map[string]bool{}
+	for _, k := range keys {
+		set[k] = true
 	}
+	var walk func(any) any
+	walk = func(n any) any {
+		switch t := n.(type) {
+		case map[string]any:
+			for k := range t {
+				if set[k] {
+					delete(t, k)
+				} else {
+					t[k] = walk(t[k])
+				}
+			}
+			return t
+		case []any:
+			for i := range t {
+				t[i] = walk(t[i])
+			}
+			return t
+		}
+		return n
+	}
+	walk(v)
 	out, err := json.Marshal(v)
 	if err != nil {
 		return raw

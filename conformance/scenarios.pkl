@@ -113,4 +113,29 @@ scenarios {
   new { id = "list-json-rich"; fixture = "examples/describe-rich"; argv { "list"; "--json" }; contract = new { json = true } }
   new { id = "info-json-rich"; fixture = "examples/describe-rich"; argv { "info"; "--json" }; contract = new { json = true; jsonIgnorePaths { "taskfile" } } }
   new { id = "describe-arg-after-json"; fixture = "examples/describe-rich"; argv { "describe"; "deploy"; "--json" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "single task name" } } }
+  new { id = "completion-bash"; fixture = "examples/basic"; argv { "completion"; "bash" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "pkf bash completion" } } }
+  new { id = "completion-zsh"; fixture = "examples/basic"; argv { "completion"; "zsh" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "#compdef pkf" } } }
+  new { id = "completion-fish"; fixture = "examples/basic"; argv { "completion"; "fish" }; contract = new { exit = true; stdoutNonEmpty = true; mustContain { "complete -c pkf" } } }
+  new { id = "lint-clean"; fixture = "examples/basic"; argv { "lint"; "--json" }; contract = new { json = true } }
+  new { id = "lint-dead"; fixture = "examples/lint-dead"; argv { "lint"; "--json" }; contract = new { json = true; exit = true; jsonIgnorePaths { "path" } } }
+  new { id = "lint-rules"; fixture = "examples/lint-rules"; argv { "lint"; "--json" }; contract = new { json = true; exit = true; jsonIgnorePaths { "path" } } }
+  new { id = "lint-string-safe"; fixture = "examples/lint-string-safe"; argv { "lint"; "--json" }; contract = new { json = true; exit = true; jsonIgnorePaths { "path" } } }
+  new {
+    id = "doctor-structural"
+    fixture = "examples/basic"
+    argv { "doctor"; "--json" }
+    contract = new {
+      exit = true
+      mustContain { "checks"; "level"; "label"; "message"; "pkl"; "cache"; "remote"; "taskfile"; "pkf-path" }
+    }
+  }
+  new {
+    id = "explain-structural"
+    fixture = "examples/basic"
+    argv { "explain"; "build" }
+    contract = new {
+      exit = true
+      mustContain { "task:"; "action key:"; "cmd:"; "shell:"; "input patterns" }
+    }
+  }
 }

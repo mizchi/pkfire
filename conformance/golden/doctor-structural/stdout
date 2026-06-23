@@ -1,0 +1,30 @@
+{
+  "version": "dev",
+  "checks": [
+    {
+      "level": "WARN",
+      "label": "pkf-path",
+      "message": "PATH resolves to /etc/profiles/per-user/mz/bin/pkf (dev), but doctor is running pkf dev at /tmp/pkf-go; hooks may use the PATH binary"
+    },
+    {
+      "level": "OK",
+      "label": "pkl",
+      "message": "0.31.1 at /etc/profiles/per-user/mz/bin/pkl"
+    },
+    {
+      "level": "OK",
+      "label": "cache",
+      "message": "/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-doctor-structural-2662425647/cache (0 B across 0 entries)"
+    },
+    {
+      "level": "OK",
+      "label": "remote",
+      "message": "PKFIRE_REMOTE_CACHE not set (local-only)"
+    },
+    {
+      "level": "OK",
+      "label": "taskfile",
+      "message": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-doctor-structural-2662425647/work/Taskfile.pkl (3 tasks; amends package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl)"
+    }
+  ]
+}

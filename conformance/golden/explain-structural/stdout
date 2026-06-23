@@ -1,0 +1,37 @@
+task:        build
+action key:  a23c2a60333370bbb3faaf26dfc716645a63e58bee33cb89b0a92a62a1935aa2
+cache:       true
+workdir:     /private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-explain-structural-1779842476/work  (Taskfile dir)
+deps:        (none)
+dependents:  test
+
+cmd:
+  go build -o bin/app ./cmd/app
+
+shell:       bash
+shell flags: -c
+
+env (0):
+  (none)
+
+tools (0):
+  (none)
+
+input patterns (3):
+  **/*.go
+  go.mod
+  go.sum
+
+inputs (0 files):
+  (none — glob expansion matched zero files)
+
+declared outputs (1):
+  bin/app
+
+affected trigger patterns:
+  build:
+    **/*.go
+    go.mod
+    go.sum
+
+config hash: acc3a6d299ee1635  (sha-256-ish prefix of pkl/Taskfile.pkl canonical form)
