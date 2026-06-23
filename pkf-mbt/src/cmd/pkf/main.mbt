@@ -1,18 +1,20 @@
 // pkf-mbt — MoonBit re-implementation of pkfire.
 //
-// Phase 1 MVP: `pkf run <task>` only.
+// `pkf run <task>` flow:
 //   1. Locate Taskfile.pkl (`./Taskfile.pkl` by default).
-//   2. Spawn `mpkl eval -f json <Taskfile.pkl>` and capture stdout.
+//   2. Evaluate it fully in-process via the embedded Pkl loader
+//      (`@loader.eval_module_path`) — no subprocess. The loader resolves
+//      local, cached, remote `package://`, `http(s)://` and glob-import
+//      modules itself, then renders the module's `output.value` as the
+//      same JSON envelope (taskOrder + tasks Mapping) Apple Pkl produces.
 //   3. Parse the Rendered JSON envelope (taskOrder + tasks Mapping).
 //   4. Topo-sort tasks via their `deps` list.
 //   5. For each task, spawn `<shell> <shellFlags> <cmd>` with merged env.
 //   6. Stream stdout/stderr through, return the first non-zero exit.
 //
-// Cache / watch / remote-cache / services / params are deferred to later
-// phases. The MVP keeps Apple Pkl's role of generating the wire format
-// and only proves the pkfire wire-consumer side translates cleanly to
-// MoonBit. Once stable, mpkl can be embedded as a library to drop the
-// subprocess hop.
+// The embedded loader is the sole Taskfile evaluator; there is no longer
+// a fallback to an external eval subprocess. (The Apple `pkl` CLI is still
+// invoked for the `format`/`pkl` passthrough subcommands.)
 
 ///|
 struct Param {
@@ -121,14 +123,14 @@ fn parse_bool(value : Json, default~ : Bool) -> Bool {
 fn parse_plan(raw : String) -> Plan {
   let root : Json = @json.parse(raw) catch {
     _ => {
-      die("could not parse mpkl JSON output")
+      die("could not parse Taskfile eval JSON output")
       panic()
     }
   }
   let entries = match root {
     Object(e) => e
     _ => {
-      die("mpkl JSON output is not an object")
+      die("Taskfile eval JSON output is not an object")
       panic()
     }
   }
@@ -1851,9 +1853,9 @@ fn taskfile_dir(taskfile : String) -> String {
 
 ///|
 async fn eval_taskfile(taskfile : String) -> String {
-  // PKF-3a: embed mpkl's loader in-process to drop the ~30ms subprocess
-  // startup. Falls back to the subprocess hop only when the embedded
-  // loader can't service the request (HTTP modules, glob imports, etc.).
+  // The embedded Pkl loader evaluates the Taskfile fully in-process — local,
+  // cached, remote `package://`, `http(s)://` and glob-import modules are all
+  // resolved here, with no eval subprocess to fall back to.
   match (try? @loader.eval_module_path(taskfile)) {
     Ok(@pkl.EvalOk(value)) =>
       @pkl.render_value_as_json(extract_output_value(value))
@@ -1861,13 +1863,13 @@ async fn eval_taskfile(taskfile : String) -> String {
       for e in errors {
         println("pkf: " + e.message)
       }
-      die("mpkl eval failed")
+      die("pkl eval failed")
       panic()
     }
-    Err(err) =>
-      // Fallback: spawn the mpkl CLI for cases the embedded loader can't
-      // service (e.g. HTTP imports).
-      eval_taskfile_via_subprocess(taskfile, err.message())
+    Err(err) => {
+      die("evaluate \{taskfile}: \{err.message()}")
+      panic()
+    }
   }
 }
 
@@ -1875,7 +1877,7 @@ async fn eval_taskfile(taskfile : String) -> String {
 fn extract_output_value(value : @pkl.Value) -> @pkl.Value {
   // Module is rendered as ObjectValue with an `output { value = ... }`
   // member. Peel that off so the JSON we hand parse_plan looks the same
-  // as `mpkl eval -f json` would have produced.
+  // as `pkl eval -f json` would have produced.
   match value {
     @pkl.ObjectValue(members) => {
       for m in members {
@@ -1897,22 +1899,6 @@ fn extract_output_value(value : @pkl.Value) -> @pkl.Value {
   }
 }
 
-///|
-async fn eval_taskfile_via_subprocess(
-  taskfile : String,
-  reason : String,
-) -> String {
-  println("pkf: # embedded loader fell back to mpkl CLI (\{reason})")
-  let (code, stdout) = @process.collect_stdout("mpkl", [
-    "eval", "-f", "json", taskfile,
-  ])
-  if code != 0 {
-    die("mpkl eval failed with exit code \{code}")
-  }
-  stdout.text()
-}
-
-///|
 ///|
 struct ParsedRunArgs {
   target : String

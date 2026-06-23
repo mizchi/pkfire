@@ -1,0 +1,9 @@
+import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl" as schema
+
+alpha: schema.Task = new {
+  name = "alpha"
+  description = "First glob-imported task fragment"
+  cmd = "echo alpha"
+}
+
+tasks: Listing<schema.Task> = new { alpha }

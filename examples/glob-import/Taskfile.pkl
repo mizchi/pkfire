@@ -1,0 +1,14 @@
+/// Glob-import example: the runner entry point assembles its task list
+/// from every `tasks/*.pkl` fragment via a declaration-form glob import.
+/// This exercises the in-process glob resolver: the match set keys are the
+/// glob-relative paths Apple Pkl produces (`tasks/alpha.pkl`,
+/// `tasks/beta.pkl`), lexicographically sorted.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+import* "tasks/*.pkl" as taskMods
+
+tasks {
+  for (_path, mod in taskMods) {
+    ...mod.tasks
+  }
+}

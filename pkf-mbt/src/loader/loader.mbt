@@ -10,12 +10,22 @@
 //     `XDG_CACHE_HOME` / `PKL_MBT_PACKAGE_CACHE` overrides honoured.
 //   - `pkl:` stdlib modules (deferred to the eval-side stub).
 //
+// `package://` archives are downloaded in-process on a cache miss (see
+// download.mbt / fetch.mbt) — no subprocess. `https://` / `http://` module
+// sources are fetched directly too.
+//
 // Not supported (yet):
 //
-//   - `https://` / `http://` modules (no fetch — the caller should
-//     pre-populate the package cache or use the mpkl CLI).
 //   - `--module-path` overlays, project-file `amends`, dependency alias
-//     rewriting, import globs.
+//     rewriting.
+//
+// Supported as of phase 3 task 5:
+//
+//   - Local glob import *declarations* (`import* "sub/*.pkl" as foo`). The
+//     match set is registered with the evaluator's sandbox so its native
+//     `import*` handling resolves in-process. Keys use the glob-relative
+//     path form Apple Pkl produces (`sub/a.pkl`). Globs over `package://` /
+//     remote dirs, and inline `import*(...)` *expressions*, are not.
 //
 // Anything outside that scope falls back to a diagnostic.
 
@@ -141,13 +151,17 @@ fn join_relative(from : String, uri : String) -> String {
 ///|
 fn parse_package_uri(uri : String) -> (String, String, String, String)? {
   // Returns (path_after_registry, name, version, file_inside_package).
-  // The mpkl cache layout drops the registry host segment, so for
+  // The pkl-mbt cache layout drops the registry host segment, so for
   //   `package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl`
   // the on-disk path is
   //   <cache_root>/github.com/mizchi/pkfire/pkfire@0.10.0/package/Taskfile.pkl
   if !uri.has_prefix("package://") {
     return None
   }
+  // NOTE: `::sha256-...` checksum suffixes are NOT stripped here. Our real
+  // `pkg.pkl-lang.org` URIs carry no `::` suffix; if one ever reaches this
+  // parser it must also be stripped in `package_metadata_url_from_uri` to keep
+  // the read/write paths consistent.
   let after_scheme = uri.substring(start="package://".length(), end=uri.length())
   let (locator, file) = match after_scheme.find("#") {
     Some(idx) => {
@@ -216,16 +230,35 @@ async fn read_module_source(path : String) -> String raise LoaderError {
     return ""
   }
   if path.has_prefix("https://") || path.has_prefix("http://") {
-    raise LoaderError(
-      "embedded loader does not fetch HTTP modules; pre-cache `\{path}` or use mpkl CLI",
-    )
+    // HTTP module: fetch the source text directly (redirect-following).
+    let fetched = try fetch_uri(path) catch {
+      _ => raise LoaderError("failed to fetch module \{path}")
+    }
+    return match fetched {
+      Some(s) => s
+      None => raise LoaderError("failed to fetch module \{path}")
+    }
   }
-  let fs_path = if path.has_prefix("package://") {
-    match resolve_package_uri_to_file(path) {
+  if path.has_prefix("package://") {
+    let fs_path = match resolve_package_uri_to_file(path) {
       Some(p) => p
       None => raise LoaderError("could not parse package URI: \{path}")
     }
-  } else if path.has_prefix("file://") {
+    // Cache hit: read straight from cache, no network. On a miss the read
+    // fails, so download the archive into the cache ONCE and retry the read.
+    return @fs.read_file_to_string(fs_path) catch {
+      _ => {
+        download_package_uri_to_cache(path)
+        @fs.read_file_to_string(fs_path) catch {
+          _ =>
+            raise LoaderError(
+              "could not read module `\{path}` (resolved to `\{fs_path}`)",
+            )
+        }
+      }
+    }
+  }
+  let fs_path = if path.has_prefix("file://") {
     path.substring(start="file://".length(), end=path.length())
   } else {
     path
@@ -264,13 +297,86 @@ async fn load_recursive(
     }
     None => ()
   }
-  // import declarations (skip glob — out of scope for embedded loader)
+  // import declarations. Glob *declarations* (`import* "sub/*.pkl" as foo`)
+  // are expanded + registered here so the evaluator's native
+  // `eval_import_glob_value` resolves them in-process.
+  //
+  // NOTE: inline glob *expressions* (`x = import*("sub/*.pkl")` —
+  // `ImportGlobExpr` in the AST body, not in `program.imports`) are not
+  // pre-registered here. They evaluate through the same sandbox lookup, so
+  // they'd hit `Cannot find module` unless a matching declaration already
+  // registered the same `(from, pattern)`. Taskfiles use the declaration
+  // form; add an AST-body walk for `ImportGlobExpr` if the expression form
+  // is needed.
   for decl in parsed.program.imports {
     if decl.is_glob {
+      expand_import_glob(session, path, decl.uri, next_stack, loaded)
       continue
     }
     let resolved = join_relative(path, decl.uri)
     load_recursive(session, resolved, next_stack, loaded)
+  }
+}
+
+///|
+/// Resolve a glob import (`import* "<pattern>"`) declared in the module at
+/// `from`. Expands the pattern against the importing module's directory and
+/// registers the matched module URIs with the evaluator's sandbox so
+/// `eval_import_glob_value` can build the Mapping.
+///
+/// The registered `from` is the importing module's path verbatim — the same
+/// string the evaluator stashes as `@__module_path` and looks up via
+/// `sandbox_lookup_import_glob(@__module_path, pattern)`. The registered
+/// `visible_uri`s are the glob-relative match paths (e.g. `sub/a.pkl`), which
+/// is exactly the key form Apple Pkl's `pkl` CLI uses for an `import*`
+/// Mapping (verified against the oracle).
+async fn expand_import_glob(
+  session : @pkl.AnalysisSession,
+  from : String,
+  pattern : String,
+  stack : Array[String],
+  loaded : Map[String, Unit],
+) -> Unit raise LoaderError {
+  // NOTE: glob over `package://` / `http(s)://` module dirs is not supported.
+  // The matcher walks a local filesystem subtree; remote/cached package
+  // contents aren't enumerated here. Fail cleanly rather than silently
+  // diverging from Apple Pkl.
+  if pattern.has_prefix("package://") ||
+    pattern.has_prefix("https://") ||
+    pattern.has_prefix("http://") ||
+    from.has_prefix("package://") ||
+    from.has_prefix("https://") ||
+    from.has_prefix("http://") {
+    raise LoaderError(
+      "glob import `\{pattern}` over a non-local module dir is not supported by the embedded loader (in `\{from}`)",
+    )
+  }
+  // Apple Pkl's `**` crosses `/` (including the in-segment `**.pkl` form) with a
+  // files-first-then-recurse per-directory key order that this matcher does not
+  // reproduce byte-exactly. Reject cleanly rather than silently partial-match.
+  if pattern_has_doublestar(pattern) {
+    raise LoaderError(
+      "embedded loader does not support `**` recursive glob imports: \{pattern}",
+    )
+  }
+  let base_dir = dir_of(from)
+  let walk_root = if base_dir.length() == 0 { "." } else { base_dir }
+  let matches = glob_expand_relative(walk_root, pattern) catch {
+    _ =>
+      raise LoaderError(
+        "failed to expand glob import `\{pattern}` in `\{from}`",
+      )
+  }
+  // Register the glob result under the exact `(from, pattern)` key the
+  // evaluator will look up. Empty per-URI error map (no deferred errors).
+  @pkl.register_import_glob(from, pattern, matches)
+  let no_errors : Map[String, String] = Map([], capacity=0)
+  @pkl.register_import_glob_errors(from, pattern, no_errors)
+  // Load each matched module's source so `resolve_import(visible_uri)` —
+  // which resolves `visible_uri` relative to `from` — finds it in the session.
+  for visible_uri in matches {
+    let resolved = join_relative(from, visible_uri)
+    load_recursive(session, resolved, stack, loaded)
   }
 }
 
@@ -304,6 +410,10 @@ fn push_stack(stack : Array[String], path : String) -> Array[String] {
 /// and non-glob imports recursively, populating the session from local
 /// files and the cached `package://` cache directory.
 pub async fn eval_module_path(path : String) -> @pkl.EvalResult raise LoaderError {
+  // Clear the process-global sandbox IO cache (import_globs / read_globs / etc.)
+  // so stale glob registrations from a prior eval in the same process (the
+  // conformance harness, `pkf watch`) can't leak into this one.
+  @pkl.reset_sandbox_io_cache()
   let session = @pkl.AnalysisSession::new()
   let loaded : Map[String, Unit] = Map([], capacity=8)
   load_recursive(session, path, [], loaded)

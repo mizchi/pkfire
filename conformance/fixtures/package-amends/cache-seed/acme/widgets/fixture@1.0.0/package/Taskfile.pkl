@@ -1,0 +1,372 @@
+/// pkfire Taskfile schema (A2: typed DAG).
+///
+/// Authoring model:
+///   - Each task is a `Task` instance with a unique `name` and direct
+///     `deps` references to other Task instances. Typos in dependency
+///     names become Pkl name-resolution errors at evaluation time.
+///   - `tasks: Listing<Task>` collects the authored tasks; the order is
+///     preserved for human-facing display (`pkf list --unsorted`,
+///     `pkf graph --unsorted`). The execution order is the topological
+///     sort over `deps`, computed by `pkf` at runtime.
+///
+/// Wire format:
+///   - `output.value` is a Mapping<String, RenderedTask> keyed by task
+///     name, plus a `taskOrder` list preserving the authored `tasks`
+///     order, with `deps` collapsed to a list of names. This is what the
+///     Go runner deserializes.
+///   - Duplicate names raise an error before output is rendered.
+@ModuleInfo { minPklVersion = "0.31.0" }
+open module pkfire.Taskfile
+
+/// A typed flag accepted by `pkf run <task> --<name>=<value>`.
+///
+/// At invocation time, pkf resolves a value for each declared param
+/// (CLI value or `default`), then exposes it to `cmd` as an env var
+/// whose name is the uppercased `name`. For example, a param `bump`
+/// shows up as `$BUMP` inside `cmd`.
+///
+/// Resolved values are part of the action key when `cache = true`, so a
+/// param-driven task caches per-value naturally.
+class Param {
+  /// Lower-case identifier. Becomes `$NAME` (uppercased) in `cmd`. Must
+  /// match `[a-z][a-zA-Z0-9_]*` so the uppercased form is a valid POSIX
+  /// shell variable name.
+  name: String(matches(Regex(#"^[a-z][a-zA-Z0-9_]*$"#)))
+
+  /// Value shape:
+  ///   - `"string"`: any value.
+  ///   - `"enum"`: must match one of `choices` (validated client-side).
+  ///   - `"int"`: parsable as a signed decimal integer.
+  ///   - `"bool"`: `--flag` alone = true, `--flag=true|false` explicit.
+  type: "string" | "enum" | "int" | "bool" = "string"
+
+  /// Allowed values when `type == "enum"`. Empty for other types.
+  choices: Listing<String> = new {}
+
+  /// Value used when the caller omits this flag. Always a String —
+  /// for `type == "int"` write `default = "10"`, for `type == "bool"`
+  /// write `default = "true"`. pkf validates that the default itself
+  /// parses, so a typo here errors at `pkf list` time, not at run time.
+  /// If null and the caller omits the flag, `pkf run` errors.
+  default: String? = null
+
+  /// One-line help string shown by `pkf list -v`.
+  description: String? = null
+}
+
+/// A unit of work authored by the user.
+class Task {
+  /// Identifier. Used as the Mapping key in the rendered output and as
+  /// the visible name in `pkf list` / `pkf graph`. `/` is allowed so a
+  /// pattern like `check-translate/docs:DESIGN` can mirror file-tree
+  /// structure when one task per directory is the natural decomposition.
+  name: String(matches(Regex(#"^[a-zA-Z][a-zA-Z0-9_:./-]*$"#)))
+
+  /// Shell command to execute. Run via `<shell> <shellFlags...> <cmd>`.
+  /// Null means this is a deps-only umbrella task: dependencies run, then
+  /// this task succeeds without spawning a process.
+  ///
+  /// When `acceptsArgs = true`, positional args after `--` on the
+  /// pkf command line show up as `$1` ... `$@`. When `params` is
+  /// non-empty, each declared param is exposed as `$NAME` (uppercased).
+  cmd: String(length > 0)? = null
+
+  /// Shell binary used to run `cmd`. Defaults to `bash`.
+  shell: String = "bash"
+
+  /// Arguments passed to `shell` before `cmd`. Defaults to `List("-c")`
+  /// for POSIX shells and Python-style script evaluation. Override for
+  /// shells that use a different script flag, e.g. `List("-e")` for Node.
+  shellFlags: List<String> = List("-c")
+
+  /// Glob patterns of input files. Their content hash feeds the action key.
+  ///
+  /// Patterns support `*`, `**`, `?`, and character classes via doublestar.
+  /// Literal paths that do not exist are *silently ignored* (matched 0 times),
+  /// which means a missing file does NOT raise an error — it just contributes
+  /// nothing to the action key. Use `pkf run --print-hash` if you need to
+  /// confirm exactly which files end up hashed.
+  inputs: Listing<String> = new {}
+
+  /// Files or directories produced by this task. Restored on cache hit.
+  ///
+  /// Paths are relative to `workdir` (or the Taskfile's directory when
+  /// `workdir` is null). *Parent directories are not auto-created* — if
+  /// your `cmd` writes to `bin/app`, prefix it with `mkdir -p bin && ...`
+  /// or use a tool that creates the directory itself (e.g. `go build -o`).
+  outputs: Listing<String> = new {}
+
+  /// Dependencies as direct Task references. The Pkl evaluator resolves
+  /// each entry to a concrete Task value, so referencing an undefined
+  /// task fails at evaluation time (`Cannot find property`).
+  deps: Listing<Task> = new {}
+
+  /// Environment variables exposed to `cmd`. These overlay the inherited
+  /// host environment (when `inheritEnv = true`) and *only these*
+  /// contribute to the action key — host env values are intentionally
+  /// ignored so a `NODE_ENV` shift in your shell never silently busts
+  /// caches.
+  env: Mapping<String, String> = new {}
+
+  /// External tools whose version should be part of the action key
+  /// (e.g. "go" -> "1.26.2"). Typically populated from mise / `which`.
+  tools: Mapping<String, String> = new {}
+
+  /// When false, the task always runs and its result is never cached.
+  cache: Boolean = true
+
+  /// Working directory relative to repo root. Null means repo root.
+  workdir: String? = null
+
+  /// Free-form description shown by `pkf list`.
+  description: String? = null
+
+  /// Visibility for human-facing discovery commands. `public` tasks show
+  /// up in `pkf list` / `pkf graph` by default; `internal` tasks stay
+  /// runnable by name but are hidden unless those commands receive `--all`.
+  visibility: "public" | "internal" = "public"
+
+  /// Suppress pkfire's per-task diagnostic lines for this task. The task's
+  /// own stdout/stderr still pass through unchanged.
+  quiet: Boolean = false
+
+  /// When true, this task is a long-running service. It is started by
+  /// `pkf up` and supervised until the up session ends (Ctrl+C or a
+  /// watch-driven restart). Implies `cache = false` at runtime — the
+  /// runner ignores any cache setting on a service. `pkf run` rejects
+  /// any plan that contains a service task; use `pkf up` instead.
+  service: Boolean = false
+
+  /// Seconds to wait between SIGTERM and SIGKILL when stopping a
+  /// service. Only applied when `service` is true. The runner sets
+  /// the cmd as a process-group leader so the whole subtree (e.g.
+  /// `bash -c "node server.js"` ⇒ bash + node) is signalled.
+  shutdownTimeoutSeconds: Int(this >= 0) = 5
+
+  /// Sibling tasks that must be running while this task's `cmd`
+  /// executes. Each entry must itself be `service: true`. `pkf run`
+  /// starts the listed services (in declared order) before invoking
+  /// `cmd`, then stops them with the same SIGTERM-then-SIGKILL flow
+  /// once `cmd` finishes — pass or fail. Cache lookups happen *before*
+  /// services are started, so a cache hit never spawns a server.
+  ///
+  /// Typical use: end-to-end tests (`services { api; db }`) or
+  /// scripts that need a real database to run against.
+  services: Listing<Task> = new {}
+
+  /// TCP port on `localhost` to probe for readiness. Doubles as a
+  /// **reuse** detector: before starting this service, pkfire
+  /// connects once to the port; if it accepts a connection, the
+  /// service is treated as already up and pkfire skips both the
+  /// spawn and the teardown — useful when `pkf up dev` is already
+  /// running in another shell and you want `pkf run e2e` to reuse
+  /// it instead of port-colliding. After spawning, pkfire polls
+  /// the port until it opens (or `readyTimeoutSeconds` elapses).
+  /// 0 = no probe. (Range: 0..65535.)
+  readyPort: Int(this >= 0 && this < 65536) = 0
+
+  /// Shell snippet that exits 0 once the service is ready
+  /// (e.g. `pg_isready -h localhost`). Composable with `readyPort`:
+  /// when both are set, both must pass before the service is
+  /// considered ready. Empty string = no command probe.
+  readyCmd: String = ""
+
+  /// Seconds to wait for `readyPort` / `readyCmd` to first succeed
+  /// after starting a service. If neither is set, this is ignored.
+  readyTimeoutSeconds: Int(this >= 0) = 30
+
+  /// When true, `cmd` inherits the full ambient environment from `pkf`
+  /// (every var in `os.Environ()`). Set false for hermetic tasks: only
+  /// a small curated allowlist (PATH/HOME/SHELL/LANG/...) passes through.
+  ///
+  /// Default true matches just/make/npm-scripts semantics. The trade-off
+  /// is that `cmd` can read host env vars that aren't in `env`, but
+  /// since only `env` is hashed, this changes runtime behavior without
+  /// changing the action key — appropriate for SSH agent sockets,
+  /// editor preferences, and other "ergonomic" host state, *not* for
+  /// values that materially affect outputs (those belong in `env`).
+  inheritEnv: Boolean = true
+
+  /// When true, positional args after `--` on the pkf command line are
+  /// forwarded to `cmd` as `$1` ... `$@`. When false (default), any
+  /// extra positional after `pkf run <task>` is rejected — most tasks
+  /// shouldn't silently absorb args.
+  ///
+  /// The forwarded args are part of the action key when `cache = true`,
+  /// so `pkf run task -- foo` and `pkf run task -- bar` produce
+  /// distinct cache entries.
+  acceptsArgs: Boolean = false
+
+  /// Typed named flags accepted by `pkf run <task> --<name>=<value>`.
+  /// See `Param` for the per-param shape. Resolved values are exposed
+  /// to `cmd` as env vars (uppercased name) and folded into the action
+  /// key when `cache = true`.
+  params: Listing<Param> = new {}
+}
+
+/// Project-level defaults shared by all tasks unless overridden.
+class Defaults {
+  shell: String = "bash"
+  shellFlags: List<String> = List("-c")
+  env: Mapping<String, String> = new {}
+}
+
+/// Wire format mirror of `Param` consumed by the Go runner.
+class RenderedParam {
+  name: String
+  type: String
+  choices: Listing<String>
+  default: String?
+  description: String?
+}
+
+/// A test case for the file-change → affected-task workflow.
+///
+/// These are intentionally authored in the Taskfile so `inputs` and `deps`
+/// can be tested next to the task definitions they describe. Run with:
+///
+///     pkf affected --check
+///
+/// `changed` is a list of repo-relative file paths to simulate. `tasks`
+/// is the expected final run plan in topological order, after direct input
+/// matches have expanded through dependents and each affected task's own
+/// dependencies have been added. `direct` is optional; when non-empty, pkf
+/// also asserts the tasks whose `inputs` matched directly.
+class WorkflowTest {
+  name: String(length > 0)
+  changed: Listing<String>
+  tasks: Listing<String>
+  direct: Listing<String> = new {}
+}
+
+/// Wire format mirror of `WorkflowTest` consumed by the Go runner.
+class RenderedWorkflowTest {
+  name: String
+  changed: Listing<String>
+  tasks: Listing<String>
+  direct: Listing<String>
+}
+
+/// Wire format consumed by the Go runner. `name` is lifted to the Mapping
+/// key in `Rendered.tasks`; `deps` is projected from `Listing<Task>` to
+/// `Listing<String>` so the runner can deserialize without recursion.
+class RenderedTask {
+  cmd: String
+  shell: String
+  shellFlags: List<String>
+  inputs: Listing<String>
+  outputs: Listing<String>
+  deps: Listing<String>
+  env: Mapping<String, String>
+  tools: Mapping<String, String>
+  cache: Boolean
+  workdir: String?
+  description: String?
+  visibility: String
+  quiet: Boolean
+  service: Boolean
+  shutdownTimeoutSeconds: Int
+  services: Listing<String>
+  readyPort: Int
+  readyCmd: String
+  readyTimeoutSeconds: Int
+  inheritEnv: Boolean
+  acceptsArgs: Boolean
+  params: Listing<RenderedParam>
+}
+
+/// Top-level shape of `output.value`. pkl-go's `EvaluateOutputValue` looks
+/// up the Go target type via `pkl.RegisterMapping("pkfire.Taskfile#Rendered", ...)`.
+class Rendered {
+  defaults: Defaults
+  taskOrder: Listing<String>
+  tasks: Mapping<String, RenderedTask>
+  workflowTests: Listing<RenderedWorkflowTest>
+}
+
+defaults: Defaults = new {}
+
+/// Authored task list. In user modules, declare each task as a `local`
+/// binding and add it here:
+///
+///     local build = new Task { name = "build"; cmd = "go build" }
+///     local test  = new Task { name = "test"; cmd = "go test"; deps { build } }
+///     tasks { build; test }
+///
+/// **Forgetting to add a declared `local` to this listing is the most
+/// common pitfall.** Pkl's `amends` semantics intentionally forbid adding
+/// new top-level fields, so reflect-based auto-collection is not viable;
+/// each task must be listed explicitly. Duplicate names in the listing
+/// raise an error before output is rendered (see `output.value` below).
+tasks: Listing<Task> = new {}
+
+/// File-change workflow checks. These let a Taskfile pin expectations like
+/// "changing services/api/src/foo.ts should run build:api and test:api" in
+/// the same spirit as unit tests.
+workflowTests: Listing<WorkflowTest> = new {}
+
+local taskNames: List<String> = tasks.toList().map((t) -> t.name)
+
+local duplicateNames: List<String> =
+  taskNames.filter((n) -> taskNames.count((m) -> m == n) > 1).distinct
+
+local rendered: Mapping<String, RenderedTask> = new Mapping {
+  for (t in tasks) {
+    [t.name] = new RenderedTask {
+      cmd = if (t.cmd == null) "" else t.cmd
+      shell = t.shell
+      shellFlags = t.shellFlags
+      inputs = t.inputs
+      outputs = t.outputs
+      deps = new Listing { for (d in t.deps) { d.name } }
+      env = t.env
+      tools = t.tools
+      cache = t.cache
+      workdir = t.workdir
+      description = t.description
+      visibility = t.visibility
+      quiet = t.quiet
+      service = t.service
+      shutdownTimeoutSeconds = t.shutdownTimeoutSeconds
+      services = new Listing { for (s in t.services) { s.name } }
+      readyPort = t.readyPort
+      readyCmd = t.readyCmd
+      readyTimeoutSeconds = t.readyTimeoutSeconds
+      inheritEnv = t.inheritEnv
+      acceptsArgs = t.acceptsArgs
+      params = new Listing {
+        for (p in t.params) {
+          new RenderedParam {
+            name = p.name
+            type = p.type
+            choices = p.choices
+            default = p.default
+            description = p.description
+          }
+        }
+      }
+    }
+  }
+}
+
+output {
+  value = new Rendered {
+    defaults = module.defaults
+    taskOrder = new Listing { for (t in module.tasks) { t.name } }
+    workflowTests = new Listing {
+      for (wt in module.workflowTests) {
+        new RenderedWorkflowTest {
+          name = wt.name
+          changed = wt.changed
+          tasks = wt.tasks
+          direct = wt.direct
+        }
+      }
+    }
+    tasks =
+      if (duplicateNames.isEmpty)
+        rendered
+      else
+        throw("duplicate task names: \(duplicateNames.join(", "))")
+  }
+}

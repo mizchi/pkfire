@@ -1,0 +1,13 @@
+/// Consumer Taskfile that amends a `package://` fixture resolved entirely
+/// from a hand-seeded cache (no network, no subprocess). The fixture
+/// package lives at `../cache-seed/...` and is pre-seeded into
+/// `PKL_MBT_PACKAGE_CACHE` by the package-amends conformance test.
+amends "package://example.test/acme/widgets/fixture@1.0.0#/Taskfile.pkl"
+
+local greet = new Task {
+  name = "greet"
+  cmd = "echo hi from fixture package"
+  description = "task resolved through a package:// amends"
+}
+
+tasks { greet }
