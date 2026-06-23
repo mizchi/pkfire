@@ -61,6 +61,20 @@ jobs:
           if [ -x "$real" ]; then file "$real"; "$real" version; echo "real exit=$?"; fi
           echo "=== strace tail (last syscalls before abort) ==="
           if command -v strace >/dev/null; then strace -f -e trace=signal,exit_group,write "$bin" version 2>&1 | tail -25 || true; else echo "(no strace)"; fi
+          echo "=== gdb backtrace at abort ==="
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y gdb >/dev/null 2>&1
+            gdb -batch -nx -ex 'set pagination off' -ex 'run version' -ex 'bt' --args "$bin" version 2>&1 | tail -30 || true
+          fi
+          echo "=== compare: official curl-moon build on same runner ==="
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ( curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash >/dev/null 2>&1
+              export PATH="$HOME/.moon/bin:$PATH"
+              cd "$GITHUB_WORKSPACE" && (cd pkf-mbt && moon update >/dev/null 2>&1)
+              bash pkf-mbt/scripts/build-native.sh >/dev/null 2>&1
+              echo "official-moon version:"; pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe version; echo "official exit=$?"
+            ) || echo "(curl-moon compare failed)"
+          fi
           echo "=== original assertions ==="
           ./result/bin/pkf version
           ./result/bin/pkf help
