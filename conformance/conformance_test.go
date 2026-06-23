@@ -213,6 +213,15 @@ func firstArg(argv []string) string {
 	return argv[0]
 }
 
+func TestDeletedPaths(t *testing.T) {
+	before := map[string]string{"a.txt": "h1", "b.txt": "h2"}
+	after := map[string]string{"a.txt": "h1"}
+	got := DeletedPaths(before, after)
+	if len(got) != 1 || got[0] != "b.txt" {
+		t.Errorf("deleted = %v, want [b.txt]", got)
+	}
+}
+
 func TestCompareJSONIgnorePaths(t *testing.T) {
 	s := Scenario{Contract: Contract{JSON: true, JsonIgnorePaths: []string{"taskfile"}}}
 	want := Golden{Stdout: []byte(`{"taskfile":"/tmp/a/Taskfile.pkl","schemaVersion":"pkfire@0.10.0"}`)}

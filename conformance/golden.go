@@ -11,11 +11,12 @@ import (
 
 // Golden is the committed oracle capture for a scenario.
 type Golden struct {
-	Stdout  []byte
-	Stderr  []byte
-	Exit    int
-	FSDelta []string
-	Env     map[string]string // forward-compat; not compared yet
+	Stdout    []byte
+	Stderr    []byte
+	Exit      int
+	FSDelta   []string
+	FSDeleted []string
+	Env       map[string]string // forward-compat; not compared yet
 }
 
 // goldenDir returns root/<scenario id>.
@@ -43,6 +44,11 @@ func CaptureGolden(root string, s Scenario, res Result) error {
 			return err
 		}
 	}
+	if res.FSDeleted != nil {
+		if err := os.WriteFile(filepath.Join(dir, "fsdeleted"), MarshalDelta(res.FSDeleted), 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -67,6 +73,9 @@ func LoadGolden(root string, s Scenario) (Golden, error) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(dir, "fsdelta")); err == nil {
 		_ = json.Unmarshal(raw, &g.FSDelta)
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, "fsdeleted")); err == nil {
+		_ = json.Unmarshal(raw, &g.FSDeleted)
 	}
 	return g, nil
 }
