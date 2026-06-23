@@ -130,7 +130,16 @@ fn extract_package_zip_sha256(body : String) -> String? {
 /// The cache root honours `PKL_MBT_PACKAGE_CACHE` (then `XDG_CACHE_HOME`, then
 /// `HOME`) via `loader.mbt`'s `package_cache_root()` / `resolve_package_uri_to_file`.
 async fn download_package_uri_to_cache(uri : String) -> Unit raise LoaderError {
-  let package_dir = match resolve_package_uri_to_file(uri) {
+  // The extraction target must be the `.../package` DIR, so resolve against the
+  // fragment-stripped URI: a `#/file` fragment would otherwise make
+  // `resolve_package_uri_to_file` return a FILE path and we'd extract the whole
+  // zip into `.../package/file/`. Callers (e.g. `read_module_source`) pass the
+  // full `package://...#/file` URI.
+  let uri_no_fragment = match uri.find("#") {
+    Some(idx) => uri.substring(start=0, end=idx)
+    None => uri
+  }
+  let package_dir = match resolve_package_uri_to_file(uri_no_fragment) {
     Some(p) => p
     None => raise LoaderError("malformed package URI: \{uri}")
   }

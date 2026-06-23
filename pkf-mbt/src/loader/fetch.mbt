@@ -57,26 +57,27 @@ async fn fetch_uri(url : String) -> String? {
     try {
       let (resp, body) = @http.get(current)
       if resp.code >= 300 && resp.code < 400 {
+        // native lowercases response header keys, so only `location` is ever
+        // present (the capital-L fallback was dead).
         match resp.headers.get("location") {
           Some(next) => {
-            current = resolve_location(current, next)
+            let target = resolve_location(current, next)
+            // Refuse to follow a redirect to a non-HTTP(S) scheme (e.g. a
+            // `302 -> file://...`); degrade cleanly instead.
+            if not(target.has_prefix("http://") || target.has_prefix("https://")) {
+              println("refusing redirect to non-http(s) target \{target}")
+              return None
+            }
+            current = target
             remaining = remaining - 1
             continue
           }
-          None =>
-            match resp.headers.get("Location") {
-              Some(next) => {
-                current = resolve_location(current, next)
-                remaining = remaining - 1
-                continue
-              }
-              None => {
-                println(
-                  "http \{resp.code} \{resp.reason} fetching \{current} (no Location header)",
-                )
-                return None
-              }
-            }
+          None => {
+            println(
+              "http \{resp.code} \{resp.reason} fetching \{current} (no Location header)",
+            )
+            return None
+          }
         }
       }
       if resp.code < 200 || resp.code >= 300 {
@@ -105,26 +106,27 @@ async fn fetch_uri_bytes(url : String) -> Bytes? {
     try {
       let (resp, body) = @http.get(current)
       if resp.code >= 300 && resp.code < 400 {
+        // native lowercases response header keys, so only `location` is ever
+        // present (the capital-L fallback was dead).
         match resp.headers.get("location") {
           Some(next) => {
-            current = resolve_location(current, next)
+            let target = resolve_location(current, next)
+            // Refuse to follow a redirect to a non-HTTP(S) scheme (e.g. a
+            // `302 -> file://...`); degrade cleanly instead.
+            if not(target.has_prefix("http://") || target.has_prefix("https://")) {
+              println("refusing redirect to non-http(s) target \{target}")
+              return None
+            }
+            current = target
             remaining = remaining - 1
             continue
           }
-          None =>
-            match resp.headers.get("Location") {
-              Some(next) => {
-                current = resolve_location(current, next)
-                remaining = remaining - 1
-                continue
-              }
-              None => {
-                println(
-                  "http \{resp.code} \{resp.reason} fetching \{current} (no Location header)",
-                )
-                return None
-              }
-            }
+          None => {
+            println(
+              "http \{resp.code} \{resp.reason} fetching \{current} (no Location header)",
+            )
+            return None
+          }
         }
       }
       if resp.code < 200 || resp.code >= 300 {

@@ -148,6 +148,10 @@ fn parse_package_uri(uri : String) -> (String, String, String, String)? {
   if !uri.has_prefix("package://") {
     return None
   }
+  // NOTE: `::sha256-...` checksum suffixes are NOT stripped here. Our real
+  // `pkg.pkl-lang.org` URIs carry no `::` suffix; if one ever reaches this
+  // parser it must also be stripped in `package_metadata_url_from_uri` to keep
+  // the read/write paths consistent.
   let after_scheme = uri.substring(start="package://".length(), end=uri.length())
   let (locator, file) = match after_scheme.find("#") {
     Some(idx) => {
@@ -216,16 +220,35 @@ async fn read_module_source(path : String) -> String raise LoaderError {
     return ""
   }
   if path.has_prefix("https://") || path.has_prefix("http://") {
-    raise LoaderError(
-      "embedded loader does not fetch HTTP modules; pre-cache `\{path}` or use mpkl CLI",
-    )
+    // HTTP module: fetch the source text directly (redirect-following).
+    let fetched = try fetch_uri(path) catch {
+      _ => raise LoaderError("failed to fetch module \{path}")
+    }
+    return match fetched {
+      Some(s) => s
+      None => raise LoaderError("failed to fetch module \{path}")
+    }
   }
-  let fs_path = if path.has_prefix("package://") {
-    match resolve_package_uri_to_file(path) {
+  if path.has_prefix("package://") {
+    let fs_path = match resolve_package_uri_to_file(path) {
       Some(p) => p
       None => raise LoaderError("could not parse package URI: \{path}")
     }
-  } else if path.has_prefix("file://") {
+    // Cache hit: read straight from cache, no network. On a miss the read
+    // fails, so download the archive into the cache ONCE and retry the read.
+    return @fs.read_file_to_string(fs_path) catch {
+      _ => {
+        download_package_uri_to_cache(path)
+        @fs.read_file_to_string(fs_path) catch {
+          _ =>
+            raise LoaderError(
+              "could not read module `\{path}` (resolved to `\{fs_path}`)",
+            )
+        }
+      }
+    }
+  }
+  let fs_path = if path.has_prefix("file://") {
     path.substring(start="file://".length(), end=path.length())
   } else {
     path

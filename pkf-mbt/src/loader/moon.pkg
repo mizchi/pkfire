@@ -12,7 +12,7 @@ import {
   "moonbitlang/x/sys" @sys,
 }
 
-warnings = "-0029-0014-0024-0009-0020-0001"
+warnings = "-0029-0014-0024-0009-0020"
 
 options(
   targets: {
@@ -23,5 +23,6 @@ options(
     "zip_wbtest.mbt": [ "native" ],
     "download.mbt": [ "native" ],
     "download_wbtest.mbt": [ "native" ],
+    "loader_wbtest.mbt": [ "native" ],
   },
 )
