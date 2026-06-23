@@ -2,10 +2,8 @@
   description = "pkfire — typed task runner with Bazel-style incremental caching, configured in Pkl";
 
   inputs = {
-    # Stable channel: nixpkgs-unstable ships glibc 2.42, against which the
-    # MoonBit native runtime aborts (silent SIGABRT at startup) on x86_64-linux.
-    # A stable release's older glibc matches what the official toolchain targets.
-    # Channel tarball (not github:) to avoid the unauthenticated GitHub API.
+    # Pin a stable channel (not nixpkgs-unstable) for reproducible, non-churning
+    # builds. Channel tarball (not github:) to avoid the unauthenticated GitHub API.
     nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
     flake-utils.url = "github:numtide/flake-utils";
 
@@ -49,10 +47,9 @@
           # `pkf` binary, conformance is gated in CI.
           doCheck = false;
 
-          # Don't strip the MoonBit native binary: on x86_64-linux the
-          # default `strip -S -p` corrupts it (it runs but aborts/core-dumps
-          # at startup); macOS strip leaves it runnable. The binary is already
-          # release-built and links only libc, so stripping buys little.
+          # Ship the MoonBit native binary as the toolchain emitted it
+          # (release-built; debug_info is small). The released tarballs come
+          # from build-native.sh, not Nix, so this only affects the nix package.
           dontStrip = true;
         };
 

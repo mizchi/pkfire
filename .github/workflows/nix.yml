@@ -50,8 +50,5 @@ jobs:
 
       - name: Smoke test
         run: |
-          echo "=== wrapper check (LD_LIBRARY_PATH for openssl?) ==="
-          head -c 4000 ./result/bin/pkf | strings | grep -iE "LD_LIBRARY_PATH|openssl|\.pkf-wrapped" | head || echo "(no wrapper strings — pkf is the raw binary)"
-          echo "=== smoke ==="
           ./result/bin/pkf version
           ./result/bin/pkf help
