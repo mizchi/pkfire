@@ -2758,6 +2758,130 @@ struct LocalTaskDecl {
 }
 
 ///|
+/// Mask `//` line comments, `/* */` block comments, and the *contents* of
+/// `"..."` / `"""..."""` string literals with spaces, preserving the exact
+/// length (so offsets and line numbers stay correct) and preserving newlines.
+/// Mirrors Go's maskPklTrivia/maskPklString. The masked text is used for
+/// brace counting and decl detection so braces/decls that appear inside
+/// strings or comments do not skew the scan; the original source is kept for
+/// extracting actual `name = "..."` values at the same offsets.
+fn mask_pkl_trivia(src : String) -> String {
+  let out : Array[Char] = []
+  for c in src {
+    out.push(c)
+  }
+  let n = out.length()
+  let mut i = 0
+  while i < n {
+    let c = out[i]
+    if c == '/' && i + 1 < n && out[i + 1] == '/' {
+      while i < n && out[i] != '\n' {
+        out[i] = ' '
+        i = i + 1
+      }
+    } else if c == '/' && i + 1 < n && out[i + 1] == '*' {
+      out[i] = ' '
+      out[i + 1] = ' '
+      i = i + 2
+      while i + 1 < n && !(out[i] == '*' && out[i + 1] == '/') {
+        if out[i] != '\n' {
+          out[i] = ' '
+        }
+        i = i + 1
+      }
+      if i + 1 < n {
+        out[i] = ' '
+        out[i + 1] = ' '
+        i = i + 2
+      }
+    } else if c == '"' {
+      i = mask_pkl_string(out, i)
+    } else {
+      i = i + 1
+    }
+  }
+  let sb = StringBuilder::new()
+  for ch in out {
+    sb.write_char(ch)
+  }
+  sb.to_string()
+}
+
+///|
+/// Mask the contents of a string literal that starts at index `start`
+/// (where `out[start] == '"'`). Handles `"""..."""` multi-line and `"..."`
+/// single-line forms. Returns the index just past the closing quote(s).
+fn mask_pkl_string(out : Array[Char], start : Int) -> Int {
+  let n = out.length()
+  let mut quote_count = 1
+  while start + quote_count < n && out[start + quote_count] == '"' {
+    quote_count = quote_count + 1
+  }
+  if quote_count >= 3 {
+    let mut j = 0
+    while j < quote_count && start + j < n {
+      out[start + j] = ' '
+      j = j + 1
+    }
+    let mut i = start + quote_count
+    while i + quote_count - 1 < n {
+      if repeated_char_at(out, i, '"', quote_count) {
+        let mut k = 0
+        while k < quote_count {
+          out[i + k] = ' '
+          k = k + 1
+        }
+        return i + quote_count
+      }
+      if out[i] != '\n' {
+        out[i] = ' '
+      }
+      i = i + 1
+    }
+    return n
+  }
+  out[start] = ' '
+  let mut i = start + 1
+  while i < n {
+    if out[i] == '\\' {
+      out[i] = ' '
+      if i + 1 < n && out[i + 1] != '\n' {
+        out[i + 1] = ' '
+        i = i + 2
+        continue
+      }
+      i = i + 1
+      continue
+    }
+    if out[i] == '"' {
+      out[i] = ' '
+      return i + 1
+    }
+    if out[i] != '\n' {
+      out[i] = ' '
+    }
+    i = i + 1
+  }
+  i
+}
+
+///|
+/// Report whether `count` consecutive chars starting at `start` all equal `b`.
+fn repeated_char_at(out : Array[Char], start : Int, b : Char, count : Int) -> Bool {
+  if start + count > out.length() {
+    return false
+  }
+  let mut i = 0
+  while i < count {
+    if out[start + i] != b {
+      return false
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
 /// Scan source text for `local <id> = new Task { ... }` declarations.
 /// Handles single-line and multi-line forms. Returns a list of
 /// (var_name, task_name, 1-based line number) tuples; task_name may be ""
@@ -2769,8 +2893,13 @@ struct LocalTaskDecl {
 ///      multiple lines) as the "body".
 ///   3. Extract `name = "<value>"` from the body (first static occurrence).
 fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
+  // Mask comments/strings before any structural scan so braces or `local
+  // ... = new Task { ... }` text appearing inside strings/comments cannot
+  // skew detection or brace matching. The original `src` is kept so the
+  // real `name = "..."` value is read back at the same offsets.
+  let masked = mask_pkl_trivia(src)
   let lines : Array[String] = []
-  for lv in src.split("\n") {
+  for lv in masked.split("\n") {
     lines.push(lv.to_string())
   }
   let result : Array[LocalTaskDecl] = []
@@ -2805,16 +2934,17 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
         i = i + 1
         continue
       }
-      // Now collect the body from `{` to matching `}`.
-      // Find `{` in the original source line.
-      let line_start_in_src = find_line_offset(src, i)
+      // Now collect the body from `{` to matching `}`. All structural
+      // scanning (offsets, braces) runs on `masked`; the actual `name`
+      // value is read from the original `src` at the same offsets.
+      let line_start_in_src = find_line_offset(masked, i)
       let line_text_start = line_start_in_src
       // Find the first `{` in or after the current line.
       let mut open_pos = -1
       let search_start = line_text_start
       let mut j = search_start
-      while j < src.length() {
-        if src[j] == '{' {
+      while j < masked.length() {
+        if masked[j] == '{' {
           open_pos = j
           break
         }
@@ -2826,13 +2956,14 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
         i = i + 1
         continue
       }
-      // Find matching `}`.
-      let close_pos = find_matching_brace(src, open_pos)
+      // Find matching `}` in the masked text.
+      let close_pos = find_matching_brace(masked, open_pos)
       if close_pos < 0 {
         i = i + 1
         continue
       }
-      // Extract body (inclusive of braces).
+      // Extract body (inclusive of braces) from the ORIGINAL source so the
+      // real `name = "..."` value is preserved.
       let body = src.substring(start=open_pos, end=close_pos + 1)
       // Find `name = "<value>"` inside body.
       let task_name = extract_static_name(body)
@@ -2845,7 +2976,7 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
         line: i + 1, // 1-based
       })
       // Advance past the closing brace; figure out which line it's on.
-      let close_line = count_newlines_before(src, close_pos)
+      let close_line = count_newlines_before(masked, close_pos)
       if close_line > i {
         i = close_line + 1
       } else {
@@ -2968,6 +3099,170 @@ fn extract_static_name(body : String) -> String? {
 }
 
 ///|
+/// Whether `cmd` contains `needle` as a "wordish" token (mirrors Go's
+/// commandContainsWordish): exact match, prefix `needle `, or surrounded by
+/// one of the shell-ish delimiters.
+fn command_contains_wordish(cmd : String, needle : String) -> Bool {
+  if cmd == needle || cmd.has_prefix(needle + " ") {
+    return true
+  }
+  cmd.contains(" " + needle + " ") ||
+  cmd.contains(" " + needle + "\n") ||
+  cmd.contains("\n" + needle + " ") ||
+  cmd.contains("(" + needle + " ") ||
+  cmd.contains("&& " + needle + " ") ||
+  cmd.contains("; " + needle + " ")
+}
+
+///|
+/// Mirrors Go's buildLikeTaskWithoutOutputs: a cached, non-service task with
+/// a cmd that looks like it produces build artifacts but declares no outputs.
+fn build_like_task_without_outputs(name : String, t : Task) -> Bool {
+  if t.service || !t.cache || t.cmd == "" || t.outputs.length() > 0 {
+    return false
+  }
+  let lower_cmd = t.cmd.to_lower()
+  let build_commands = [
+    "go build", "cargo build", "npm run build", "pnpm build", "pnpm run build",
+    "yarn build", "yarn run build", "bun build", "bun run build", "vite build",
+    "next build", "tsc", "webpack", "rollup", "esbuild",
+  ]
+  for needle in build_commands {
+    if command_contains_wordish(lower_cmd, needle) {
+      return true
+    }
+  }
+  let lower_name = name.to_lower()
+  lower_name.contains("build") && command_contains_wordish(lower_cmd, "build")
+}
+
+///|
+/// A lint finding as a (line, message, json) triple so the merged list can be
+/// sorted by (line, message) before serialization, mirroring Go's lintFindings.
+struct LintFinding {
+  line : Int
+  message : String
+  level : String
+  json : Json
+}
+
+///|
+/// Build the 5 rendered-task lint rules over `plan.tasks`, iterating task
+/// names in sorted order. `line_of` maps a task name to its source line
+/// (from the local decl scan), defaulting to 1. Mirrors Go's lintRenderedTasks.
+fn lint_rendered_tasks(
+  taskfile : String,
+  plan : Plan,
+  line_of : Map[String, Int],
+) -> Array[LintFinding] {
+  let names : Array[String] = []
+  for name, _ in plan.tasks {
+    names.push(name)
+  }
+  names.sort()
+  let findings : Array[LintFinding] = []
+  fn mk(
+    line : Int,
+    level : String,
+    kind : String,
+    task : String,
+    message : String,
+    suggestion : String,
+    fixable : Bool,
+  ) -> Unit {
+    let f : Map[String, Json] = Map([], capacity=8)
+    f["path"] = Json::string(taskfile)
+    f["line"] = Json::number(line.to_double())
+    f["level"] = Json::string(level)
+    f["kind"] = Json::string(kind)
+    f["task"] = Json::string(task)
+    f["message"] = Json::string(message)
+    f["suggestion"] = Json::string(suggestion)
+    if fixable {
+      f["fixable"] = Json::boolean(true)
+    }
+    findings.push(LintFinding::{
+      line,
+      message,
+      level,
+      json: Json::object(f),
+    })
+  }
+
+  for name in names {
+    let t = match plan.tasks.get(name) {
+      Some(t) => t
+      None => continue
+    }
+    let line = match line_of.get(name) {
+      Some(l) if l != 0 => l
+      _ => 1
+    }
+    // Rule 1: noop-task — neither cmd nor deps.
+    if t.cmd == "" && t.deps.length() == 0 {
+      mk(
+        line,
+        "error",
+        "noop-task",
+        name,
+        "task \"\{name}\" has neither cmd nor deps; it is a no-op task",
+        "add deps for an umbrella task, add cmd for an executable task, or remove the task",
+        false,
+      )
+    }
+    // Rule 2: outputs-without-inputs — cached with outputs but no inputs.
+    if t.cache && t.outputs.length() > 0 && t.inputs.length() == 0 {
+      mk(
+        line,
+        "error",
+        "outputs-without-inputs",
+        name,
+        "task \"\{name}\" declares outputs but no inputs; cache can go stale because only config changes invalidate it",
+        "declare every input the command reads, or set cache = false when the task is intentionally uncached",
+        true,
+      )
+    }
+    // Rule 3: service-without-readiness — service with no probe.
+    if t.service && t.ready_port == 0 && t.ready_cmd == "" {
+      mk(
+        line,
+        "error",
+        "service-without-readiness",
+        name,
+        "task \"\{name}\" has service=true but no readiness probe; add readyPort or readyCmd so dependents do not race startup",
+        "add readyPort when the service opens a TCP port, otherwise add readyCmd",
+        false,
+      )
+    }
+    // Rule 4: inputs-without-cache — non-service, uncached, has cmd + inputs.
+    if not(t.service) && not(t.cache) && t.cmd != "" && t.inputs.length() > 0 {
+      mk(
+        line,
+        "warning",
+        "inputs-without-cache",
+        name,
+        "task \"\{name}\" declares inputs but cache=false, so input hashes only help affected/watch and cannot produce cache hits",
+        "remove cache = false once the task is deterministic, or remove inputs if they are only decorative",
+        false,
+      )
+    }
+    // Rule 5: build-without-outputs.
+    if build_like_task_without_outputs(name, t) {
+      mk(
+        line,
+        "warning",
+        "build-without-outputs",
+        name,
+        "task \"\{name}\" looks like it produces build artifacts but declares no outputs",
+        "declare the artifact paths in outputs so cache hits can restore them, or set cache = false if the command should always run",
+        false,
+      )
+    }
+  }
+  findings
+}
+
+///|
 async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
   let mut json_flag = false
   for arg in args {
@@ -2995,26 +3290,58 @@ async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
     }
   }
   let decls = scan_local_task_decls(src)
-  let findings : Array[Json] = []
-  let mut error_count = 0
+  // First task line per name, for rendered-rule line numbers (taskNameLineMap).
+  let line_of : Map[String, Int] = Map([], capacity=decls.length())
+  for decl in decls {
+    if decl.task_name.length() == 0 {
+      continue
+    }
+    if line_of.get(decl.task_name) is None {
+      line_of[decl.task_name] = decl.line
+    }
+  }
+  let merged : Array[LintFinding] = []
+  // Dead-local findings.
   for decl in decls {
     if decl.task_name.length() == 0 {
       continue
     }
     if plan.tasks.get(decl.task_name) is None {
+      let message = "local task \"\{decl.var_name}\" declares name \"\{decl.task_name}\" but is not included in tasks"
       let f : Map[String, Json] = Map([], capacity=8)
       f["path"] = Json::string(taskfile)
       f["line"] = Json::number(decl.line.to_double())
       f["level"] = Json::string("error")
       f["kind"] = Json::string("dead-local-task")
       f["task"] = Json::string(decl.task_name)
-      f["message"] = Json::string(
-        "local task \"\{decl.var_name}\" declares name \"\{decl.task_name}\" but is not included in tasks",
-      )
+      f["message"] = Json::string(message)
       f["suggestion"] = Json::string(
         "remove local task \"\{decl.var_name}\" or include it in tasks { ... }",
       )
-      findings.push(Json::object(f))
+      merged.push(LintFinding::{
+        line: decl.line,
+        message,
+        level: "error",
+        json: Json::object(f),
+      })
+    }
+  }
+  // Rendered-task rule findings.
+  for f in lint_rendered_tasks(taskfile, plan, line_of) {
+    merged.push(f)
+  }
+  // Sort by (line, message) like Go's lintFindings.
+  merged.sort_by(fn(a, b) {
+    if a.line != b.line {
+      return a.line.compare(b.line)
+    }
+    a.message.compare(b.message)
+  })
+  let findings : Array[Json] = []
+  let mut error_count = 0
+  for f in merged {
+    findings.push(f.json)
+    if f.level == "error" {
       error_count = error_count + 1
     }
   }
