@@ -116,7 +116,7 @@ jobs:
           file="pkf-mbt/src/cmd/pkf/main.mbt"
           sed -i.bak 's/^  "0\.0\.1"$/  "'"$version"'"/' "$file"
           rm -f "$file.bak"
-          grep -n "$version" "$file" || { echo "::error::version injection failed"; exit 1; }
+          grep -nF "  \"$version\"" "$file" || { echo "::error::version injection failed"; exit 1; }
 
       - name: Moon update (pkf-mbt)
         working-directory: pkf-mbt
@@ -181,7 +181,7 @@ jobs:
           if scripts/release-notes.sh "$version" > "$notes_file" && [ -s "$notes_file" ]; then
             echo "::notice::release notes extracted from CHANGELOG.md for $version"
           else
-            printf 'Release pkfire@%s — Pkl package + pkf binaries for linux/darwin × amd64/arm64.\n' "$version" > "$notes_file"
+            printf 'Release pkfire@%s — Pkl package + pkf binaries for linux-amd64, linux-arm64, darwin-arm64.\n' "$version" > "$notes_file"
             echo "::warning::CHANGELOG.md has no \`## [$version]\` section; falling back to default body"
           fi
           echo "file=$notes_file" >> "$GITHUB_OUTPUT"
@@ -189,7 +189,7 @@ jobs:
       - name: Upload to release
         # Skip publishing on a dry-run dispatch: the matrix still builds +
         # packages + uploads artifacts above, so a maintainer can verify
-        # all 4 runners produce correctly-named assets without cutting a
+        # all 3 runners produce correctly-named assets without cutting a
         # release.
         if: ${{ inputs.dry_run != true }}
         env:

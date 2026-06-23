@@ -20,8 +20,9 @@
   outputs = { self, nixpkgs, flake-utils, moonbit-overlay, moon-registry }:
     flake-utils.lib.eachSystem [
       "x86_64-linux"
+      "aarch64-linux"
       "aarch64-darwin"
-      "x86_64-darwin"
+      # No x86_64-darwin: the MoonBit toolchain has no Intel macOS build.
     ] (system:
       let
         pkgs = import nixpkgs {
@@ -60,7 +61,9 @@
             homepage = "https://github.com/mizchi/pkfire";
             license = licenses.mit;
             mainProgram = "pkf";
-            platforms = platforms.unix;
+            # MoonBit toolchain targets: linux x86_64/arm64 + darwin arm64
+            # (no Intel macOS build).
+            platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
           });
         });
       in {
