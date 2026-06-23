@@ -60,28 +60,36 @@
         # bundled Pkl CLI is on PATH for users who installed pkfire via Nix
         # without separately installing pkl. buildMoonPackage installs the
         # MoonBit output as `bin/pkf` (renamed from pkf.exe).
-        pkfire = pkfMbt.overrideAttrs (old: {
-          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.makeWrapper ];
-          # `moonbitlang/async`'s TLS module dlopen()s OpenSSL during
-          # moonbit_init (global init runs unconditionally at startup); if
-          # libssl isn't findable the binary core-dumps before main
-          # (moonbit_panic ← tls.load__openssl). The Nix closure has no
-          # system OpenSSL, so put it on LD_LIBRARY_PATH via the wrapper.
-          postInstall = (old.postInstall or "") + ''
-            wrapProgram $out/bin/pkf \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pkl ]} \
-              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}
-          '';
-          meta = (old.meta or { }) // (with pkgs.lib; {
-            description = "Typed task runner with Bazel-style incremental caching, configured in Pkl";
-            homepage = "https://github.com/mizchi/pkfire";
-            license = licenses.mit;
-            mainProgram = "pkf";
-            # MoonBit toolchain targets: linux x86_64/arm64 + darwin arm64
-            # (no Intel macOS build).
-            platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
-          });
-        });
+        # Wrap the raw `buildMoonPackage` output in a separate runCommand so
+        # the wrapper is guaranteed to apply (buildMoonPackage doesn't honour
+        # the stdenv postInstall hook). Two runtime needs:
+        #   1. `moonbitlang/async`'s TLS module dlopen()s `libssl.so.3` during
+        #      moonbit_init (runs unconditionally at startup), so libssl must
+        #      be findable or the binary core-dumps before main (moonbit_panic
+        #      ← tls.load__openssl). The Nix closure has no system OpenSSL →
+        #      put it on LD_LIBRARY_PATH (dlopen consults LD_LIBRARY_PATH;
+        #      DT_RUNPATH does NOT apply to dlopen, so patchelf --add-rpath
+        #      would not help). macOS dlopen's /usr/lib system libssl, so this
+        #      is a no-op there.
+        #   2. `pkf` shells out to `pkl` — keep it on PATH.
+        pkfire = pkgs.runCommand "pkfire-${pkfMbt.version or "0.0.0"}"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            meta = (pkfMbt.meta or { }) // (with pkgs.lib; {
+              description = "Typed task runner with Bazel-style incremental caching, configured in Pkl";
+              homepage = "https://github.com/mizchi/pkfire";
+              license = licenses.mit;
+              mainProgram = "pkf";
+              # MoonBit toolchain targets: linux x86_64/arm64 + darwin arm64
+              # (no Intel macOS build).
+              platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+            });
+          } ''
+          mkdir -p $out/bin
+          makeWrapper ${pkfMbt}/bin/pkf $out/bin/pkf \
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pkl ]} \
+            --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}
+        '';
       in {
         packages = {
           default = pkfire;
