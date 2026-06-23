@@ -180,4 +180,30 @@ scenarios {
   new { id = "format-check-fail"; fixture = "examples/unformatted"; argv { "format"; "--check" }; contract = new { exit = true; mustContainStderr { "pkl format exited" } } }
   new { id = "migrate-noref-error"; fixture = "examples/migrate-2part"; argv { "migrate"; "--to=0.11.0" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "no" } } }
   new { id = "init-positional-error"; fixture = "examples/empty-dir"; argv { "init"; "stray" }; contract = new { exit = true; stdoutEmpty = true; mustContainStderr { "positional" } } }
+  // Glob import (phase 3 task 7): the root Taskfile assembles its task list
+  // from `import* "tasks/*.pkl"`. The in-process glob resolver must produce
+  // the same lex-sorted, glob-relative match set as Apple Pkl, so `list
+  // --json` is byte-for-byte equal (after JSON normalization) Go-vs-MoonBit.
+  // The glob is over a LOCAL dir — no network — but the fragments amend the
+  // pkfire schema via `package://`, resolved from the warmed package cache
+  // exactly like every other scenario here.
+  new {
+    id = "glob-import-list-json"
+    fixture = "examples/glob-import"
+    argv { "list"; "--json" }
+    contract = new { json = true }
+  }
+  // NOTE on the `package://` amends conformance (phase 3 task 7):
+  // there is deliberately NO live Go-vs-MoonBit `package://`-fixture scenario
+  // here. Approach A (a committed fixture package seeded into BOTH caches for a
+  // real differential) is intractable offline: the Go oracle uses pkl-go's
+  // `PreconfiguredOptions`, which pins the package cache to `~/.pkl/cache`
+  // with no env / cache-dir override, so the oracle cannot be redirected to a
+  // hand-seeded temp cache hermetically, and seeding the real `~/.pkl/cache`
+  // is neither dev-machine-safe nor reproducible on a fresh CI runner.
+  // Approach B is used instead: `TestCandidatePackageAmendsOffline`
+  // (package_amends_test.go) seeds only the pkl-mbt cache and asserts the
+  // candidate evaluates a `package://` amends to a frozen expected JSON with
+  // no network and no subprocess. The download path is unit-tested in
+  // pkf-mbt (download_wbtest.mbt); the conformance test covers eval-from-cache.
 }

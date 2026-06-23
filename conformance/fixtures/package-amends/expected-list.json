@@ -1,0 +1,1 @@
+{"tasks":[{"name":"greet","description":"task resolved through a package:// amends","visibility":"public","cmd":"echo hi from fixture package","shell":"bash","shellFlags":["-c"],"cache":true,"service":false,"quiet":false,"acceptsArgs":false,"inheritEnv":true}]}

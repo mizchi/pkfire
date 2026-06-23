@@ -10,10 +10,12 @@
 //     `XDG_CACHE_HOME` / `PKL_MBT_PACKAGE_CACHE` overrides honoured.
 //   - `pkl:` stdlib modules (deferred to the eval-side stub).
 //
+// `package://` archives are downloaded in-process on a cache miss (see
+// download.mbt / fetch.mbt) — no subprocess. `https://` / `http://` module
+// sources are fetched directly too.
+//
 // Not supported (yet):
 //
-//   - `https://` / `http://` modules (no fetch — the caller should
-//     pre-populate the package cache or use the mpkl CLI).
 //   - `--module-path` overlays, project-file `amends`, dependency alias
 //     rewriting.
 //
@@ -149,7 +151,7 @@ fn join_relative(from : String, uri : String) -> String {
 ///|
 fn parse_package_uri(uri : String) -> (String, String, String, String)? {
   // Returns (path_after_registry, name, version, file_inside_package).
-  // The mpkl cache layout drops the registry host segment, so for
+  // The pkl-mbt cache layout drops the registry host segment, so for
   //   `package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl`
   // the on-disk path is
   //   <cache_root>/github.com/mizchi/pkfire/pkfire@0.10.0/package/Taskfile.pkl

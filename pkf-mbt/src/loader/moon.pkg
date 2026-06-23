@@ -16,8 +16,12 @@ import {
 warnings = "-0029-0014-0024-0009-0020"
 
 options(
+  // The loader is consumed only by the native `cmd/pkf` binary and depends
+  // on native-only in-process fetch/download (`fetch_uri`,
+  // `download_package_uri_to_cache`). Pin every file to native so there is no
+  // broken js target (the js build otherwise [4021]-unbinds those symbols).
   targets: {
-    "loader.mbt": [ "native", "js" ],
+    "loader.mbt": [ "native" ],
     "fetch.mbt": [ "native" ],
     "fetch_wbtest.mbt": [ "native" ],
     "zip.mbt": [ "native" ],
@@ -25,7 +29,7 @@ options(
     "download.mbt": [ "native" ],
     "download_wbtest.mbt": [ "native" ],
     "loader_wbtest.mbt": [ "native" ],
-    "glob.mbt": [ "native", "js" ],
+    "glob.mbt": [ "native" ],
     "glob_wbtest.mbt": [ "native" ],
   },
 )
