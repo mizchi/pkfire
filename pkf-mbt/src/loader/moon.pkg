@@ -10,6 +10,7 @@ import {
   "moonbitlang/core/encoding/utf8" @utf8,
   "moonbitlang/x/fs" @fs,
   "moonbitlang/x/sys" @sys,
+  "moonbitlang/core/string" @string,
 }
 
 warnings = "-0029-0014-0024-0009-0020"
@@ -24,5 +25,7 @@ options(
     "download.mbt": [ "native" ],
     "download_wbtest.mbt": [ "native" ],
     "loader_wbtest.mbt": [ "native" ],
+    "glob.mbt": [ "native", "js" ],
+    "glob_wbtest.mbt": [ "native" ],
   },
 )

@@ -1,0 +1,3 @@
+import* "sub/*.pkl" as mods
+
+result = mods
