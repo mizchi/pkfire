@@ -154,4 +154,11 @@ scenarios {
       mustContainStderr { "cache=true" }
     }
   }
+  new {
+    id = "clean-removes-outputs"
+    fixture = "examples/cat-io"
+    argv { "clean" }
+    setup { "printf hi > src.txt"; "printf out > out.txt" }
+    contract = new { exit = true; fsDelta = true }
+  }
 }

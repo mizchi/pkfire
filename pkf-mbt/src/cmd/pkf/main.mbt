@@ -4373,6 +4373,109 @@ fn init_template() -> String {
 }
 
 ///|
+/// clean_cmd removes the declared `outputs` of one or more tasks.
+/// Mirrors Go's cmdClean: literal output paths joined with task_root,
+/// existence-checked via @fs.path_exists, then removed via rm_rf.
+/// stdout: "removed: <abs-path>  (<task-name>)"
+/// stderr: advisory messages when there is nothing to do.
+async fn clean_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
+  // Parse args: collect task names (positional), ignore --dry-run silently
+  // to avoid breaking users who copy Go invocations.
+  let requested : Array[String] = []
+  for a in args {
+    if a == "--dry-run" {
+      // dry-run not implemented: silently no-op (output still printed)
+      ()
+    } else if a == "-h" || a == "--help" {
+      println("pkf clean — remove tasks' declared outputs")
+      println("")
+      println("usage:")
+      println("  pkf clean [-f FILE] [task...]")
+      return 0
+    } else if a.has_prefix("-") {
+      die("pkf clean: unknown flag `\{a}`")
+      return 1
+    } else {
+      requested.push(a)
+    }
+  }
+  let taskfile = locate_taskfile(explicit_taskfile)
+  let raw_json = eval_taskfile(taskfile)
+  let plan = parse_plan(raw_json)
+  let repo_root = taskfile_dir(taskfile)
+
+  // Resolve the set of task names to clean.
+  let names : Array[String] = []
+  if requested.length() == 0 {
+    // Default: all tasks that declare at least one output, sorted.
+    for name, task in plan.tasks {
+      if task.outputs.length() > 0 {
+        names.push(name)
+      }
+    }
+    names.sort()
+  } else {
+    for n in requested {
+      match plan.tasks.get(n) {
+        Some(_) => names.push(n)
+        None => {
+          die("unknown task: \"\{n}\"")
+          return 1
+        }
+      }
+    }
+  }
+
+  if names.length() == 0 {
+    eprintln("[pkf] clean: no tasks declare outputs — nothing to do")
+    return 0
+  }
+
+  let mut removed = 0
+  for name in names {
+    let task = plan.tasks.get(name).unwrap()
+    if task.outputs.length() == 0 {
+      eprintln("[pkf] \{name}: no outputs declared — skipping")
+      continue
+    }
+    // Compute task_root (mirrors Go's TaskRoot / MBT's task_cwd logic).
+    let task_root = match task.workdir {
+      Some(wd) =>
+        if wd.has_prefix("/") {
+          wd
+        } else if repo_root.length() == 0 || repo_root == "." {
+          wd
+        } else {
+          repo_root + "/" + wd
+        }
+      None =>
+        if repo_root.length() == 0 {
+          "."
+        } else {
+          repo_root
+        }
+    }
+    for out in task.outputs {
+      let path = if task_root.length() == 0 || task_root == "." {
+        out
+      } else {
+        task_root + "/" + out
+      }
+      if !@fs.path_exists(path) {
+        continue
+      }
+      rm_rf(path)
+      println("removed: \{path}  (\{name})")
+      removed = removed + 1
+    }
+  }
+  if removed == 0 {
+    eprintln("[pkf] clean: nothing to remove (no declared outputs exist on disk)")
+  }
+  0
+}
+
+///|
 async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
   if args.length() < 1 {
     println(usage_text())
@@ -4398,6 +4501,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
     "affected" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
       affected_cmd(explicit_taskfile, rest[:])
+    }
+    "clean" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      clean_cmd(explicit_taskfile, rest[:])
     }
     "watch" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
