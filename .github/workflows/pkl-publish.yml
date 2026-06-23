@@ -9,6 +9,11 @@ on:
       tag:
         description: "Tag to publish (e.g. pkfire@0.1.0)"
         required: true
+      dry_run:
+        description: "Build + package the matrix but skip publishing the release"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -17,16 +22,18 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
-  publish:
+  # Resolve the tag/version once so every downstream job (matrix build +
+  # release) shares a single source of truth. Tag push → github.ref_name;
+  # workflow_dispatch → its `tag` input. The version is the bare X.Y.Z
+  # (leading `pkfire@` stripped) baked into the pkf binary at build time.
+  resolve:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Install Pkl
         run: |
@@ -53,49 +60,144 @@ jobs:
             exit 1
           fi
 
-      - name: Package
+      - name: Package pkl
         working-directory: pkl
         run: pkl project package .
 
       - name: Show pkl artifacts
         run: ls -la "pkl/.out/${{ steps.tag.outputs.tag }}"
 
-      - name: Build pkf binaries
+      - name: Upload pkl package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkl-package
+          path: pkl/.out/${{ steps.tag.outputs.tag }}/
+          retention-days: 1
+
+  # One GitHub-hosted runner per target — MoonBit native is host-only (no
+  # cross-compile), so each OS/arch combination is built on a matching
+  # runner. arm64 Linux + Intel/arm macOS images are all GitHub-hosted and
+  # free for public repos (pkfire is public).
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runs-on: ubuntu-latest
+          - target: linux-arm64
+            runs-on: ubuntu-24.04-arm
+          # macos-13 (last native Intel image) was retired Dec 2025;
+          # macos-15-intel is the final x86_64 macOS runner GitHub offers
+          # (available until Aug 2027). Builds darwin-amd64.
+          - target: darwin-amd64
+            runs-on: macos-15-intel
+          - target: darwin-arm64
+            runs-on: macos-14
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MoonBit CLI
         run: |
-          version="${{ steps.tag.outputs.version }}"
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Moon version
+        run: moon version --all
+
+      # Bake the release version into pkf_version() before building. This
+      # is a throwaway sed on the CI checkout only — main.mbt keeps the
+      # "0.0.1" constant so local/conformance builds are unaffected.
+      - name: Inject version
+        run: |
+          version="${{ needs.resolve.outputs.version }}"
+          file="pkf-mbt/src/cmd/pkf/main.mbt"
+          sed -i.bak 's/^  "0\.0\.1"$/  "'"$version"'"/' "$file"
+          rm -f "$file.bak"
+          grep -n "$version" "$file" || { echo "::error::version injection failed"; exit 1; }
+
+      - name: Moon update (pkf-mbt)
+        working-directory: pkf-mbt
+        run: moon update
+
+      - name: Build pkf (native, release)
+        run: bash pkf-mbt/scripts/build-native.sh
+
+      - name: Package
+        run: |
+          target="${{ matrix.target }}"
           mkdir -p dist
-          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-            goos="${target%-*}"
-            goarch="${target#*-}"
-            stage=$(mktemp -d)
-            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build \
-              -trimpath \
-              -ldflags "-s -w -X main.version=${version}" \
-              -o "$stage/pkf" ./cmd/pkf
-            tar -czf "dist/pkf-${target}.tar.gz" -C "$stage" pkf
-            ( cd dist && sha256sum "pkf-${target}.tar.gz" > "pkf-${target}.tar.gz.sha256" )
-          done
+          cp pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe dist/pkf
+          chmod +x dist/pkf
+          tar -czf "pkf-${target}.tar.gz" -C dist pkf
+          # shasum -a 256 is present on both macOS and ubuntu; sha256sum is
+          # Linux-only. Both emit the same "<hex>  <file>" format the
+          # asset contract expects.
+          shasum -a 256 "pkf-${target}.tar.gz" > "pkf-${target}.tar.gz.sha256"
+          echo "--- tarball contents ---"
+          tar -tzf "pkf-${target}.tar.gz"
+          cat "pkf-${target}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkf-${{ matrix.target }}
+          path: |
+            pkf-${{ matrix.target }}.tar.gz
+            pkf-${{ matrix.target }}.tar.gz.sha256
+          retention-days: 1
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download pkl package
+        uses: actions/download-artifact@v4
+        with:
+          name: pkl-package
+          path: pkldist
+
+      - name: Download pkf binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pkf-*
+          merge-multiple: true
+          path: dist
+
+      - name: Show downloaded artifacts
+        run: |
+          ls -la pkldist/
           ls -la dist/
 
       - name: Resolve release notes from CHANGELOG.md
         id: notes
         run: |
-          version="${{ steps.tag.outputs.version }}"
+          version="${{ needs.resolve.outputs.version }}"
           notes_file="${{ runner.temp }}/release-notes.md"
           if scripts/release-notes.sh "$version" > "$notes_file" && [ -s "$notes_file" ]; then
             echo "::notice::release notes extracted from CHANGELOG.md for $version"
           else
             printf 'Release pkfire@%s — Pkl package + pkf binaries for linux/darwin × amd64/arm64.\n' "$version" > "$notes_file"
-            echo "::warning::CHANGELOG.md has no `## [$version]` section; falling back to default body"
+            echo "::warning::CHANGELOG.md has no \`## [$version]\` section; falling back to default body"
           fi
           echo "file=$notes_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload to release
+        # Skip publishing on a dry-run dispatch: the matrix still builds +
+        # packages + uploads artifacts above, so a maintainer can verify
+        # all 4 runners produce correctly-named assets without cutting a
+        # release.
+        if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
-          dir="pkl/.out/$tag"
+          tag="${{ needs.resolve.outputs.tag }}"
           notes="${{ steps.notes.outputs.file }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             # Idempotent re-run: always refresh the body so an
@@ -105,10 +207,10 @@ jobs:
             gh release create "$tag" --title "$tag" --notes-file "$notes"
           fi
           gh release upload "$tag" --clobber \
-            "$dir/$tag" \
-            "$dir/$tag.sha256" \
-            "$dir/$tag.zip" \
-            "$dir/$tag.zip.sha256" \
+            "pkldist/$tag" \
+            "pkldist/$tag.sha256" \
+            "pkldist/$tag.zip" \
+            "pkldist/$tag.zip.sha256" \
             dist/pkf-linux-amd64.tar.gz dist/pkf-linux-amd64.tar.gz.sha256 \
             dist/pkf-linux-arm64.tar.gz dist/pkf-linux-arm64.tar.gz.sha256 \
             dist/pkf-darwin-amd64.tar.gz dist/pkf-darwin-amd64.tar.gz.sha256 \
