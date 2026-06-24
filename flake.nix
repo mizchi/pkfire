@@ -19,25 +19,15 @@
       # the release tarball rather than compiling from source (fast, and the
       # same artifact `install.sh` / the GitHub Action ship).
       #
-      # To bump after cutting a new release: set `version`, then refresh each
-      # sha256 from the published checksums, e.g.
+      # `version` + the per-platform sha256 live in `nix/pkf-release.json`,
+      # which the release workflow (.github/workflows/pkl-publish.yml) auto-
+      # regenerates from the freshly built checksums and opens a follow-up PR
+      # for. To bump by hand: set version, then refresh each sha256 from
       #   curl -fsSL https://github.com/mizchi/pkfire/releases/download/pkfire@<v>/pkf-<plat>.tar.gz.sha256
-      version = "0.12.0";
-      assets = {
-        "x86_64-linux" = {
-          plat = "linux-amd64";
-          sha256 = "c4f18db054f27059ebd9ee01a24cad4f4a3f2963d3b53b51ddd1485db6d94d31";
-        };
-        "aarch64-linux" = {
-          plat = "linux-arm64";
-          sha256 = "f43abea5c848d2d40b90aac9f70737e1183542c50c923ebb9da63b6046823361";
-        };
-        "aarch64-darwin" = {
-          plat = "darwin-arm64";
-          sha256 = "46868135583f4a8d8cb91fb8c11bbfac54dd727ca9645107294c8ad2993a7472";
-        };
-        # No x86_64-darwin: the MoonBit toolchain has no Intel macOS build.
-      };
+      # (no x86_64-darwin: the MoonBit toolchain has no Intel macOS build.)
+      release = builtins.fromJSON (builtins.readFile ./nix/pkf-release.json);
+      version = release.version;
+      assets = release.platforms;
     in
     flake-utils.lib.eachSystem (builtins.attrNames assets) (system:
       let

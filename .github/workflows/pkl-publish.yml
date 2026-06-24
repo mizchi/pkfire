@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   test:
@@ -218,3 +219,42 @@ jobs:
         # Action-friendly `v<ver>` + floating `v<major>` tags are
         # synced by `.github/workflows/v-tags.yml`, which fires via
         # workflow_run on this workflow's success.
+
+      # Keep the Nix flake's binary pin in lockstep with the release.
+      # The flake fetches these exact tarballs, so regenerate
+      # nix/pkf-release.json from the freshly built checksums and open a
+      # follow-up PR. (Can't commit straight to main if it's protected;
+      # a PR is reviewable and works either way.)
+      - name: Sync Nix flake release pin
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          la=$(awk '{print $1}' dist/pkf-linux-amd64.tar.gz.sha256)
+          lr=$(awk '{print $1}' dist/pkf-linux-arm64.tar.gz.sha256)
+          da=$(awk '{print $1}' dist/pkf-darwin-arm64.tar.gz.sha256)
+          jq -n --arg v "$version" --arg la "$la" --arg lr "$lr" --arg da "$da" '{
+            version: $v,
+            platforms: {
+              "x86_64-linux":  { plat: "linux-amd64",  sha256: $la },
+              "aarch64-linux": { plat: "linux-arm64",  sha256: $lr },
+              "aarch64-darwin": { plat: "darwin-arm64", sha256: $da }
+            }
+          }' > nix/pkf-release.json
+          if git diff --quiet -- nix/pkf-release.json; then
+            echo "::notice::nix/pkf-release.json already in sync with pkfire@${version}"
+            exit 0
+          fi
+          branch="nix-release-sync-${version}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add nix/pkf-release.json
+          git commit -m "nix: sync flake release pin to pkfire@${version}"
+          git push -f origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "nix: sync flake release pin to pkfire@${version}" \
+            --body "Auto-generated after the pkfire@${version} release. Updates \`nix/pkf-release.json\` sha256 to the freshly built binaries so \`nix build\` / \`nix run github:mizchi/pkfire\` resolve the new release." \
+            || echo "::warning::could not open the sync PR — enable 'Allow GitHub Actions to create and approve pull requests' (Settings → Actions → General), or update nix/pkf-release.json by hand"
