@@ -100,10 +100,13 @@
 
         # `nix develop` for working on pkfire itself: the MoonBit
         # toolchain (`moon`, `moonc`, …) to build `pkf-mbt/`, plus the
-        # Pkl CLI (needed for `pkl test` and `pkl format`).
+        # Pkl CLI (needed for `pkl test` and `pkl format`). The overlay's
+        # `packages.<system>.default` is the canonical moon toolchain
+        # (== moonbit_latest); the `pkgs.moonbit-bin` attrset only
+        # carries version-pinned keys, not `moonbit_latest`, on Linux.
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.moonbit-bin.moonbit_latest
+            moonbit-overlay.packages.${system}.default
             pkgs.pkl
           ];
         };
