@@ -30,9 +30,9 @@ fn package_metadata_url_from_uri(uri : String) -> String? {
   if !uri.has_prefix("package://") {
     return None
   }
-  let after_scheme = uri.substring(start="package://".length(), end=uri.length())
+  let after_scheme = uri["package://".length():uri.length()].to_owned()
   let without_fragment = match after_scheme.find("#") {
-    Some(idx) => after_scheme.substring(start=0, end=idx)
+    Some(idx) => after_scheme[0:idx].to_owned()
     None => after_scheme
   }
   // The authority ends at the first `/` after the host.
@@ -40,11 +40,8 @@ fn package_metadata_url_from_uri(uri : String) -> String? {
     None => None
     Some(0) => None
     Some(slash) => {
-      let authority = without_fragment.substring(start=0, end=slash)
-      let path = without_fragment.substring(
-        start=slash,
-        end=without_fragment.length(),
-      )
+      let authority = without_fragment[0:slash].to_owned()
+      let path = without_fragment[slash:].to_owned()
       let scheme = if authority.has_prefix("127.0.0.1") ||
         authority.has_prefix("localhost") {
         "http://"
@@ -97,7 +94,7 @@ fn extract_package_zip_url(body : String) -> String? {
       if j >= body.length() {
         return None
       }
-      Some(body.substring(start=value_start, end=j))
+      Some(body[value_start:j].to_owned())
     }
   }
 }
@@ -136,7 +133,7 @@ async fn download_package_uri_to_cache(uri : String) -> Unit raise LoaderError {
   // zip into `.../package/file/`. Callers (e.g. `read_module_source`) pass the
   // full `package://...#/file` URI.
   let uri_no_fragment = match uri.find("#") {
-    Some(idx) => uri.substring(start=0, end=idx)
+    Some(idx) => uri[0:idx].to_owned()
     None => uri
   }
   let package_dir = match resolve_package_uri_to_file(uri_no_fragment) {

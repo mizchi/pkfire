@@ -619,17 +619,9 @@ fn dirname(path : String) -> String {
       if idx == 0 {
         "/"
       } else {
-        path.substring(start=0, end=idx)
+        path[0:idx].to_owned()
       }
     None => ""
-  }
-}
-
-///|
-fn basename(path : String) -> String {
-  match path.rev_find("/") {
-    Some(idx) => path.substring(start=idx + 1, end=path.length())
-    None => path
   }
 }
 
@@ -799,20 +791,6 @@ fn detect_file_mode(path : String) -> Int {
 }
 
 ///|
-fn copy_file(src : String, dst : String) -> Unit {
-  let parent = dirname(dst)
-  if parent.length() > 0 {
-    mkdir_p(parent)
-  }
-  let bytes = @fs.read_file_to_bytes(src) catch {
-    _ => Bytes::new(0)
-  }
-  @fs.write_bytes_to_file(dst, bytes) catch {
-    _ => ()
-  }
-}
-
-///|
 fn walk_files(root : String, rel_prefix : String, out : Array[String]) -> Unit {
   // Append every regular file under `root` to `out` as a relative path
   // built from `rel_prefix`. Symlinks are followed naively (whatever
@@ -913,18 +891,18 @@ fn brace_expand(pattern : String) -> Array[String] {
 
 ///|
 fn glob_segs(
-  p : Array[@string.View],
+  p : Array[StringView],
   pi : Int,
-  s : Array[@string.View],
+  s : Array[StringView],
   si : Int,
 ) -> Bool {
   let mut pi = pi
   let mut si = si
-  for {
+  for ;; {
     if pi >= p.length() {
       return si >= s.length()
     }
-    let seg = p[pi].to_string()
+    let seg = p[pi].to_owned()
     if seg == "**" {
       // Try matching 0..n segments.
       if pi == p.length() - 1 {
@@ -940,7 +918,7 @@ fn glob_segs(
     if si >= s.length() {
       return false
     }
-    if !glob_segment_matches(seg, s[si].to_string()) {
+    if !glob_segment_matches(seg, s[si].to_owned()) {
       return false
     }
     pi = pi + 1
@@ -959,7 +937,7 @@ fn glob_segment_matches(pat : String, seg : String) -> Bool {
 fn glob_seg_step(pat : String, pi : Int, seg : String, si : Int) -> Bool {
   let mut pi = pi
   let mut si = si
-  for {
+  for ;; {
     if pi >= pat.length() {
       return si >= seg.length()
     }
@@ -1107,9 +1085,9 @@ fn expand_inputs(root : String, patterns : Array[String]) -> Array[String] {
 ///|
 fn hex_digit(n : Int) -> Char {
   if n < 10 {
-    Char::from_int(n + '0'.to_int())
+    (n + '0'.to_int()).unsafe_to_char()
   } else {
-    Char::from_int(n - 10 + 'a'.to_int())
+    (n - 10 + 'a'.to_int()).unsafe_to_char()
   }
 }
 
@@ -1206,8 +1184,8 @@ fn cache_root() -> String {
 
 ///|
 fn entry_dir(key : String) -> String {
-  let head = key.substring(start=0, end=2)
-  let tail = key.substring(start=2, end=key.length())
+  let head = key[0:2].to_owned()
+  let tail = key[2:key.length()].to_owned()
   join_path(join_path(join_path(cache_root(), "cas"), head), tail)
 }
 
@@ -1322,7 +1300,7 @@ fn remote_base() -> String? {
       if s.length() == 0 {
         None
       } else if s.has_suffix("/") {
-        Some(s.substring(start=0, end=s.length() - 1))
+        Some(s[0:s.length() - 1].to_owned())
       } else {
         Some(s)
       }
@@ -1347,8 +1325,8 @@ fn remote_headers() -> Map[String, String] {
 
 ///|
 fn remote_entry_url(base : String, key : String) -> String {
-  let head = key.substring(start=0, end=2)
-  let tail = key.substring(start=2, end=key.length())
+  let head = key[0:2].to_owned()
+  let tail = key[2:key.length()].to_owned()
   base + "/cas/" + head + "/" + tail
 }
 
@@ -1422,7 +1400,7 @@ async fn cache_remote_push(key : String) -> Unit {
   let ok = remote_put_bytes(entry_url, body)
   if !ok {
     println(
-      "pkf: remote cache PUT failed for \{key.substring(start=0, end=8)} (ignored)",
+      "pkf: remote cache PUT failed for \{key[0:8].to_owned()} (ignored)",
     )
   }
 }
@@ -1578,7 +1556,7 @@ async fn[X] start_service(
   let ok = wait_until_ready(service_task)
   if !ok {
     proc.cancel()
-    raise Failure(
+    raise Failure::Failure(
       "service `\{service_task.name}` did not become ready within \{service_task.ready_timeout_seconds}s",
     )
   }
@@ -1655,15 +1633,6 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
 }
 
 ///|
-suberror PkfError String derive(Show)
-
-///|
-fn PkfError::message(self : PkfError) -> String {
-  let PkfError(m) = self
-  m
-}
-
-///|
 async fn[X] run_task(
   group : @async.TaskGroup[X],
   plan : Plan,
@@ -1691,12 +1660,12 @@ async fn[X] run_task(
     }
     let k = compute_action_key(task, input_hashes, params, positionals)
     if cache_hit(k) {
-      println("pkf: # \{task.name} (cache hit \{k.substring(start=0, end=8)})")
+      println("pkf: # \{task.name} (cache hit \{k[0:8].to_owned()})")
       cache_restore(k, repo_root)
       return 0
     }
     if cache_remote_fetch(k, repo_root) {
-      println("pkf: # \{task.name} (remote cache hit \{k.substring(start=0, end=8)})")
+      println("pkf: # \{task.name} (remote cache hit \{k[0:8].to_owned()})")
       return 0
     }
     key = Some(k)
@@ -1927,11 +1896,11 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs {
       continue
     }
     if arg.has_prefix("--") {
-      let stripped = arg.substring(start=2, end=arg.length())
+      let stripped = arg[2:arg.length()].to_owned()
       match stripped.find("=") {
         Some(idx) => {
-          let key = stripped.substring(start=0, end=idx)
-          let value = stripped.substring(start=idx + 1, end=stripped.length())
+          let key = stripped[0:idx].to_owned()
+          let value = stripped[idx + 1:stripped.length()].to_owned()
           flags[key] = value
         }
         None =>
@@ -2264,7 +2233,7 @@ async fn affected_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> 
     if arg == "--check" {
       check_mode = true
     } else if arg.has_prefix("--changed=") {
-      changed_file = Some(arg.substring(start=10, end=arg.length()))
+      changed_file = Some(arg[10:arg.length()].to_owned())
     } else if arg.has_prefix("--") {
       die("pkf affected: unknown flag `\{arg}`")
       return 2
@@ -2330,7 +2299,7 @@ async fn affected_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> 
           }
         }
         for line in content.split("\n") {
-          let s = line.to_string().trim_space().to_string()
+          let s = line.to_owned().trim().to_owned()
           if s.length() > 0 {
             changed.push(s)
           }
@@ -2900,7 +2869,7 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
   let masked = mask_pkl_trivia(src)
   let lines : Array[String] = []
   for lv in masked.split("\n") {
-    lines.push(lv.to_string())
+    lines.push(lv.to_owned())
   }
   let result : Array[LocalTaskDecl] = []
   let mut i = 0
@@ -2908,10 +2877,10 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
     let line = lines[i]
     // Detect the pattern: `local <id>` followed by `= new` and `Task` and `{`
     // Strip leading whitespace for detection.
-    let trimmed = line.trim_space().to_string()
+    let trimmed = line.trim().to_owned()
     if trimmed.has_prefix("local ") {
       // Extract the identifier after "local ".
-      let after_local = trimmed.substring(start=6, end=trimmed.length())
+      let after_local = trimmed[6:trimmed.length()].to_owned()
       // Identifier ends at whitespace or '='.
       let mut id_end = after_local.length()
       for k in 0..<after_local.length() {
@@ -2921,13 +2890,13 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
           break
         }
       }
-      let var_name = after_local.substring(start=0, end=id_end)
+      let var_name = after_local[0:id_end].to_owned()
       if var_name.length() == 0 {
         i = i + 1
         continue
       }
       // Check that the rest of the declaration references `Task` and has `{`.
-      let rest = after_local.substring(start=id_end, end=after_local.length())
+      let rest = after_local[id_end:after_local.length()].to_owned()
       if !rest.contains("Task") || !rest.contains("{") {
         // Could be multi-line: check if `new Task {` appears across next lines.
         // Simplified: if no `Task` and `{` on this line, skip.
@@ -2964,7 +2933,7 @@ fn scan_local_task_decls(src : String) -> Array[LocalTaskDecl] {
       }
       // Extract body (inclusive of braces) from the ORIGINAL source so the
       // real `name = "..."` value is preserved.
-      let body = src.substring(start=open_pos, end=close_pos + 1)
+      let body = src[open_pos:close_pos + 1].to_owned()
       // Find `name = "<value>"` inside body.
       let task_name = extract_static_name(body)
       result.push(LocalTaskDecl::{
@@ -3051,7 +3020,7 @@ fn extract_static_name(body : String) -> String? {
   let mut i = 0
   while i < body.length() {
     // Look for `name` token.
-    if i + 4 <= body.length() && body.substring(start=i, end=i + 4) == "name" {
+    if i + 4 <= body.length() && body[i:i + 4].to_owned() == "name" {
       // Must be preceded by non-identifier char (or start of string).
       let ok_before = if i == 0 {
         true
@@ -3083,7 +3052,7 @@ fn extract_static_name(body : String) -> String? {
               k = k + 1
             }
             if end_k > j {
-              let value = body.substring(start=j + 1, end=end_k)
+              let value = body[j + 1:end_k].to_owned()
               // Reject interpolated values.
               if !value.contains("\\(") {
                 return Some(value)
@@ -3367,7 +3336,7 @@ fn scan_amends_and_schema(taskfile_path : String) -> (String?, String?) {
   }
   let mut amends : String? = None
   for line_view in src.split("\n") {
-    let line = line_view.to_string().trim_space().to_string()
+    let line = line_view.to_owned().trim().to_owned()
     if line.has_prefix("amends ") {
       // Find the first `"` in the line.
       let mut start = -1
@@ -3390,7 +3359,7 @@ fn scan_amends_and_schema(taskfile_path : String) -> (String?, String?) {
           j = j + 1
         }
         if end > start {
-          amends = Some(line.substring(start=start + 1, end=end))
+          amends = Some(line[start + 1:end].to_owned())
         }
       }
       break
@@ -3401,7 +3370,7 @@ fn scan_amends_and_schema(taskfile_path : String) -> (String?, String?) {
       // Look for `pkfire@` in the URI and extract up to the next `#` or `"`.
       match uri.find("pkfire@") {
         Some(idx) => {
-          let after = uri.substring(start=idx + 7, end=uri.length())
+          let after = uri[idx + 7:uri.length()].to_owned()
           // End at `#` or end of string.
           let mut end = after.length()
           for i in 0..<after.length() {
@@ -3411,7 +3380,7 @@ fn scan_amends_and_schema(taskfile_path : String) -> (String?, String?) {
             }
           }
           if end > 0 {
-            Some(after.substring(start=0, end=end))
+            Some(after[0:end].to_owned())
           } else {
             None
           }
@@ -4003,7 +3972,7 @@ fn extract_file_flag(args : ArrayView[String]) -> (String?, Array[String]) {
       continue
     }
     if !seen_positional && a.has_prefix("--file=") {
-      explicit = Some(a.substring(start=7, end=a.length()))
+      explicit = Some(a[7:a.length()].to_owned())
       i = i + 1
       continue
     }
@@ -4053,7 +4022,7 @@ async fn doctor_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> In
     match res {
       Ok((code, data)) =>
         if code == 0 {
-          let p = data.text().trim_space().to_string()
+          let p = data.text().trim().to_owned()
           "pkf found at \{p}"
         } else {
           "pkf not found in PATH"
@@ -4070,7 +4039,7 @@ async fn doctor_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> In
     match res {
       Ok((code, data)) =>
         if code == 0 {
-          let ver = data.text().trim_space().to_string()
+          let ver = data.text().trim().to_owned()
           "\{ver}"
         } else {
           "pkl found but --version failed (exit \{code})"
@@ -4755,7 +4724,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
           }
           dest = rest[i]
         } else if a.has_prefix("-f") && a.length() > 2 {
-          dest = a.substring(start=2, end=a.length())
+          dest = a[2:a.length()].to_owned()
         } else if a == "-h" || a == "--help" {
           println("pkf init — write a starter Taskfile.pkl")
           println("")
@@ -4894,7 +4863,7 @@ fn replace_pkfire_version(src : String, new_ver : String) -> (String, Bool, Bool
   let mut found = false
   while i < src.length() {
     let remaining = src.length() - i
-    if remaining >= mlen && src[i:i + mlen].to_string() == marker {
+    if remaining >= mlen && src[i:i + mlen].to_owned() == marker {
       // Try to parse exactly N.N.N after the marker.
       let j0 = i + mlen
       let mut j = j0
@@ -4922,7 +4891,7 @@ fn replace_pkfire_version(src : String, new_ver : String) -> (String, Bool, Bool
           if part3_len > 0 {
             // Valid 3-part version found.
             found = true
-            let old_ver = src[i + mlen:j].to_string()
+            let old_ver = src[i + mlen:j].to_owned()
             if old_ver != new_ver {
               changed = true
             }
@@ -4978,7 +4947,7 @@ async fn migrate_cmd(
       println("      --skip-verify  skip the post-rewrite pkl eval verification")
       return 0
     } else if a.has_prefix("--to=") {
-      to = Some(a[5:].to_string())
+      to = Some(a[5:].to_owned())
     } else if a == "--to" {
       i = i + 1
       if i >= args.length() {
@@ -5024,11 +4993,11 @@ async fn migrate_cmd(
     // Show the diff: lines that changed.
     let old_lines : Array[String] = []
     for lv in src.split("\n") {
-      old_lines.push(lv.to_string())
+      old_lines.push(lv.to_owned())
     }
     let new_lines : Array[String] = []
     for lv in new_body.split("\n") {
-      new_lines.push(lv.to_string())
+      new_lines.push(lv.to_owned())
     }
     let mut li = 0
     while li < old_lines.length() && li < new_lines.length() {
@@ -5115,7 +5084,7 @@ fn is_git_hook_event(name : String) -> Bool {
 ///  directory. Returns None when not inside a git repository.
 fn find_git_hooks_dir(start_dir : String) -> String? {
   let mut dir = start_dir
-  for {
+  for ;; {
     let git = join_path(dir, ".git")
     if @fs.path_exists(git) {
       let is_dir = @fs.is_dir(git) catch {
@@ -5128,10 +5097,10 @@ fn find_git_hooks_dir(start_dir : String) -> String? {
         let data = @fs.read_file_to_string(git) catch {
           _ => return None
         }
-        let line = data.trim_space().to_string()
+        let line = data.trim().to_owned()
         let prefix = "gitdir:"
         let raw = if line.has_prefix(prefix) {
-          line.substring(start=prefix.length(), end=line.length()).trim_space().to_string()
+          line[prefix.length():line.length()].to_owned().trim().to_owned()
         } else {
           line
         }
@@ -5520,25 +5489,25 @@ fn cache_stats_cmd(cas_dir : String) -> Int {
 fn parse_duration_to_sec(s : String) -> Int64 {
   // Supports: Nd (days), Nh (hours), Nm (minutes), Ns (seconds).
   if s.has_suffix("d") {
-    let num_str = s[:s.length() - 1].to_string()
+    let num_str = s[:s.length() - 1].to_owned()
     match (try? @strconv.parse_int(num_str, base=10)) {
       Ok(n) => return n.to_int64() * 86400L
       Err(_) => ()
     }
   } else if s.has_suffix("h") {
-    let num_str = s[:s.length() - 1].to_string()
+    let num_str = s[:s.length() - 1].to_owned()
     match (try? @strconv.parse_int(num_str, base=10)) {
       Ok(n) => return n.to_int64() * 3600L
       Err(_) => ()
     }
   } else if s.has_suffix("m") {
-    let num_str = s[:s.length() - 1].to_string()
+    let num_str = s[:s.length() - 1].to_owned()
     match (try? @strconv.parse_int(num_str, base=10)) {
       Ok(n) => return n.to_int64() * 60L
       Err(_) => ()
     }
   } else if s.has_suffix("s") {
-    let num_str = s[:s.length() - 1].to_string()
+    let num_str = s[:s.length() - 1].to_owned()
     match (try? @strconv.parse_int(num_str, base=10)) {
       Ok(n) => return n.to_int64()
       Err(_) => ()
@@ -5561,7 +5530,7 @@ fn cache_prune_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
     if arg == "--dry-run" {
       dry_run = true
     } else if arg.has_prefix("--older-than=") {
-      older_than = arg.substring(start=13, end=arg.length())
+      older_than = arg[13:arg.length()].to_owned()
     } else if arg == "--older-than" {
       // Space-separated value not supported without lookahead in ArrayView;
       // users should use --older-than=VAL form.
@@ -5589,7 +5558,7 @@ fn cache_prune_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
     freed = freed + size
     removed = removed + 1
     let short_hex = if hex.length() > 12 {
-      hex.substring(start=0, end=12)
+      hex[0:12].to_owned()
     } else {
       hex
     }
@@ -5626,11 +5595,11 @@ fn cache_rm_cmd(cas_dir : String, keys : Array[String]) -> Int {
       eprintln("pkf: cache rm: action key \"\{key}\" too short (need >= 2 hex chars)")
       return 1
     }
-    let prefix2 = key[:2].to_string()
+    let prefix2 = key[:2].to_owned()
     let bucket = join_path(cas_dir, prefix2)
     if key.length() >= 64 {
       // Full 64-char hex: direct path.
-      let rest = key[2:].to_string()
+      let rest = key[2:].to_owned()
       let entry_dir = join_path(bucket, rest)
       if !@fs.path_exists(entry_dir) {
         eprintln("[pkf] cache rm: no entry at \{key}")
@@ -5641,7 +5610,7 @@ fn cache_rm_cmd(cas_dir : String, keys : Array[String]) -> Int {
       removed = removed + 1
     } else {
       // Prefix match.
-      let rest_prefix = key[2:].to_string()
+      let rest_prefix = key[2:].to_owned()
       let candidates = @fs.read_dir(bucket) catch {
         _ => {
           eprintln("[pkf] cache rm: no entry matching \{key}")
@@ -5797,6 +5766,6 @@ async fn main {
   for i in 1..<args.length() {
     trimmed.push(args[i])
   }
-  let code = @async.with_task_group(fn(group) { run_main(group, trimmed) })
+  let code = @async.with_task_group(group => run_main(group, trimmed))
   @sys.exit(code)
 }
