@@ -104,9 +104,9 @@ fn brace_expand(pattern : String) -> Array[String] {
 
 ///|
 fn glob_segs(
-  p : Array[@string.View],
+  p : Array[StringView],
   pi : Int,
-  s : Array[@string.View],
+  s : Array[StringView],
   si : Int,
 ) -> Bool {
   let mut pi = pi

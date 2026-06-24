@@ -28,22 +28,22 @@ fn resolve_location(base : String, location : String) -> String {
     Some(i) => i + 3
     None => return location // base is not a normal URL; best effort
   }
-  let rest_start = match base.substring(start=scheme_end).find("/") {
+  let rest_start = match base[scheme_end:].to_owned().find("/") {
     Some(i) => scheme_end + i
     None => base.length() // no path component at all
   }
-  let origin = base.substring(start=0, end=rest_start)
+  let origin = base[0:rest_start].to_owned()
   if location.has_prefix("/") {
     // Absolute path: replace the whole path.
     return origin + location
   }
   // Relative reference: replace the last segment of the base path.
-  let base_path = base.substring(start=rest_start)
+  let base_path = base[rest_start:].to_owned()
   let dir_end = match base_path.rev_find("/") {
     Some(i) => rest_start + i + 1
     None => rest_start
   }
-  base.substring(start=0, end=dir_end) + location
+  base[0:dir_end].to_owned() + location
 }
 
 ///|

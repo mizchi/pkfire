@@ -72,7 +72,7 @@ fn dir_of(path : String) -> String {
       if idx == 0 {
         "/"
       } else {
-        path.substring(start=0, end=idx)
+        path[0:idx].to_owned()
       }
     None => ""
   }
@@ -90,7 +90,7 @@ fn normalize_path(path : String) -> String {
   let mut rest = path
   if path.has_prefix("/") {
     leading_slash = true
-    rest = path.substring(start=1, end=path.length())
+    rest = path[1:path.length()].to_owned()
   }
   let segs : Array[String] = []
   for seg in rest.split("/") {
@@ -162,16 +162,13 @@ fn parse_package_uri(uri : String) -> (String, String, String, String)? {
   // `pkg.pkl-lang.org` URIs carry no `::` suffix; if one ever reaches this
   // parser it must also be stripped in `package_metadata_url_from_uri` to keep
   // the read/write paths consistent.
-  let after_scheme = uri.substring(start="package://".length(), end=uri.length())
+  let after_scheme = uri["package://".length():uri.length()].to_owned()
   let (locator, file) = match after_scheme.find("#") {
     Some(idx) => {
-      let l = after_scheme.substring(start=0, end=idx)
-      let mut f = after_scheme.substring(
-        start=idx + 1,
-        end=after_scheme.length(),
-      )
+      let l = after_scheme[0:idx].to_owned()
+      let mut f = after_scheme[idx + 1:].to_owned()
       if f.has_prefix("/") {
-        f = f.substring(start=1, end=f.length())
+        f = f[1:f.length()].to_owned()
       }
       (l, f)
     }
@@ -179,7 +176,7 @@ fn parse_package_uri(uri : String) -> (String, String, String, String)? {
   }
   // Drop the leading registry host segment (e.g. `pkg.pkl-lang.org/`).
   let stripped_locator = match locator.find("/") {
-    Some(idx) => locator.substring(start=idx + 1, end=locator.length())
+    Some(idx) => locator[idx + 1:locator.length()].to_owned()
     None => locator
   }
   // stripped_locator: path/.../name@version
@@ -187,17 +184,14 @@ fn parse_package_uri(uri : String) -> (String, String, String, String)? {
     Some(idx) => idx
     None => return None
   }
-  let pre_at = stripped_locator.substring(start=0, end=at_idx)
-  let version = stripped_locator.substring(
-    start=at_idx + 1,
-    end=stripped_locator.length(),
-  )
+  let pre_at = stripped_locator[0:at_idx].to_owned()
+  let version = stripped_locator[at_idx + 1:].to_owned()
   let last_slash = match pre_at.rev_find("/") {
     Some(idx) => idx
     None => return None
   }
-  let host_path = pre_at.substring(start=0, end=last_slash)
-  let name = pre_at.substring(start=last_slash + 1, end=pre_at.length())
+  let host_path = pre_at[0:last_slash].to_owned()
+  let name = pre_at[last_slash + 1:pre_at.length()].to_owned()
   Some((host_path, name, version, file))
 }
 
@@ -259,7 +253,7 @@ async fn read_module_source(path : String) -> String raise LoaderError {
     }
   }
   let fs_path = if path.has_prefix("file://") {
-    path.substring(start="file://".length(), end=path.length())
+    path["file://".length():path.length()].to_owned()
   } else {
     path
   }
