@@ -8,20 +8,31 @@ on:
 jobs:
   harness:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+
+      - name: Install MoonBit CLI
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
       - name: Install Pkl
         run: |
           curl -fsSL -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
           chmod +x /tmp/pkl && sudo mv /tmp/pkl /usr/local/bin/pkl
           pkl --version
-      - name: Build Go oracle
-        run: go build -o "$RUNNER_TEMP/pkf-go" ./cmd/pkf
-      - name: Oracle self-consistency + unit gates
+
+      - name: Build pkf (release)
+        working-directory: pkf-mbt
+        run: |
+          moon update
+          moon build --target native --release
+
+      - name: Run MoonBit conformance runner (41/41 strict)
+        working-directory: conformance
         env:
-          PKF_GO_BIN: ${{ runner.temp }}/pkf-go
-        run: cd conformance && go test -v ./...
+          PKF_MBT_BIN: ${{ github.workspace }}/pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe
+        run: |
+          moon update
+          moon run --target native --release src

@@ -6,21 +6,26 @@ recipes, examples, and bug reports are all welcome.
 ## Local setup
 
 ```sh
-go install ./cmd/pkf                     # build pkf into $GOPATH/bin
-pkl test --project-dir pkl               # schema-level tests
-pkf run -f examples/dogfood/Taskfile.pkl ci   # the full dogfood gate
+cd pkf-mbt && moon build --target native --release && cd ..   # build pkf
+BIN=pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe
+pkl test --project-dir pkl                      # schema-level tests
+"$BIN" run -f examples/dogfood/Taskfile.pkl ci  # the full dogfood gate
 ```
 
-The `dogfood ci` aggregate is what CI runs on every PR (`vet`,
-`go test -race`, `pkl test`, the cross-compile matrix, the checksum,
-and the integration smoke). If it passes locally it will pass in CI.
+The `dogfood ci` aggregate is what CI runs on every PR (`moon check`,
+`moon test`, `pkl test`, the binary build, the integration smoke, and
+`init-smoke`). If it passes locally it will pass in CI. The contract
+harness (`"$BIN" run conformance`) checks the binary against the frozen
+goldens — run it after any behavior-affecting change.
 
 ## What goes where
 
 - **Pkl schema** lives in `pkl/Taskfile.pkl`. Schema-level tests live
   in `pkl/Taskfile.test.pkl` (`pkl test`).
-- **Go runner** lives in `cmd/pkf/` (CLI entry) and `internal/...`
-  (cache, hash, graph, orchestrator, runner, watcher, config).
+- **`pkf` runner** is a MoonBit program under `pkf-mbt/src/`
+  (`cmd/pkf` CLI entry + `loader` for the embedded Pkl evaluator).
+  Contract tests live in `conformance/` (MoonBit runner + frozen
+  `golden/`).
 - **User-facing examples** are under `examples/`. `examples/dogfood/`
   deliberately uses a relative `amends` so it tests the in-tree
   schema; everything else uses the published package URI.

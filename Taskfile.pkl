@@ -3,13 +3,13 @@
 /// Makefile for maintenance commands.
 ///
 /// Build/test of the `pkf` binary lives in
-/// `examples/dogfood/Taskfile.pkl` (cross-compile matrix + checksum
-/// + integration smoke), which is what `.github/workflows/test.yml`
+/// `examples/dogfood/Taskfile.pkl` (moon check/test + build +
+/// integration smoke), which is what `.github/workflows/test.yml`
 /// drives. Keep that file as the *release* gate; this file is the
 /// *developer* gate.
 ///
 /// Common entry points:
-///   pkf run preflight              vet + tests + version + format consistency
+///   pkf run preflight              moon check/test + pkl tests + version + format
 ///   pkf run bump --to=0.5.0        sweep pkfire@<old> → pkfire@0.5.0
 ///   pkf run tag                    create the pkfire@<ver> tag locally
 ///
@@ -21,41 +21,41 @@
 /// published package URI; here we want to dogfood HEAD.
 amends "pkl/Taskfile.pkl"
 
+/// MoonBit sources for the `pkf` binary (`pkf-mbt/`).
 local sources: Listing<String> = new {
-  "cmd/**/*.go"
-  "cmd/pkf/completion/*"
-  "internal/**/*.go"
-  "go.mod"
-  "go.sum"
+  "pkf-mbt/src/**/*.mbt"
+  "pkf-mbt/src/**/*.c"
+  "pkf-mbt/src/**/moon.pkg"
+  "pkf-mbt/moon.mod.json"
 }
 
-local vet: Task = new {
-  name = "vet"
-  description = "go vet ./..."
-  cmd = "go vet ./..."
+/// Path to the native release binary the MoonBit toolchain emits.
+local pkfBin: String = "pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe"
+
+/// Build the host `pkf` binary from the MoonBit sources. Other dev
+/// tasks (lint / workflow check / conformance) depend on this and call
+/// the built binary so the gate always reflects HEAD, not whatever
+/// `pkf` happens to be on PATH.
+local buildPkf: Task = new {
+  name = "build:pkf"
+  description = "Build the native release `pkf` binary from pkf-mbt/"
+  cmd = "cd pkf-mbt && moon build --target native --release"
+  inputs = sources
+  outputs { pkfBin }
+}
+
+local moonCheck: Task = new {
+  name = "moon:check"
+  description = "Type-check the MoonBit sources (native target)"
+  cmd = "cd pkf-mbt && moon check --target native"
   inputs = sources
 }
 
-local testGo: Task = new {
-  name = "test:go"
-  description = "Go unit tests (no -race for speed; use test:race when you want it)"
-  cmd = "go test ./..."
-  inputs {
-    ...sources
-    "examples/**/*.pkl"
-    "pkl/**/*.pkl"
-  }
-}
-
-local testRace: Task = new {
-  name = "test:race"
-  description = "Go unit tests with the race detector"
-  cmd = "go test -race ./..."
-  inputs {
-    ...sources
-    "examples/**/*.pkl"
-    "pkl/**/*.pkl"
-  }
+local moonTest: Task = new {
+  name = "moon:test"
+  description = "MoonBit unit tests (native target)"
+  cmd = "cd pkf-mbt && moon test --target native"
+  inputs = sources
 }
 
 local testPkl: Task = new {
@@ -107,9 +107,10 @@ local testExamples: Task = new {
 local lintTaskfile: Task = new {
   name = "lint:taskfile"
   description = "Detect local Task definitions omitted from tasks"
-  cmd = "go run ./cmd/pkf lint"
+  cmd = "\(pkfBin) lint"
+  deps { buildPkf }
   inputs {
-    ...sources
+    pkfBin
     "Taskfile.pkl"
     "pkl/Taskfile.pkl"
   }
@@ -118,9 +119,10 @@ local lintTaskfile: Task = new {
 local testWorkflow: Task = new {
   name = "test:workflow"
   description = "Verify Taskfile workflowTests"
-  cmd = "go run ./cmd/pkf affected --check"
+  cmd = "\(pkfBin) affected --check"
+  deps { buildPkf }
   inputs {
-    ...sources
+    pkfBin
     "Taskfile.pkl"
     "pkl/Taskfile.pkl"
   }
@@ -199,14 +201,15 @@ local tag: Task = new {
 }
 
 /// Pre-commit gate. `pkf run preflight` is what you run before
-/// pushing a feature branch / opening a PR. Skips the race
-/// detector + the cross-compile matrix (those are CI's job).
+/// pushing a feature branch / opening a PR. Skips the conformance
+/// harness + the release build matrix (those are CI's job).
 local preflight: Task = new {
   name = "preflight"
-  description = "Pre-commit gate: vet + go-test + pkl-test + examples + version + format"
+  description =
+    "Pre-commit gate: moon check/test + pkl-test + examples + lint + workflow + version + format"
   deps {
-    vet
-    testGo
+    moonCheck
+    moonTest
     testPkl
     testExamples
     lintTaskfile
@@ -241,44 +244,44 @@ local preCommit: Task = new {
 
 local conformance: Task = new {
   name = "conformance"
-  description = "Differential pkf contract harness (Go oracle vs MoonBit candidate)"
+  description = "MoonBit pkf contract harness: candidate vs frozen goldens (41/41 strict)"
   cmd =
     """
     set -euo pipefail
-    bin="$(mktemp -d)/pkf-go"
-    go build -o "$bin" ./cmd/pkf
-    cd conformance
-    PKF_GO_BIN="$bin" go test ./...
+    export PKF_MBT_BIN="$PWD/\(pkfBin)"
+    cd conformance && moon run --target native --release src
     """
+  deps { buildPkf }
   cache = false
 }
 
 workflowTests {
   new {
-    name = "Go source changes run the developer gate"
-    changed { "cmd/pkf/main.go" }
-    direct { "vet"; "test:go"; "test:race"; "lint:taskfile"; "test:workflow" }
+    name = "MoonBit source changes run the developer gate"
+    changed { "pkf-mbt/src/cmd/pkf/main.mbt" }
+    direct { "build:pkf"; "moon:check"; "moon:test" }
     tasks {
+      "build:pkf"
+      "moon:check"
+      "moon:test"
+      "test:pkl"
+      "test:examples"
       "lint:taskfile"
+      "test:workflow"
+      "test:release-notes"
       "check-version"
       "fmt:check"
-      "test:examples"
-      "test:go"
-      "test:pkl"
-      "test:release-notes"
-      "test:workflow"
-      "vet"
       "preflight"
       "pre-commit"
-      "test:race"
+      "conformance"
     }
   }
 }
 
 tasks {
-  vet
-  testGo
-  testRace
+  buildPkf
+  moonCheck
+  moonTest
   testPkl
   testExamples
   lintTaskfile

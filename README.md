@@ -39,12 +39,13 @@ duplicate.
 pkfire describes the same tasks in [Pkl](https://pkl-lang.org/),
 which is a typed configuration language with template inheritance
 (`amends`), per-module testing (`pkl test`), and ordinary functions.
-A cross-compile matrix becomes a one-line `local function
-buildTask(p)` that the schema invokes for each platform — see
-[`examples/dogfood/`](./examples/dogfood/Taskfile.pkl), where four
-near-duplicate `just` recipes were collapsed into a single template.
-Renaming a task in one place updates every reference; misspelling a
-dependency fails at evaluation time, before the runner starts.
+A repeated task shape becomes a one-line `local function testTask(p)`
+that the schema invokes for each package or platform — see
+[`examples/monorepo/`](./examples/monorepo/Taskfile.pkl), where a
+per-package test/build template replaces a wall of near-duplicate
+`just` recipes. Renaming a task in one place updates every reference;
+misspelling a dependency fails at evaluation time, before the runner
+starts.
 
 On top of the language layer, pkfire adds the parts a string-based
 runner can't: a content-addressed cache keyed on inputs/cmd/env, an
@@ -53,15 +54,25 @@ mode that reruns only the affected subgraph.
 
 ## Install
 
-### Go
+### Prebuilt binary
+
+`pkf` is a self-contained MoonBit binary. Download the tarball for your
+platform from the [latest release](https://github.com/mizchi/pkfire/releases/latest)
+and put `pkf` on `PATH`:
 
 ```sh
-go install github.com/mizchi/pkfire/cmd/pkf@latest
+# pick your target: linux-amd64 | linux-arm64 | darwin-arm64
+target=linux-amd64
+curl -fsSL -O "https://github.com/mizchi/pkfire/releases/latest/download/pkf-${target}.tar.gz"
+tar -xzf "pkf-${target}.tar.gz"
+install -m 0755 pkf /usr/local/bin/pkf
 ```
 
-You also need the Pkl CLI (`pkl`) on `PATH`; install it from
+Intel macOS (`darwin-amd64`) and Windows are not supported. You also
+need the Pkl CLI (`pkl`) on `PATH`; install it from
 [pkl-lang.org](https://pkl-lang.org/main/current/pkl-cli/) or via your
-package manager.
+package manager. (The GitHub Action and the Nix package below bundle
+`pkl` for you.)
 
 ### GitHub Actions
 
@@ -116,21 +127,22 @@ Inputs:
 | `cache-pkl` | `false` | Set to `true` to cache `~/.pkl/cache` between runs. Useful for projects that consume remote Pkl packages (`amends` / `import` of `package://pkg.pkl-lang.org/...`). |
 | `pkl-cache-key` | `pkl-<hashFiles>` of `PklProject.deps.json` + `Taskfile.pkl` | Override only if the default key collides across unrelated jobs in the same repo. |
 
-### Nix (no Go toolchain required)
+### Nix (no toolchain required)
 
 ```sh
 nix run github:mizchi/pkfire -- run hello       # one-shot
 nix profile install github:mizchi/pkfire        # persistent
 ```
 
-The flake builds the `pkf` binary and wraps it so the bundled Pkl CLI
-is on `PATH` automatically — end users do not install Go or Pkl
-themselves. The Nix workflow on every push to `main` and on every PR
-verifies the flake builds cleanly on `aarch64-darwin` and
-`x86_64-linux` runners; the badge above tracks its status.
+The flake builds the `pkf` binary from the MoonBit sources and wraps it
+so the bundled Pkl CLI is on `PATH` automatically — end users install
+neither a MoonBit toolchain nor Pkl themselves. The Nix workflow on
+every push to `main` and on every PR verifies the flake builds cleanly
+on `aarch64-darwin` and `x86_64-linux` runners; the badge above tracks
+its status.
 
-`nix develop` opens a shell with `go`, `pkl`, and `gopls` for working
-on pkfire itself.
+`nix develop` opens a shell with the MoonBit toolchain (`moon`) and
+`pkl` for working on pkfire itself.
 
 ## Quick start
 
@@ -150,15 +162,15 @@ amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.11.0#/Taskf
 
 local build = new Task {
   name = "build"
-  cmd = "go build -o bin/app ./cmd/app"
-  inputs { "**/*.go"; "go.mod"; "go.sum" }
-  outputs { "bin/app" }
+  cmd = "moon build --target native --release"
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
+  outputs { "_build/native/release/build/main/main.exe" }
 }
 
 local test = new Task {
   name = "test"
-  cmd = "go test ./..."
-  inputs { "**/*.go" }
+  cmd = "moon test"
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
   deps { build }            // direct Task reference, typo-checked by Pkl
 }
 
@@ -316,10 +328,10 @@ and `--unsorted` to preserve Taskfile declaration order.
       "name": "build",
       "description": "Compile the app",
       "visibility": "public",
-      "cmd": "go build -o bin/app ./cmd/app",
+      "cmd": "moon build --target native --release",
       "deps": [],
-      "inputs": ["**/*.go", "go.mod", "go.sum"],
-      "outputs": ["bin/app"],
+      "inputs": ["src/**/*.mbt", "src/**/moon.pkg.json", "moon.mod.json"],
+      "outputs": ["_build/native/release/build/main/main.exe"],
       "cache": true,
       "workdir": "services/api",
       "service": false,
@@ -357,15 +369,15 @@ file-change workflow next to the tasks:
 ```pkl
 local build = new Task {
   name = "build"
-  cmd = "go build ./..."
-  inputs { "src/**/*.go"; "go.mod" }
-  outputs { "bin/app" }
+  cmd = "moon build --target native --release"
+  inputs { "src/**/*.mbt"; "moon.mod.json" }
+  outputs { "_build/native/release/build/main/main.exe" }
 }
 
 local test = new Task {
   name = "test"
-  cmd = "go test ./..."
-  inputs { "tests/**/*.go" }
+  cmd = "moon test"
+  inputs { "src/**/*.mbt" }
   deps { build }
 }
 
@@ -374,7 +386,7 @@ tasks { build; test }
 workflowTests {
   new {
     name = "source edit rebuilds and retests"
-    changed { "src/main.go" }
+    changed { "src/main.mbt" }
     direct { "build" }
     tasks { "build"; "test" }
   }
@@ -585,19 +597,21 @@ Open a PR to add yours.
 ## Development
 
 pkfire dogfoods itself: the repo's own `Taskfile.pkl` declares the
-maintenance tasks, and the cross-compile / integration matrix lives
-in `examples/dogfood/Taskfile.pkl`. Both work with the `pkf` binary
-you'd install for any other project.
+maintenance tasks, and the build / integration gate lives in
+`examples/dogfood/Taskfile.pkl`. `pkf` itself is a MoonBit program
+(`pkf-mbt/`); build it with the MoonBit toolchain, then drive the rest
+with the freshly built binary.
 
 ```sh
-go install ./cmd/pkf
+cd pkf-mbt && moon build --target native --release && cd ..
+BIN=pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe
 
-pkf list                                      # see all maintenance tasks
-pkf run preflight                             # vet + go-test + pkl-test + examples + version + format
-pkf run test:race                             # go test -race ./...
-pkf run fmt                                   # pkl format -w on Taskfile.pkl, pkl/, examples/, skills/
-pkf run fmt:check                             # formatting check without writing
-pkf run -f examples/dogfood/Taskfile.pkl ci   # full release gate (cross-compile + integration)
+"$BIN" list                                      # see all maintenance tasks
+"$BIN" run preflight                             # moon check/test + pkl-test + examples + version + format
+"$BIN" run conformance                           # contract harness: candidate vs frozen goldens (41/41)
+"$BIN" run fmt                                    # pkl format -w on Taskfile.pkl, pkl/, examples/, skills/
+"$BIN" run fmt:check                             # formatting check without writing
+"$BIN" run -f examples/dogfood/Taskfile.pkl ci   # full build + integration gate
 ```
 
 To cut a Pkl package release:

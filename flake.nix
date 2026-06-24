@@ -98,13 +98,13 @@
           name = "pkf";
         };
 
-        # `nix develop` for working on pkfire itself: Go toolchain plus
-        # the Pkl CLI (needed for `pkl test` and pkl-go's evaluator).
+        # `nix develop` for working on pkfire itself: the MoonBit
+        # toolchain (`moon`, `moonc`, …) to build `pkf-mbt/`, plus the
+        # Pkl CLI (needed for `pkl test` and `pkl format`).
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            go
-            pkl
-            gopls
+          packages = [
+            pkgs.moonbit-bin.moonbit_latest
+            pkgs.pkl
           ];
         };
       });
