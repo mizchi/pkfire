@@ -8,7 +8,7 @@
 - `pkf affected --since=origin/main` で「PR の diff が触ったタスクだけ」を抽出
 - 各タスクは Pkl の値なので、ジェネリクス的な `local function buildTask(p)` でマトリクス展開できる。 4 OS × 2 arch の cross-compile が 1 関数になる
 - typed params (`pkf run release --version=X.Y.Z`)、`pkf hooks install` で git hook 配線、service オーケストレーション (`pkf up`)、`pkspec` との spec ↔ task 双方向リンクも入っている
-- 0.10.0 リリース済み (`go install github.com/mizchi/pkfire/cmd/pkf@latest` / `nix profile install github:mizchi/pkfire` / GitHub Action は `uses: mizchi/pkfire@v0`)
+- 0.10.0 リリース済み (prebuilt binary を [release](https://github.com/mizchi/pkfire/releases/latest) から DL / `nix profile install github:mizchi/pkfire` / GitHub Action は `uses: mizchi/pkfire@v0`)
 
 ## なぜ書いてるか
 
@@ -21,7 +21,10 @@ pkfire は両方を解決する。Pkl で型を入れて文字列じゃなくし
 ## 動かしてみる
 
 ```sh
-go install github.com/mizchi/pkfire/cmd/pkf@latest
+# prebuilt binary を release から DL (target: linux-amd64 | linux-arm64 | darwin-arm64)
+target=linux-amd64
+curl -fsSL -O "https://github.com/mizchi/pkfire/releases/latest/download/pkf-${target}.tar.gz"
+tar -xzf "pkf-${target}.tar.gz" && install -m 0755 pkf /usr/local/bin/pkf
 # pkl CLI も必要 (https://pkl-lang.org/main/current/pkl-cli/)
 
 pkf init
@@ -182,7 +185,7 @@ local prePush = new Task {
 
 ### 9. pkspec との spec ↔ task リンク
 
-[`mizchi/pkspec`](https://github.com/mizchi/pkspec) は spec / test contract tool。 pkfire の main branch (次の 0.11.0 リリースで入る) で `Task.specRef` が入って、 release / migration 系の "コードに居場所が無い" 実装も spec から指せるようになった。 0.10.0 ではまだ使えないので、 試すなら `go install github.com/mizchi/pkfire/cmd/pkf@main` で main を入れる。
+[`mizchi/pkspec`](https://github.com/mizchi/pkspec) は spec / test contract tool。 pkfire の main branch (次の 0.11.0 リリースで入る) で `Task.specRef` が入って、 release / migration 系の "コードに居場所が無い" 実装も spec から指せるようになった。 0.10.0 ではまだ使えないので、 試すなら main を build する (`cd pkf-mbt && moon build --target native --release`)。
 
 ```pkl
 local release = new Task {
@@ -211,7 +214,7 @@ pkf affected --since=HEAD~1 --specs-only | xargs pkspec lint --scan
 
 - **言語非依存 = 言語固有最適化を持たない**。`go test -count=1` の cache 機構と pkfire の cache は別物。pkfire が cache miss して内部の `go test` も全テスト走らせる、みたいな二重 cache の話は出る (普通は気にならないが)
 - **Pkl の学習コスト**。amends / template / `for` 構文に最初慣れる必要がある。引き換えに型と composition が手に入る、というトレードオフを受け入れられないと選ぶ意味がない
-- **Mac × Nix のビルド遅延**。Nix 経由 install は flake build に少し時間がかかる。手っ取り早く触るなら `go install` が早い
+- **Mac × Nix のビルド遅延**。Nix 経由 install は flake build に少し時間がかかる。手っ取り早く触るなら release の prebuilt binary を DL するのが早い
 
 ## 次のリリース
 
@@ -220,13 +223,13 @@ pkf affected --since=HEAD~1 --specs-only | xargs pkspec lint --scan
 ## さわってみる
 
 ```sh
-go install github.com/mizchi/pkfire/cmd/pkf@latest
+nix run github:mizchi/pkfire -- init   # or: release から prebuilt binary を DL
 pkf init && pkf list && pkf run hello
 ```
 
 既存 just / Makefile からの移行サンプルは
 [`examples/`](https://github.com/mizchi/pkfire/tree/main/examples) を見るのが早い。
-`basic` (最小)、 `dogfood` (pkfire 自身の cross-compile マトリクス)、 `monorepo` /
+`basic` (最小)、 `dogfood` (pkfire 自身の build + integration ゲート)、 `monorepo` /
 `split-import` / `node` / `rust` / `diagnostics` / `remote-cache-worker` /
 `with-pkspec` (今回の spec 連携) が並んでいる。
 

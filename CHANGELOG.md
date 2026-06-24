@@ -10,6 +10,27 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-24
+
+### Changed
+
+- **`pkf` is now a MoonBit binary.** The Go implementation
+  (`cmd/pkf/` + `internal/`) and the Go conformance harness have been
+  removed; the repo contains zero Go. The CLI contract (JSON shapes,
+  exit codes, env, Pkl schema, side effects) is unchanged — verified
+  by the MoonBit-native conformance runner (41/41 against the frozen
+  goldens). The Pkl evaluator is embedded (no `mpkl` subprocess).
+- Distribution: prebuilt binaries for `linux-amd64`, `linux-arm64`,
+  and `darwin-arm64`. The Nix flake builds from the MoonBit sources.
+
+### Removed
+
+- The `go install github.com/mizchi/pkfire/cmd/pkf` acquisition
+  channel. Use the prebuilt release binary, the Nix flake, or the
+  GitHub Action.
+- Intel macOS (`darwin-amd64`) binaries — the MoonBit toolchain has no
+  x86_64 macOS build.
+
 ## [0.11.0] - 2026-06-22
 
 ### Added
@@ -609,7 +630,8 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.11.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.12.0...HEAD
+[0.12.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.0
 [0.11.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.11.0
 [0.10.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.10.0
 [0.9.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.9.0

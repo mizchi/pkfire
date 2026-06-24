@@ -1,4 +1,5 @@
-/// Complex dogfood Taskfile (A2 schema): typed DAG, cross-compile matrix.
+/// Complex dogfood Taskfile (A2 schema): typed DAG building the
+/// MoonBit `pkf` from source.
 ///
 /// All deps are *direct Task references*; renaming a task in one place
 /// updates every reference, and a typo becomes a Pkl name-resolution
@@ -9,68 +10,49 @@
 /// against the schema in this commit, including unreleased changes.
 /// Other examples use the package URI — see those for the recommended
 /// form to copy into your own project.
+///
+/// `pkf` itself is a MoonBit program (`pkf-mbt/`). The MoonBit
+/// toolchain produces a single native binary per host; there is no
+/// GOOS/GOARCH-style cross matrix, so this gate builds the host
+/// binary once and exercises it end to end. Release cross-builds are
+/// done on a runner matrix in `.github/workflows/pkl-publish.yml`.
 amends "../../pkl/Taskfile.pkl"
 
 local sources: Listing<String> = new {
-  "cmd/**/*.go"
-  "internal/**/*.go"
-  "go.mod"
-  "go.sum"
+  "pkf-mbt/src/**/*.mbt"
+  "pkf-mbt/src/**/*.c"
+  "pkf-mbt/src/**/moon.pkg"
+  "pkf-mbt/moon.mod.json"
 }
 
 local repoRoot: String = "../.."
 
-local class Platform {
-  os: String
-  arch: String
-  fixed name: String = "\(os)-\(arch)"
-}
+/// Path to the native release binary the MoonBit toolchain emits.
+local pkfBin: String = "pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe"
 
-local platforms: Listing<Platform> = new {
-  new { os = "darwin"; arch = "arm64" }
-  new { os = "darwin"; arch = "amd64" }
-  new { os = "linux"; arch = "amd64" }
-  new { os = "linux"; arch = "arm64" }
-}
-
-local function buildTask(p: Platform): Task = new {
-  name = "build:\(p.name)"
-  description = "Cross-compile pkf for \(p.name)"
-  cmd = "go build -o bin/pkf-\(p.name) ./cmd/pkf"
-  workdir = repoRoot
-  env {
-    ["GOOS"] = p.os
-    ["GOARCH"] = p.arch
-    ["CGO_ENABLED"] = "0"
-  }
-  inputs = sources
-  outputs { "bin/pkf-\(p.name)" }
-}
-
-local builds: Listing<Task> = new {
-  for (p in platforms) {
-    buildTask(p)
-  }
-}
-
-local vet: Task = new {
-  name = "vet"
-  description = "go vet"
-  cmd = "go vet ./..."
+local moonCheck: Task = new {
+  name = "moon-check"
+  description = "Type-check the MoonBit sources (native target)"
+  cmd = "cd pkf-mbt && moon check --target native"
   workdir = repoRoot
   inputs = sources
 }
 
-local goTest: Task = new {
-  name = "go-test"
-  description = "Go unit tests with race detector"
-  cmd = "go test -race ./..."
+local build: Task = new {
+  name = "build"
+  description = "Build the native release `pkf` binary"
+  cmd = "cd pkf-mbt && moon build --target native --release"
   workdir = repoRoot
-  inputs {
-    ...sources
-    "examples/**/*.pkl"
-    "pkl/**/*.pkl"
-  }
+  inputs = sources
+  outputs { pkfBin }
+}
+
+local moonTest: Task = new {
+  name = "moon-test"
+  description = "MoonBit unit tests (native target)"
+  cmd = "cd pkf-mbt && moon test --target native"
+  workdir = repoRoot
+  inputs = sources
 }
 
 local pklTest: Task = new {
@@ -85,77 +67,58 @@ local pklTest: Task = new {
   }
 }
 
-local checksum: Task = new {
-  name = "checksum"
-  description = "Aggregate SHA256 over the cross-compiled binaries"
-  cmd = "cd bin && shasum -a 256 pkf-* > SHA256SUMS"
-  workdir = repoRoot
-  inputs {
-    for (p in platforms) {
-      "bin/pkf-\(p.name)"
-    }
-  }
-  outputs { "bin/SHA256SUMS" }
-  deps = builds
-}
-
 local integration: Task = new {
   name = "integration"
   description = "Smoke `pkf run hello` using the freshly built host binary"
-  cmd = "bin/pkf-$(go env GOOS)-$(go env GOARCH) run -f examples/basic/Taskfile.pkl hello"
+  cmd = "\(pkfBin) run -f examples/basic/Taskfile.pkl hello"
   workdir = repoRoot
   inputs {
-    for (p in platforms) {
-      "bin/pkf-\(p.name)"
-    }
+    pkfBin
     "examples/basic/Taskfile.pkl"
     "pkl/Taskfile.pkl"
   }
-  deps = builds
+  deps { build }
 }
 
-/// `pkf init` end-to-end: the cross-compiled host binary writes a
+/// `pkf init` end-to-end: the freshly built host binary writes a
 /// starter Taskfile, and we sanity-check that the file actually came
-/// out structurally well-formed. The Go unit test (TestInitWritesSkeleton)
-/// covers the same logic at the function level; this task catches
-/// regressions that escape the unit test — a broken release-stamping
-/// of `version`, a corrupted `initSkeleton` template after a refactor,
-/// or a bin-layout mistake in the cross-compile step.
+/// out structurally well-formed. The MoonBit unit tests cover the same
+/// logic at the function level; this task catches regressions that
+/// escape the unit test — a broken release-stamping of `version`, a
+/// corrupted `initSkeleton` template after a refactor, or a build
+/// mistake.
 local initSmoke: Task = new {
   name = "init-smoke"
   description = "pkf init writes a structurally valid Taskfile (end-to-end)"
   cmd =
     """
     rm -rf bin/init-smoke && mkdir -p bin/init-smoke
-    bin/pkf-$(go env GOOS)-$(go env GOARCH) init -f bin/init-smoke/Taskfile.pkl
+    \(pkfBin) init -f bin/init-smoke/Taskfile.pkl
     grep -q '^amends ' bin/init-smoke/Taskfile.pkl
     grep -q '^tasks {' bin/init-smoke/Taskfile.pkl
     """
   workdir = repoRoot
   inputs {
-    for (p in platforms) {
-      "bin/pkf-\(p.name)"
-    }
-    "cmd/pkf/main.go"
+    pkfBin
+    "pkf-mbt/src/cmd/pkf/**/*.mbt"
   }
   outputs { "bin/init-smoke/Taskfile.pkl" }
-  deps = builds
+  deps { build }
 }
 
 local ci: Task = new {
   name = "ci"
-  description = "Aggregate gate: vet, schema, unit tests, matrix, checksum, integration, init-smoke"
+  description = "Aggregate gate: moon-check, build, schema, unit tests, integration, init-smoke"
   cmd = "echo all green"
   cache = false
-  deps { vet; pklTest; goTest; checksum; integration; initSmoke }
+  deps { moonCheck; build; pklTest; moonTest; integration; initSmoke }
 }
 
 tasks {
-  ...builds
-  vet
-  goTest
+  moonCheck
+  build
+  moonTest
   pklTest
-  checksum
   integration
   initSmoke
   ci

@@ -107,14 +107,16 @@ jobs:
       - name: Moon version
         run: moon version --all
 
-      # Bake the release version into pkf_version() before building. This
-      # is a throwaway sed on the CI checkout only — main.mbt keeps the
-      # "0.0.1" constant so local/conformance builds are unaffected.
+      # Bake the resolved tag version into pkf_version() before building.
+      # This is a throwaway sed on the CI checkout only. The source keeps
+      # whatever semver bump-version.sh last set (the declared schema
+      # version); CI overrides it with the tag version so the released
+      # binary always matches its tag even if the source bump was missed.
       - name: Inject version
         run: |
           version="${{ needs.resolve.outputs.version }}"
           file="pkf-mbt/src/cmd/pkf/main.mbt"
-          sed -i.bak 's/^  "0\.0\.1"$/  "'"$version"'"/' "$file"
+          sed -i.bak -E 's/^  "[0-9]+\.[0-9]+\.[0-9]+"$/  "'"$version"'"/' "$file"
           rm -f "$file.bak"
           grep -nF "  \"$version\"" "$file" || { echo "::error::version injection failed"; exit 1; }
 
@@ -211,7 +213,8 @@ jobs:
             "pkldist/$tag.zip.sha256" \
             dist/pkf-linux-amd64.tar.gz dist/pkf-linux-amd64.tar.gz.sha256 \
             dist/pkf-linux-arm64.tar.gz dist/pkf-linux-arm64.tar.gz.sha256 \
-            dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256
+            dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256 \
+            install.sh
         # Action-friendly `v<ver>` + floating `v<major>` tags are
         # synced by `.github/workflows/v-tags.yml`, which fires via
         # workflow_run on this workflow's success.

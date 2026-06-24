@@ -6,20 +6,14 @@ on:
     paths:
       - "flake.nix"
       - "flake.lock"
-      - "go.mod"
-      - "go.sum"
-      - "cmd/**"
-      - "internal/**"
+      - "pkf-mbt/**"
       - "pkl/**"
       - ".github/workflows/nix.yml"
   pull_request:
     paths:
       - "flake.nix"
       - "flake.lock"
-      - "go.mod"
-      - "go.sum"
-      - "cmd/**"
-      - "internal/**"
+      - "pkf-mbt/**"
       - "pkl/**"
       - ".github/workflows/nix.yml"
   workflow_dispatch:

@@ -9,13 +9,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Install MoonBit CLI
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
       - name: Install Pkl
         run: |
@@ -27,8 +28,13 @@ jobs:
       - name: Check pkfire@<ver> reference consistency
         run: scripts/check-version-consistency.sh
 
-      - name: Build pkf
-        run: go install ./cmd/pkf
+      - name: Build pkf (release)
+        working-directory: pkf-mbt
+        run: |
+          moon update
+          moon build --target native --release
 
-      - name: Run dogfood ci (vet + go-test + pkl-test + matrix + checksum + integration)
-        run: pkf run -f examples/dogfood/Taskfile.pkl ci
+      - name: Run dogfood ci (moon check/test + schema + build + integration + init-smoke)
+        run: |
+          BIN="$GITHUB_WORKSPACE/pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe"
+          "$BIN" run -f examples/dogfood/Taskfile.pkl ci

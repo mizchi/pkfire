@@ -18,6 +18,17 @@ echo "bumping pkfire@${old} → pkfire@${new}"
 
 perl -i -pe "s/version = \"${old}\"/version = \"${new}\"/" pkl/PklProject
 
+# Keep the MoonBit binary version in lockstep with the Pkl schema
+# version. The pkf binary is a MoonBit program; its module version
+# (moon.mod.json) and the `pkf_version()` constant both ship `${new}`.
+# The release workflow additionally sed-injects the resolved tag
+# version into pkf_version() at build time, but the source constant
+# tracks the declared version so local / `moon install` builds report
+# the right number too. The regexes are value-agnostic because the
+# binary version (0.x.y) never matched the schema version anyway.
+perl -i -pe "s/^(\s*\"version\":\s*)\"[^\"]*\"/\${1}\"${new}\"/" pkf-mbt/moon.mod.json
+perl -i -pe "s/^  \"[0-9]+\.[0-9]+\.[0-9]+\"\$/  \"${new}\"/" pkf-mbt/src/cmd/pkf/main.mbt
+
 # Examples are deliberately excluded: they amend the public Pkl
 # package URL, which only resolves once a release tag has been
 # pushed and the publish workflow has uploaded the package zip.

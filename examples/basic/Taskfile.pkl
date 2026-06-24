@@ -9,15 +9,15 @@ local hello = new Task {
 
 local build = new Task {
   name = "build"
-  cmd = "go build -o bin/app ./cmd/app"
-  inputs { "**/*.go"; "go.mod"; "go.sum" }
-  outputs { "bin/app" }
+  cmd = "moon build --target native --release"
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
+  outputs { "_build/native/release/build/main/main.exe" }
 }
 
 local test = new Task {
   name = "test"
-  cmd = "go test ./..."
-  inputs { "**/*.go" }
+  cmd = "moon test"
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
   deps { build }
 }
 

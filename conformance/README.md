@@ -1,26 +1,27 @@
 # pkf conformance harness
 
-Differential contract tests: the Go `pkf` is the oracle, the MoonBit
-`pkf` is the candidate. Scenarios are typed in `Conformance.pkl` and
-listed in `scenarios.pkl`. Committed goldens under `golden/` are the
-frozen contract.
+Contract tests for the MoonBit `pkf`: the committed goldens under
+`golden/` are the frozen ground truth, and the binary must reproduce
+them exactly. Scenarios are typed in `Conformance.pkl` and listed in
+`scenarios.pkl`. The runner is a MoonBit program under `src/` (it
+evaluates `scenarios.pkl` through the embedded `@pkl` loader — the same
+dependency `pkf` itself uses — so there is no separate toolchain).
 
 ## Run
-
-    go build -o /tmp/pkf-go ./cmd/pkf        # from repo root
-    cd conformance
-    PKF_GO_BIN=/tmp/pkf-go go test ./...      # machinery + oracle self-check
-
-## Candidate parity (writes LEDGER.md)
 
     cd pkf-mbt && moon build --target native --release && cd ..
     cd conformance
     PKF_MBT_BIN="$PWD/../pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe" \
-      go test -run TestCandidateParity -v
+      moon run --target native --release src
 
-## Regenerate goldens (after an intentional Go change)
+Exit non-zero if any scenario is RED. This is the permanent contract
+gate (the `.github/workflows/conformance.yml` job runs exactly this).
 
-    PKF_GO_BIN=/tmp/pkf-go go test -run TestUpdateGolden -update
+## Regenerate goldens (after an intentional behavior change)
 
-`PKF_CONFORMANCE_STRICT=1` makes candidate RED rows fail the build (use
-once a command is expected to be at parity).
+    PKF_MBT_BIN="$PWD/../pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe" \
+      moon run --target native --release src -- --update
+
+Re-captures `golden/<id>/*` from the current `PKF_MBT_BIN` output.
+Review the diff before committing — the goldens lock pkf's contracted
+behavior, so a regeneration is an intentional contract change.
