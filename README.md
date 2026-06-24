@@ -152,12 +152,12 @@ nix run github:mizchi/pkfire -- run hello       # one-shot
 nix profile install github:mizchi/pkfire        # persistent
 ```
 
-The flake builds the `pkf` binary from the MoonBit sources and wraps it
-so the bundled Pkl CLI is on `PATH` automatically — end users install
-neither a MoonBit toolchain nor Pkl themselves. The Nix workflow on
-every push to `main` and on every PR verifies the flake builds cleanly
-on `aarch64-darwin` and `x86_64-linux` runners; the badge above tracks
-its status.
+The flake installs the prebuilt `pkf` release binary (patched for the
+Nix closure on Linux) and wraps it so the bundled Pkl CLI is on `PATH`
+automatically — end users install neither a MoonBit toolchain nor Pkl
+themselves. The Nix workflow on every push to `main` and on every PR
+verifies the flake builds cleanly on `aarch64-darwin` and `x86_64-linux`
+runners; the badge above tracks its status.
 
 `nix develop` opens a shell with the MoonBit toolchain (`moon`) and
 `pkl` for working on pkfire itself.

@@ -7,86 +7,92 @@
     nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # MoonBit toolchain + `buildMoonPackage` (reproducible source build inside
-    # the Nix sandbox). The companion `moon-registry` input is the mooncakes.io
-    # package index, fetched at eval time; `buildMoonPackage` then resolves every
-    # transitive dep as a fixed-output derivation keyed by the index checksum, so
-    # the build itself runs with no network (pure).
+    # MoonBit toolchain for the `nix develop` shell (building pkf-mbt/ from
+    # source). The package itself no longer builds from source — it installs
+    # the prebuilt release binary — so the mooncakes index input is gone.
     moonbit-overlay.url = "github:moonbit-community/moonbit-overlay";
-    moon-registry = {
-      url = "git+https://mooncakes.io/git/index";
-      flake = false;
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, moonbit-overlay, moon-registry }:
-    flake-utils.lib.eachSystem [
-      "x86_64-linux"
-      "aarch64-linux"
-      "aarch64-darwin"
-      # No x86_64-darwin: the MoonBit toolchain has no Intel macOS build.
-    ] (system:
+  outputs = { self, nixpkgs, flake-utils, moonbit-overlay }:
+    let
+      # pkf is distributed as a prebuilt MoonBit binary. This flake installs
+      # the release tarball rather than compiling from source (fast, and the
+      # same artifact `install.sh` / the GitHub Action ship).
+      #
+      # To bump after cutting a new release: set `version`, then refresh each
+      # sha256 from the published checksums, e.g.
+      #   curl -fsSL https://github.com/mizchi/pkfire/releases/download/pkfire@<v>/pkf-<plat>.tar.gz.sha256
+      version = "0.12.0";
+      assets = {
+        "x86_64-linux" = {
+          plat = "linux-amd64";
+          sha256 = "c4f18db054f27059ebd9ee01a24cad4f4a3f2963d3b53b51ddd1485db6d94d31";
+        };
+        "aarch64-linux" = {
+          plat = "linux-arm64";
+          sha256 = "f43abea5c848d2d40b90aac9f70737e1183542c50c923ebb9da63b6046823361";
+        };
+        "aarch64-darwin" = {
+          plat = "darwin-arm64";
+          sha256 = "46868135583f4a8d8cb91fb8c11bbfac54dd727ca9645107294c8ad2993a7472";
+        };
+        # No x86_64-darwin: the MoonBit toolchain has no Intel macOS build.
+      };
+    in
+    flake-utils.lib.eachSystem (builtins.attrNames assets) (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ moonbit-overlay.overlays.default ];
+        pkgs = import nixpkgs { inherit system; };
+        asset = assets.${system};
+        isLinux = pkgs.stdenv.hostPlatform.isLinux;
+
+        tarball = pkgs.fetchurl {
+          url = "https://github.com/mizchi/pkfire/releases/download/pkfire@${version}/pkf-${asset.plat}.tar.gz";
+          sha256 = asset.sha256;
         };
 
-        # Build the MoonBit `pkf` from source (pkf-mbt/) via `moon build
-        # --target native --release`. pkf uses mizchi/zlib's pure-MoonBit
-        # deflate, so the binary links only libc — no system zlib needed.
-        pkfMbt = pkgs.moonPlatform.buildMoonPackage {
+        # Install the prebuilt `pkf`. On Linux the binary was built on a
+        # generic runner, so autoPatchelfHook rewrites the ELF interpreter +
+        # rpath for the Nix closure (the binary links only libc — pkf uses
+        # pure-MoonBit deflate, no system zlib). Two runtime wraps:
+        #   1. `pkf` shells out to `pkl` — keep it on PATH.
+        #   2. moonbitlang/async's TLS module dlopen()s libssl.so.3 at startup
+        #      (unconditional). dlopen consults LD_LIBRARY_PATH (not DT_RUNPATH),
+        #      so autoPatchelf can't help — put openssl on LD_LIBRARY_PATH.
+        #      macOS dlopen's /usr/lib system libssl, so this is Linux-only.
+        pkfire = pkgs.stdenv.mkDerivation {
           pname = "pkfire";
-          version = "0.0.0";
+          inherit version;
+          src = tarball;
+          dontUnpack = true;
 
-          src = ./pkf-mbt;
-          moonModJson = ./pkf-mbt/moon.mod.json;
-          moonRegistryIndex = moon-registry;
+          nativeBuildInputs = [ pkgs.makeWrapper ]
+            ++ pkgs.lib.optionals isLinux [ pkgs.autoPatchelfHook ];
+          # autoPatchelfHook resolves the binary's NEEDED libs against these.
+          buildInputs = pkgs.lib.optionals isLinux [ pkgs.stdenv.cc.cc.lib ];
 
-          # Skip the in-sandbox `moon test` run; this derivation packages the
-          # `pkf` binary, conformance is gated in CI.
-          doCheck = false;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/bin
+            tar -xzf "$src"
+            install -m 0755 pkf $out/bin/pkf
+            runHook postInstall
+          '';
 
-          # Ship the MoonBit native binary as the toolchain emitted it
-          # (release-built; debug_info is small). The released tarballs come
-          # from build-native.sh, not Nix, so this only affects the nix package.
-          dontStrip = true;
+          postFixup = ''
+            wrapProgram $out/bin/pkf \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pkl ]} \
+              ${pkgs.lib.optionalString isLinux
+                "--prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}"}
+          '';
+
+          meta = with pkgs.lib; {
+            description = "Typed task runner with Bazel-style incremental caching, configured in Pkl";
+            homepage = "https://github.com/mizchi/pkfire";
+            license = licenses.mit;
+            mainProgram = "pkf";
+            platforms = builtins.attrNames assets;
+          };
         };
-
-        # `pkf` shells out to `pkl` at evaluation time. Wrap the binary so the
-        # bundled Pkl CLI is on PATH for users who installed pkfire via Nix
-        # without separately installing pkl. buildMoonPackage installs the
-        # MoonBit output as `bin/pkf` (renamed from pkf.exe).
-        # Wrap the raw `buildMoonPackage` output in a separate runCommand so
-        # the wrapper is guaranteed to apply (buildMoonPackage doesn't honour
-        # the stdenv postInstall hook). Two runtime needs:
-        #   1. `moonbitlang/async`'s TLS module dlopen()s `libssl.so.3` during
-        #      moonbit_init (runs unconditionally at startup), so libssl must
-        #      be findable or the binary core-dumps before main (moonbit_panic
-        #      ← tls.load__openssl). The Nix closure has no system OpenSSL →
-        #      put it on LD_LIBRARY_PATH (dlopen consults LD_LIBRARY_PATH;
-        #      DT_RUNPATH does NOT apply to dlopen, so patchelf --add-rpath
-        #      would not help). macOS dlopen's /usr/lib system libssl, so this
-        #      is a no-op there.
-        #   2. `pkf` shells out to `pkl` — keep it on PATH.
-        pkfire = pkgs.runCommand "pkfire-${pkfMbt.version or "0.0.0"}"
-          {
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            meta = (pkfMbt.meta or { }) // (with pkgs.lib; {
-              description = "Typed task runner with Bazel-style incremental caching, configured in Pkl";
-              homepage = "https://github.com/mizchi/pkfire";
-              license = licenses.mit;
-              mainProgram = "pkf";
-              # MoonBit toolchain targets: linux x86_64/arm64 + darwin arm64
-              # (no Intel macOS build).
-              platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
-            });
-          } ''
-          mkdir -p $out/bin
-          makeWrapper ${pkfMbt}/bin/pkf $out/bin/pkf \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pkl ]} \
-            --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}
-        '';
       in {
         packages = {
           default = pkfire;
@@ -98,12 +104,9 @@
           name = "pkf";
         };
 
-        # `nix develop` for working on pkfire itself: the MoonBit
-        # toolchain (`moon`, `moonc`, …) to build `pkf-mbt/`, plus the
-        # Pkl CLI (needed for `pkl test` and `pkl format`). The overlay's
-        # `packages.<system>.default` is the canonical moon toolchain
-        # (== moonbit_latest); the `pkgs.moonbit-bin` attrset only
-        # carries version-pinned keys, not `moonbit_latest`, on Linux.
+        # `nix develop` for working on pkfire itself: the MoonBit toolchain
+        # (`moon`, `moonc`, …) to build `pkf-mbt/` from source, plus the Pkl
+        # CLI (needed for `pkl test` and `pkl format`).
         devShells.default = pkgs.mkShell {
           packages = [
             moonbit-overlay.packages.${system}.default
