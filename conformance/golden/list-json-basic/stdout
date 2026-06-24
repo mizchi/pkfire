@@ -3,18 +3,18 @@
     {
       "name": "build",
       "visibility": "public",
-      "cmd": "go build -o bin/app ./cmd/app",
+      "cmd": "moon build --target native --release",
       "shell": "bash",
       "shellFlags": [
         "-c"
       ],
       "inputs": [
-        "**/*.go",
-        "go.mod",
-        "go.sum"
+        "src/**/*.mbt",
+        "src/**/moon.pkg.json",
+        "moon.mod.json"
       ],
       "outputs": [
-        "bin/app"
+        "_build/native/release/build/main/main.exe"
       ],
       "cache": true,
       "service": false,
@@ -40,7 +40,7 @@
     {
       "name": "test",
       "visibility": "public",
-      "cmd": "go test ./...",
+      "cmd": "moon test",
       "shell": "bash",
       "shellFlags": [
         "-c"
@@ -49,7 +49,9 @@
         "build"
       ],
       "inputs": [
-        "**/*.go"
+        "src/**/*.mbt",
+        "src/**/moon.pkg.json",
+        "moon.mod.json"
       ],
       "cache": true,
       "service": false,

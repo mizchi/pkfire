@@ -10,7 +10,7 @@
 /// `"$@"` (always quote it). They are also part of the action key when
 /// `cache = true`, so two different invocations produce two cache
 /// entries; for command wrappers you typically want `cache = false`.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.11.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.0#/Taskfile.pkl"
 
 /// Wrapper for an arbitrary node script. `pkf run script -- foo.ts a b`
 /// is equivalent to `node foo.ts a b`.
