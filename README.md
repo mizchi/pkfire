@@ -54,11 +54,29 @@ mode that reruns only the affected subgraph.
 
 ## Install
 
-### Prebuilt binary
+### Install script
 
-`pkf` is a self-contained MoonBit binary. Download the tarball for your
-platform from the [latest release](https://github.com/mizchi/pkfire/releases/latest)
-and put `pkf` on `PATH`:
+`pkf` is a self-contained MoonBit binary. The installer detects your
+platform, downloads the matching release tarball, verifies its
+checksum, and drops `pkf` into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mizchi/pkfire/main/install.sh | sh
+```
+
+Customize with env vars or flags:
+
+```sh
+# pin a version and choose the install dir
+curl -fsSL https://raw.githubusercontent.com/mizchi/pkfire/main/install.sh \
+  | sh -s -- --version 0.12.0 --dir /usr/local/bin
+# env-var form: PKF_VERSION, PKF_INSTALL_DIR, PKF_NO_VERIFY
+```
+
+### Manual download
+
+Or grab the tarball for your platform from the
+[latest release](https://github.com/mizchi/pkfire/releases/latest):
 
 ```sh
 # pick your target: linux-amd64 | linux-arm64 | darwin-arm64

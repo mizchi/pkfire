@@ -213,7 +213,8 @@ jobs:
             "pkldist/$tag.zip.sha256" \
             dist/pkf-linux-amd64.tar.gz dist/pkf-linux-amd64.tar.gz.sha256 \
             dist/pkf-linux-arm64.tar.gz dist/pkf-linux-arm64.tar.gz.sha256 \
-            dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256
+            dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256 \
+            install.sh
         # Action-friendly `v<ver>` + floating `v<major>` tags are
         # synced by `.github/workflows/v-tags.yml`, which fires via
         # workflow_run on this workflow's success.
