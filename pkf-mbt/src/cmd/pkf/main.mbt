@@ -4605,7 +4605,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
           // unreachable — positionals are emptied for non-target tasks.
           ignore(positionals)
         }
-        if !task.accepts_args && name == target && parsed.positionals.length() > 0 {
+        if !task.accepts_args &&
+          name == target &&
+          parsed.positionals.length() > 0 &&
+          not(is_git_hook_event(target)) {
           die(
             "pkf run: task `\{target}` does not accept positional args " +
             "(set `acceptsArgs = true` to allow)",
@@ -5090,6 +5093,22 @@ let git_hook_events : Array[String] = [
 ///| Render the shim script for a single git hook event.
 fn hook_script(event : String) -> String {
   "#!/bin/sh\n" + pkf_hook_marker + "\nexec pkf run " + event + " -- \"$@\"\n"
+}
+
+///| True when `name` is a recognised git client-side hook event. Used to
+///  exempt hook tasks from the "task does not accept positional args"
+///  guard: git always hands hook scripts argv (e.g. pre-push gets
+///  `<remote> <url>`), and `pkf hooks install` forwards it as
+///  `pkf run <event> -- "$@"`, so rejecting it would break every
+///  installed hook. The args are still dropped unless the task sets
+///  acceptsArgs (run_task only forwards positionals when accepts_args).
+fn is_git_hook_event(name : String) -> Bool {
+  for e in git_hook_events {
+    if e == name {
+      return true
+    }
+  }
+  false
 }
 
 ///| Walk up from `start_dir` looking for a `.git` entry; return the hooks
