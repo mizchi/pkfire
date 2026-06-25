@@ -1333,27 +1333,30 @@ fn remote_entry_url(base : String, key : String) -> String {
 ///|
 async fn remote_get_bytes(url : String) -> Bytes? {
   let headers = remote_headers()
-  match (try? @http.get(url, headers~)) {
-    Ok((resp, data)) =>
-      if resp.code == 200 {
-        // `&Data::binary` returns the raw response bytes without any
-        // UTF-8 round-trip. `data.text@utf8.encode()` would re-encode
-        // the bytes as UTF-16 (MoonBit's String.to_bytes default),
-        // wrecking binary payloads (Mach-O / ELF / archives).
-        Some(data.binary())
-      } else {
-        None
-      }
-    Err(_) => None
+  try {
+    let (resp, data) = @http.get(url, headers~)
+    if resp.code == 200 {
+      // `&Data::binary` returns the raw response bytes without any
+      // UTF-8 round-trip. `data.text().to_bytes()` would re-encode
+      // the bytes as UTF-16 (MoonBit's String.to_bytes default),
+      // wrecking binary payloads (Mach-O / ELF / archives).
+      Some(data.binary())
+    } else {
+      None
+    }
+  } catch {
+    _ => None
   }
 }
 
 ///|
 async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
   let headers = remote_headers()
-  match (try? @http.put(url, bytes, headers~)) {
-    Ok((resp, _)) => resp.code >= 200 && resp.code < 300
-    Err(_) => false
+  try {
+    let (resp, _) = @http.put(url, bytes, headers~)
+    resp.code >= 200 && resp.code < 300
+  } catch {
+    _ => false
   }
 }
 
@@ -1422,12 +1425,12 @@ async fn probe_port(port : Int) -> Bool {
   let addr = @socket.Addr::parse("127.0.0.1:" + port.to_string()) catch {
     _ => return false
   }
-  match (try? @socket.Tcp::connect(addr)) {
-    Ok(tcp) => {
-      tcp.close()
-      true
-    }
-    Err(_) => false
+  try {
+    let tcp = @socket.Tcp::connect(addr)
+    tcp.close()
+    true
+  } catch {
+    _ => false
   }
 }
 
@@ -1581,9 +1584,12 @@ async fn signal_pid_tree(pid : Int, signal : @signal.Signal) -> Unit {
     @signal.SIGHUP => "HUP"
     _ => "KILL"
   }
-  ignore(
-    try? @process.collect_output("pkill", ["-" + sig_name, "-P", pid.to_string()]),
-  )
+  try {
+    @process.collect_output("pkill", ["-" + sig_name, "-P", pid.to_string()])
+    |> ignore
+  } catch {
+    _ => ()
+  }
   @process.kill(pid, signal)
 }
 
@@ -1601,12 +1607,12 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
         let deadline_iters = svc.shutdown_timeout_seconds * 20
         let mut exited = false
         for j in 0..<deadline_iters {
-          match (try? p.try_wait()) {
-            Ok(Some(_)) => {
-              exited = true
-              break
-            }
-            _ => ()
+          let waited = try { p.try_wait() } catch {
+            _ => None
+          }
+          if waited is Some(_) {
+            exited = true
+            break
           }
           @async.sleep(50)
           ignore(j)
@@ -1614,18 +1620,21 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
         if !exited {
           // SIGKILL is not in mizchi/x/signal.Signal — fall back to the
           // subprocess `kill -KILL` for the hard shutdown path.
-          ignore(
-            try? @process.collect_output("pkill", [
-              "-KILL", "-P", p.pid.to_string(),
-            ]),
-          )
-          ignore(
-            try? @process.collect_output("kill", [
-              "-KILL", p.pid.to_string(),
-            ]),
-          )
+          try {
+            @process.collect_output("pkill", ["-KILL", "-P", p.pid.to_string()])
+            |> ignore
+          } catch {
+            _ => ()
+          }
+          try {
+            @process.collect_output("kill", ["-KILL", p.pid.to_string()]) |> ignore
+          } catch {
+            _ => ()
+          }
         }
-        ignore(try? p.wait())
+        try p.wait() |> ignore catch {
+          _ => ()
+        }
       }
       None => ()
     }
@@ -1714,9 +1723,11 @@ async fn[X] run_task(
       )
       return 2
     }
-    match (try? start_service(group, plan, service_task, params)) {
-      Ok(rs) => running.push(rs)
-      Err(err) => {
+    try {
+      let rs = start_service(group, plan, service_task, params)
+      running.push(rs)
+    } catch {
+      err => {
         stop_services(running)
         println("pkf: \{err}")
         return 2
@@ -1825,18 +1836,22 @@ async fn eval_taskfile(taskfile : String) -> String {
   // The embedded Pkl loader evaluates the Taskfile fully in-process — local,
   // cached, remote `package://`, `http(s)://` and glob-import modules are all
   // resolved here, with no eval subprocess to fall back to.
-  match (try? @loader.eval_module_path(taskfile)) {
-    Ok(@pkl.EvalOk(value)) =>
+  let result = try {
+    @loader.eval_module_path(taskfile)
+  } catch {
+    err => {
+      die("evaluate \{taskfile}: \{err.message()}")
+      panic()
+    }
+  }
+  match result {
+    @pkl.EvalOk(value) =>
       @pkl.render_value_as_json(extract_output_value(value))
-    Ok(@pkl.EvalError(errors)) => {
+    @pkl.EvalError(errors) => {
       for e in errors {
         println("pkf: " + e.message)
       }
       die("pkl eval failed")
-      panic()
-    }
-    Err(err) => {
-      die("evaluate \{taskfile}: \{err.message()}")
       panic()
     }
   }
@@ -4025,35 +4040,31 @@ async fn doctor_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> In
   }
 
   // 1. pkf-path — best-effort: try to find pkf in PATH via `which pkf`.
-  let pkf_path_msg : String = {
-    let res = try? @process.collect_stdout("which", ["pkf"])
-    match res {
-      Ok((code, data)) =>
-        if code == 0 {
-          let p = data.text().trim().to_owned()
-          "pkf found at \{p}"
-        } else {
-          "pkf not found in PATH"
-        }
-      Err(_) => "pkf not found in PATH"
+  let pkf_path_msg : String = try {
+    let (code, data) = @process.collect_stdout("which", ["pkf"])
+    if code == 0 {
+      let p = data.text().trim().to_owned()
+      "pkf found at \{p}"
+    } else {
+      "pkf not found in PATH"
     }
+  } catch {
+    _ => "pkf not found in PATH"
   }
   let pkf_path_level = if pkf_path_msg.contains("not found") { "WARN" } else { "OK" }
   report(pkf_path_level, "pkf-path", pkf_path_msg)
 
   // 2. pkl CLI — run `pkl --version`.
-  let pkl_msg : String = {
-    let res = try? @process.collect_stdout("pkl", ["--version"])
-    match res {
-      Ok((code, data)) =>
-        if code == 0 {
-          let ver = data.text().trim().to_owned()
-          "\{ver}"
-        } else {
-          "pkl found but --version failed (exit \{code})"
-        }
-      Err(_) => "pkl not in PATH — install from https://pkl-lang.org/"
+  let pkl_msg : String = try {
+    let (code, data) = @process.collect_stdout("pkl", ["--version"])
+    if code == 0 {
+      let ver = data.text().trim().to_owned()
+      "\{ver}"
+    } else {
+      "pkl found but --version failed (exit \{code})"
     }
+  } catch {
+    _ => "pkl not in PATH — install from https://pkl-lang.org/"
   }
   let pkl_level = if pkl_msg.contains("not in PATH") || pkl_msg.contains("failed") { "ERROR" } else { "OK" }
   report(pkl_level, "pkl", pkl_msg)
@@ -5238,9 +5249,13 @@ async fn hooks_install(plan : Plan, hooks_dir : String, force : Bool) -> Int {
         }
         let path = join_path(hooks_dir, event)
         let want = hook_script(event)
-        let existing_opt = (try? @fs.read_file_to_string(path))
+        let existing_opt : String? = try {
+          Some(@fs.read_file_to_string(path))
+        } catch {
+          _ => None
+        }
         match existing_opt {
-          Ok(existing) =>
+          Some(existing) =>
             if existing == want {
               // Bit-identical: silent idempotent no-op.
               continue
@@ -5255,7 +5270,7 @@ async fn hooks_install(plan : Plan, hooks_dir : String, force : Bool) -> Int {
                 continue
               }
             }
-          Err(_) =>
+          None =>
             // File does not exist (or unreadable): write it.
             ()
         }
@@ -5288,23 +5303,23 @@ fn hooks_uninstall(hooks_dir : String) -> Int {
   let mut removed = 0
   for event in git_hook_events {
     let path = join_path(hooks_dir, event)
-    match (try? @fs.read_file_to_string(path)) {
-      Err(_) => continue
-      Ok(data) => {
-        if !data.contains(pkf_hook_marker) {
-          eprintln("[pkf] \{event}: not managed by pkfire, leaving alone")
-          continue
-        }
-        @fs.remove_file(path) catch {
-          e => {
-            eprintln("pkf: remove \{path}: \{e}")
-            return 1
-          }
-        }
-        println("removed \{path}")
-        removed = removed + 1
+    let data = try {
+      @fs.read_file_to_string(path)
+    } catch {
+      _ => continue
+    }
+    if !data.contains(pkf_hook_marker) {
+      eprintln("[pkf] \{event}: not managed by pkfire, leaving alone")
+      continue
+    }
+    @fs.remove_file(path) catch {
+      e => {
+        eprintln("pkf: remove \{path}: \{e}")
+        return 1
       }
     }
+    println("removed \{path}")
+    removed = removed + 1
   }
   if removed == 0 {
     println("no pkfire-managed hooks found")
@@ -5318,14 +5333,15 @@ fn hooks_list(plan : Plan, hooks_dir : String) -> Int {
   for event in git_hook_events {
     let has_task = plan.tasks.get(event) is Some(_)
     let task_state = if has_task { "task declared" } else { "no task" }
-    let state = match (try? @fs.read_file_to_string(join_path(hooks_dir, event))) {
-      Ok(data) =>
-        if data.contains(pkf_hook_marker) {
-          "installed (pkfire)"
-        } else {
-          "installed (other)"
-        }
-      Err(_) => "—"
+    let state = try {
+      let data = @fs.read_file_to_string(join_path(hooks_dir, event))
+      if data.contains(pkf_hook_marker) {
+        "installed (pkfire)"
+      } else {
+        "installed (other)"
+      }
+    } catch {
+      _ => "—"
     }
     // Match Go's %-20s  %-20s  %s column layout.
     let e_pad = pad_right(event, 20)
