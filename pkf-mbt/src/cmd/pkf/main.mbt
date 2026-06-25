@@ -1128,34 +1128,34 @@ fn compute_action_key(
   positionals : Array[String],
 ) -> String {
   let h = @crypto.SHA256::new()
-  h.update(("cmd:" + task.cmd + "\n").to_bytes())
-  h.update(("shell:" + task.shell + "\n").to_bytes())
+  h.update(@utf8.encode("cmd:" + task.cmd + "\n"))
+  h.update(@utf8.encode("shell:" + task.shell + "\n"))
   for i, flag in task.shell_flags {
     let line = "shell-flag:" + i.to_string() + ":" + flag + "\n"
-    h.update(line.to_bytes())
+    h.update(@utf8.encode(line))
   }
   let env_keys = sorted_keys(task.env)
   for k in env_keys {
     let v = task.env.get(k).unwrap()
-    h.update(("env:" + k + "=" + v + "\n").to_bytes())
+    h.update(@utf8.encode("env:" + k + "=" + v + "\n"))
   }
   let tool_keys = sorted_keys(task.tools)
   for k in tool_keys {
     let v = task.tools.get(k).unwrap()
-    h.update(("tool:" + k + "=" + v + "\n").to_bytes())
+    h.update(@utf8.encode("tool:" + k + "=" + v + "\n"))
   }
   for entry in input_hashes {
     let path = entry.0
     let digest = entry.1
-    h.update(("in:" + path + ":" + hex_encode(digest) + "\n").to_bytes())
+    h.update(@utf8.encode("in:" + path + ":" + hex_encode(digest) + "\n"))
   }
   let param_keys = sorted_keys(params)
   for k in param_keys {
     let v = params.get(k).unwrap()
-    h.update(("param:" + k + "=" + v + "\n").to_bytes())
+    h.update(@utf8.encode("param:" + k + "=" + v + "\n"))
   }
   for i, arg in positionals {
-    h.update(("arg:" + i.to_string() + ":" + arg + "\n").to_bytes())
+    h.update(@utf8.encode("arg:" + i.to_string() + ":" + arg + "\n"))
   }
   hex_encode(h.finalize())
 }
@@ -1333,27 +1333,30 @@ fn remote_entry_url(base : String, key : String) -> String {
 ///|
 async fn remote_get_bytes(url : String) -> Bytes? {
   let headers = remote_headers()
-  match (try? @http.get(url, headers~)) {
-    Ok((resp, data)) =>
-      if resp.code == 200 {
-        // `&Data::binary` returns the raw response bytes without any
-        // UTF-8 round-trip. `data.text().to_bytes()` would re-encode
-        // the bytes as UTF-16 (MoonBit's String.to_bytes default),
-        // wrecking binary payloads (Mach-O / ELF / archives).
-        Some(data.binary())
-      } else {
-        None
-      }
-    Err(_) => None
+  try {
+    let (resp, data) = @http.get(url, headers~)
+    if resp.code == 200 {
+      // `&Data::binary` returns the raw response bytes without any
+      // UTF-8 round-trip. `data.text().to_bytes()` would re-encode
+      // the bytes as UTF-16 (MoonBit's String.to_bytes default),
+      // wrecking binary payloads (Mach-O / ELF / archives).
+      Some(data.binary())
+    } else {
+      None
+    }
+  } catch {
+    _ => None
   }
 }
 
 ///|
 async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
   let headers = remote_headers()
-  match (try? @http.put(url, bytes, headers~)) {
-    Ok((resp, _)) => resp.code >= 200 && resp.code < 300
-    Err(_) => false
+  try {
+    let (resp, _) = @http.put(url, bytes, headers~)
+    resp.code >= 200 && resp.code < 300
+  } catch {
+    _ => false
   }
 }
 
@@ -1422,12 +1425,12 @@ async fn probe_port(port : Int) -> Bool {
   let addr = @socket.Addr::parse("127.0.0.1:" + port.to_string()) catch {
     _ => return false
   }
-  match (try? @socket.Tcp::connect(addr)) {
-    Ok(tcp) => {
-      tcp.close()
-      true
-    }
-    Err(_) => false
+  try {
+    let tcp = @socket.Tcp::connect(addr)
+    tcp.close()
+    true
+  } catch {
+    _ => false
   }
 }
 
@@ -1581,9 +1584,12 @@ async fn signal_pid_tree(pid : Int, signal : @signal.Signal) -> Unit {
     @signal.SIGHUP => "HUP"
     _ => "KILL"
   }
-  ignore(
-    try? @process.collect_output("pkill", ["-" + sig_name, "-P", pid.to_string()]),
-  )
+  try {
+    @process.collect_output("pkill", ["-" + sig_name, "-P", pid.to_string()])
+    |> ignore
+  } catch {
+    _ => ()
+  }
   @process.kill(pid, signal)
 }
 
@@ -1601,12 +1607,12 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
         let deadline_iters = svc.shutdown_timeout_seconds * 20
         let mut exited = false
         for j in 0..<deadline_iters {
-          match (try? p.try_wait()) {
-            Ok(Some(_)) => {
-              exited = true
-              break
-            }
-            _ => ()
+          let waited = try { p.try_wait() } catch {
+            _ => None
+          }
+          if waited is Some(_) {
+            exited = true
+            break
           }
           @async.sleep(50)
           ignore(j)
@@ -1614,18 +1620,21 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
         if !exited {
           // SIGKILL is not in mizchi/x/signal.Signal — fall back to the
           // subprocess `kill -KILL` for the hard shutdown path.
-          ignore(
-            try? @process.collect_output("pkill", [
-              "-KILL", "-P", p.pid.to_string(),
-            ]),
-          )
-          ignore(
-            try? @process.collect_output("kill", [
-              "-KILL", p.pid.to_string(),
-            ]),
-          )
+          try {
+            @process.collect_output("pkill", ["-KILL", "-P", p.pid.to_string()])
+            |> ignore
+          } catch {
+            _ => ()
+          }
+          try {
+            @process.collect_output("kill", ["-KILL", p.pid.to_string()]) |> ignore
+          } catch {
+            _ => ()
+          }
         }
-        ignore(try? p.wait())
+        try p.wait() |> ignore catch {
+          _ => ()
+        }
       }
       None => ()
     }
@@ -1714,9 +1723,11 @@ async fn[X] run_task(
       )
       return 2
     }
-    match (try? start_service(group, plan, service_task, params)) {
-      Ok(rs) => running.push(rs)
-      Err(err) => {
+    try {
+      let rs = start_service(group, plan, service_task, params)
+      running.push(rs)
+    } catch {
+      err => {
         stop_services(running)
         println("pkf: \{err}")
         return 2
@@ -1825,18 +1836,22 @@ async fn eval_taskfile(taskfile : String) -> String {
   // The embedded Pkl loader evaluates the Taskfile fully in-process — local,
   // cached, remote `package://`, `http(s)://` and glob-import modules are all
   // resolved here, with no eval subprocess to fall back to.
-  match (try? @loader.eval_module_path(taskfile)) {
-    Ok(@pkl.EvalOk(value)) =>
+  let result = try {
+    @loader.eval_module_path(taskfile)
+  } catch {
+    err => {
+      die("evaluate \{taskfile}: \{err.message()}")
+      panic()
+    }
+  }
+  match result {
+    @pkl.EvalOk(value) =>
       @pkl.render_value_as_json(extract_output_value(value))
-    Ok(@pkl.EvalError(errors)) => {
+    @pkl.EvalError(errors) => {
       for e in errors {
         println("pkf: " + e.message)
       }
       die("pkl eval failed")
-      panic()
-    }
-    Err(err) => {
-      die("evaluate \{taskfile}: \{err.message()}")
       panic()
     }
   }
@@ -1972,9 +1987,11 @@ fn validate_param_value(p : Param, value : String) -> Bool {
       false
     }
     "int" =>
-      match (try? @strconv.parse_int64(value)) {
-        Ok(_) => true
-        Err(_) => {
+      try {
+        @string.parse_int64(value) |> ignore
+        true
+      } catch {
+        _ => {
           println("pkf: --\{p.name}=\{value} is not a valid int")
           false
         }
@@ -3204,7 +3221,7 @@ fn lint_rendered_tasks(
       )
     }
     // Rule 4: inputs-without-cache — non-service, uncached, has cmd + inputs.
-    if not(t.service) && not(t.cache) && t.cmd != "" && t.inputs.length() > 0 {
+    if !(t.service) && !(t.cache) && t.cmd != "" && t.inputs.length() > 0 {
       mk(
         line,
         "warning",
@@ -3233,10 +3250,10 @@ fn lint_rendered_tasks(
 
 ///|
 async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int {
-  let mut json_flag = false
   for arg in args {
     match arg {
-      "--json" => json_flag = true
+      // lint always emits JSON; `--json` is accepted for symmetry but is a no-op.
+      "--json" => ()
       "--fix" | "--dry-run" => () // not implemented: silently ignore
       _ => {
         if arg.has_prefix("--") {
@@ -3487,6 +3504,7 @@ async fn info_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
 
 ///|
 fn completion_bash() -> String {
+  (   // wrapped: multiline string as a parenthesized expr
   #|# pkf bash completion.
   #|# Source this file, or save into /usr/local/etc/bash_completion.d/.
   #|# Suggested install:  pkf completion bash > ~/.bash_completion.d/pkf
@@ -3609,10 +3627,12 @@ fn completion_bash() -> String {
   #|  esac
   #|}
   #|complete -F _pkf pkf
+  )
 }
 
 ///|
 fn completion_zsh() -> String {
+  (   // wrapped: multiline string as a parenthesized expr
   #|#compdef pkf
   #|# pkf zsh completion.
   #|# Suggested install:  pkf completion zsh > "${fpath[1]}/_pkf"
@@ -3828,10 +3848,12 @@ fn completion_zsh() -> String {
   #|}
   #|
   #|_pkf "$@"
+  )
 }
 
 ///|
 fn completion_fish() -> String {
+  (   // wrapped: multiline string as a parenthesized expr
   #|# pkf fish completion.
   #|# Suggested install:  pkf completion fish > ~/.config/fish/completions/pkf.fish
   #|
@@ -3930,6 +3952,7 @@ fn completion_fish() -> String {
   #|complete -c pkf -f -n '__fish_seen_subcommand_from migrate' -l skip-verify -d 'skip post-migration pkl eval'
   #|complete -c pkf -f -n '__fish_seen_subcommand_from pkl-cache' -a warm -d 'pre-evaluate Pkl files'
   #|complete -c pkf -f -n '__fish_seen_subcommand_from pkl-cache' -s f -l file -d 'path to Taskfile.pkl'
+  )
 }
 
 
@@ -4017,35 +4040,31 @@ async fn doctor_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> In
   }
 
   // 1. pkf-path — best-effort: try to find pkf in PATH via `which pkf`.
-  let pkf_path_msg : String = {
-    let res = try? @process.collect_stdout("which", ["pkf"])
-    match res {
-      Ok((code, data)) =>
-        if code == 0 {
-          let p = data.text().trim().to_owned()
-          "pkf found at \{p}"
-        } else {
-          "pkf not found in PATH"
-        }
-      Err(_) => "pkf not found in PATH"
+  let pkf_path_msg : String = try {
+    let (code, data) = @process.collect_stdout("which", ["pkf"])
+    if code == 0 {
+      let p = data.text().trim().to_owned()
+      "pkf found at \{p}"
+    } else {
+      "pkf not found in PATH"
     }
+  } catch {
+    _ => "pkf not found in PATH"
   }
   let pkf_path_level = if pkf_path_msg.contains("not found") { "WARN" } else { "OK" }
   report(pkf_path_level, "pkf-path", pkf_path_msg)
 
   // 2. pkl CLI — run `pkl --version`.
-  let pkl_msg : String = {
-    let res = try? @process.collect_stdout("pkl", ["--version"])
-    match res {
-      Ok((code, data)) =>
-        if code == 0 {
-          let ver = data.text().trim().to_owned()
-          "\{ver}"
-        } else {
-          "pkl found but --version failed (exit \{code})"
-        }
-      Err(_) => "pkl not in PATH — install from https://pkl-lang.org/"
+  let pkl_msg : String = try {
+    let (code, data) = @process.collect_stdout("pkl", ["--version"])
+    if code == 0 {
+      let ver = data.text().trim().to_owned()
+      "\{ver}"
+    } else {
+      "pkl found but --version failed (exit \{code})"
     }
+  } catch {
+    _ => "pkl not in PATH — install from https://pkl-lang.org/"
   }
   let pkl_level = if pkl_msg.contains("not in PATH") || pkl_msg.contains("failed") { "ERROR" } else { "OK" }
   report(pkl_level, "pkl", pkl_msg)
@@ -4323,6 +4342,7 @@ async fn explain_cmd(
 
 ///|
 fn init_template() -> String {
+  (   // wrapped: multiline string as a parenthesized expr
   #|/// Generated by `pkf init`. See https://github.com/mizchi/pkfire.
   #|///
   #|/// Author each task as a `Task` instance with a unique `name`, then
@@ -4339,6 +4359,7 @@ fn init_template() -> String {
   #|
   #|tasks { hello }
   #|
+  )
 }
 
 ///|
@@ -4577,7 +4598,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         if !task.accepts_args &&
           name == target &&
           parsed.positionals.length() > 0 &&
-          not(is_git_hook_event(target)) {
+          !(is_git_hook_event(target)) {
           die(
             "pkf run: task `\{target}` does not accept positional args " +
             "(set `acceptsArgs = true` to allow)",
@@ -5228,9 +5249,13 @@ async fn hooks_install(plan : Plan, hooks_dir : String, force : Bool) -> Int {
         }
         let path = join_path(hooks_dir, event)
         let want = hook_script(event)
-        let existing_opt = (try? @fs.read_file_to_string(path))
+        let existing_opt : String? = try {
+          Some(@fs.read_file_to_string(path))
+        } catch {
+          _ => None
+        }
         match existing_opt {
-          Ok(existing) =>
+          Some(existing) =>
             if existing == want {
               // Bit-identical: silent idempotent no-op.
               continue
@@ -5245,7 +5270,7 @@ async fn hooks_install(plan : Plan, hooks_dir : String, force : Bool) -> Int {
                 continue
               }
             }
-          Err(_) =>
+          None =>
             // File does not exist (or unreadable): write it.
             ()
         }
@@ -5278,23 +5303,23 @@ fn hooks_uninstall(hooks_dir : String) -> Int {
   let mut removed = 0
   for event in git_hook_events {
     let path = join_path(hooks_dir, event)
-    match (try? @fs.read_file_to_string(path)) {
-      Err(_) => continue
-      Ok(data) => {
-        if !data.contains(pkf_hook_marker) {
-          eprintln("[pkf] \{event}: not managed by pkfire, leaving alone")
-          continue
-        }
-        @fs.remove_file(path) catch {
-          e => {
-            eprintln("pkf: remove \{path}: \{e}")
-            return 1
-          }
-        }
-        println("removed \{path}")
-        removed = removed + 1
+    let data = try {
+      @fs.read_file_to_string(path)
+    } catch {
+      _ => continue
+    }
+    if !data.contains(pkf_hook_marker) {
+      eprintln("[pkf] \{event}: not managed by pkfire, leaving alone")
+      continue
+    }
+    @fs.remove_file(path) catch {
+      e => {
+        eprintln("pkf: remove \{path}: \{e}")
+        return 1
       }
     }
+    println("removed \{path}")
+    removed = removed + 1
   }
   if removed == 0 {
     println("no pkfire-managed hooks found")
@@ -5308,14 +5333,15 @@ fn hooks_list(plan : Plan, hooks_dir : String) -> Int {
   for event in git_hook_events {
     let has_task = plan.tasks.get(event) is Some(_)
     let task_state = if has_task { "task declared" } else { "no task" }
-    let state = match (try? @fs.read_file_to_string(join_path(hooks_dir, event))) {
-      Ok(data) =>
-        if data.contains(pkf_hook_marker) {
-          "installed (pkfire)"
-        } else {
-          "installed (other)"
-        }
-      Err(_) => "—"
+    let state = try {
+      let data = @fs.read_file_to_string(join_path(hooks_dir, event))
+      if data.contains(pkf_hook_marker) {
+        "installed (pkfire)"
+      } else {
+        "installed (other)"
+      }
+    } catch {
+      _ => "—"
     }
     // Match Go's %-20s  %-20s  %s column layout.
     let e_pad = pad_right(event, 20)
@@ -5490,33 +5516,38 @@ fn parse_duration_to_sec(s : String) -> Int64 {
   // Supports: Nd (days), Nh (hours), Nm (minutes), Ns (seconds).
   if s.has_suffix("d") {
     let num_str = s[:s.length() - 1].to_owned()
-    match (try? @strconv.parse_int(num_str, base=10)) {
-      Ok(n) => return n.to_int64() * 86400L
-      Err(_) => ()
+    try {
+      return @string.parse_int(num_str, base=10).to_int64() * 86400L
+    } catch {
+      _ => ()
     }
   } else if s.has_suffix("h") {
     let num_str = s[:s.length() - 1].to_owned()
-    match (try? @strconv.parse_int(num_str, base=10)) {
-      Ok(n) => return n.to_int64() * 3600L
-      Err(_) => ()
+    try {
+      return @string.parse_int(num_str, base=10).to_int64() * 3600L
+    } catch {
+      _ => ()
     }
   } else if s.has_suffix("m") {
     let num_str = s[:s.length() - 1].to_owned()
-    match (try? @strconv.parse_int(num_str, base=10)) {
-      Ok(n) => return n.to_int64() * 60L
-      Err(_) => ()
+    try {
+      return @string.parse_int(num_str, base=10).to_int64() * 60L
+    } catch {
+      _ => ()
     }
   } else if s.has_suffix("s") {
     let num_str = s[:s.length() - 1].to_owned()
-    match (try? @strconv.parse_int(num_str, base=10)) {
-      Ok(n) => return n.to_int64()
-      Err(_) => ()
+    try {
+      return @string.parse_int(num_str, base=10).to_int64()
+    } catch {
+      _ => ()
     }
   }
   // Default fallback: treat as seconds.
-  match (try? @strconv.parse_int(s, base=10)) {
-    Ok(n) => return n.to_int64()
-    Err(_) => ()
+  try {
+    return @string.parse_int(s, base=10).to_int64()
+  } catch {
+    _ => ()
   }
   // Default 30d if unrecognized.
   30L * 86400L

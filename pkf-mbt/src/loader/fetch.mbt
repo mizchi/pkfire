@@ -64,7 +64,7 @@ async fn fetch_uri(url : String) -> String? {
             let target = resolve_location(current, next)
             // Refuse to follow a redirect to a non-HTTP(S) scheme (e.g. a
             // `302 -> file://...`); degrade cleanly instead.
-            if not(target.has_prefix("http://") || target.has_prefix("https://")) {
+            if !(target.has_prefix("http://") || target.has_prefix("https://")) {
               println("refusing redirect to non-http(s) target \{target}")
               return None
             }
@@ -113,7 +113,7 @@ async fn fetch_uri_bytes(url : String) -> Bytes? {
             let target = resolve_location(current, next)
             // Refuse to follow a redirect to a non-HTTP(S) scheme (e.g. a
             // `302 -> file://...`); degrade cleanly instead.
-            if not(target.has_prefix("http://") || target.has_prefix("https://")) {
+            if !(target.has_prefix("http://") || target.has_prefix("https://")) {
               println("refusing redirect to non-http(s) target \{target}")
               return None
             }

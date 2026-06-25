@@ -162,7 +162,7 @@ fn zip_ensure_dir(path : String) -> Unit raise LoaderError {
   while i <= path.length() {
     if i == path.length() || path[i].to_int().unsafe_to_char() == '/' {
       let part = String::unsafe_substring(path, start=0, end=i)
-      if part != "" && part != "/" && not(@fs.path_exists(part)) {
+      if part != "" && part != "/" && !(@fs.path_exists(part)) {
         try @fs.create_dir(part) catch {
           _ => raise LoaderError("failed to create directory: \{part}")
         }
@@ -176,7 +176,7 @@ fn zip_ensure_dir(path : String) -> Unit raise LoaderError {
 fn extract_zip_to_dir(data : Bytes, package_dir : String) -> Unit raise LoaderError {
   zip_ensure_dir(package_dir)
   for entry in read_zip_entries(data) {
-    if not(zip_entry_path_is_safe(entry.path)) {
+    if !(zip_entry_path_is_safe(entry.path)) {
       raise LoaderError("unsafe zip entry path: \{entry.path}")
     }
     let target = path_join(package_dir, entry.path)

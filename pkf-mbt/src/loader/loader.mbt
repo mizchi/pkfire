@@ -30,7 +30,12 @@
 // Anything outside that scope falls back to a diagnostic.
 
 ///|
-pub suberror LoaderError String derive(Show)
+pub suberror LoaderError { LoaderError(String) }
+
+///|
+pub impl Show for LoaderError with output(self, logger) {
+  logger.write_string(self.message())
+}
 
 ///|
 pub fn LoaderError::message(self : LoaderError) -> String {
