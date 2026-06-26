@@ -2009,7 +2009,7 @@ fn validate_param_value(p : Param, value : String) -> Bool {
 
 ///|
 fn pkf_version() -> String {
-  "0.12.0"
+  "0.12.1"
 }
 
 ///|
