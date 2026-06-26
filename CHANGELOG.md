@@ -10,6 +10,17 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-06-27
+
+### Fixed
+
+- **secretlint pre-push hook no longer collapses the file list into one path.**
+  Recipe 14 (`14-secretlint-pre-push.pkl`) captured the NUL-separated `git
+  ls-files -z` / `git diff -z` output in `files=$(...)`, but bash command
+  substitution strips NUL bytes — every path concatenated into one giant
+  argument and `secretlint` died with `ENAMETOOLONG`, most reliably on the
+  first push of a new branch. The list is now piped straight into `xargs -0`.
+
 ## [0.12.2] - 2026-06-27
 
 ### Changed
