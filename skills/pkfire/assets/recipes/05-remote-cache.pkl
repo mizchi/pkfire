@@ -21,7 +21,7 @@
 /// `tools` declarations are doing the heavy lifting here: they make the
 /// action key sensitive to "go 1.26 vs 1.27" so a remote cache built
 /// by one toolchain version is not silently restored by another.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.1#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "**/*.go"
