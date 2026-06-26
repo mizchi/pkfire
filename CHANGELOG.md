@@ -10,6 +10,32 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-06-27
+
+### Changed
+
+- **MoonBit-first repo layout.** The MoonBit project moved from `pkf-mbt/`
+  to the repo root and the moon module was renamed `mizchi/pkf-mbt` →
+  `mizchi/pkf`. No CLI/behavior change.
+
+### Fixed
+
+- **`nix run github:mizchi/pkfire/v<ver>` now resolves the matching
+  release.** The Release workflow points the `v<ver>`/`v<major>` tags at the
+  commit carrying the sha256-synced `nix/pkf-release.json`, so the binary-fetch
+  flake no longer serves the previous release when pinned by tag.
+
+## [0.12.1] - 2026-06-26
+
+### Fixed
+
+- **Taskfiles that name a task `default` evaluate again.** A bare `default`
+  identifier referenced in an object body (e.g. `local default: Task = ...`
+  then `tasks { default }`) was mis-parsed by the embedded Pkl evaluator as the
+  collection-default keyword and failed with `unsupported expression`. Fixed in
+  `mizchi/pkl` 0.2.7 (bumped 0.2.4 → 0.2.7, which also pulls the pkspec-era
+  evaluator fixes: cyclic-detection, cross-module type resolution, late-binding).
+
 ## [0.12.0] - 2026-06-24
 
 ### Changed

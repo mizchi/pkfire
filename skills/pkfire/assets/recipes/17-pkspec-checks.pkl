@@ -29,7 +29,7 @@
 ///   - Go:  `go install github.com/mizchi/pkspec/cmd/...@latest`
 ///   - Nix: `nix profile install github:mizchi/pkspec`
 ///   - GH Actions: `uses: mizchi/pkspec@v0` (composite installer)
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.1#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.2#/Taskfile.pkl"
 
 /// Spec / test sources. Edit this list for your repo.
 ///

@@ -1,6 +1,6 @@
 {
   "name": "mizchi/pkf",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "deps": {
     "mizchi/fswatch": "0.1.0",
     "mizchi/pkl": "0.2.7",
