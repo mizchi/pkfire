@@ -224,13 +224,23 @@ jobs:
       # nix/pkf-release.json from the freshly built checksums and open a
       # follow-up PR. (Can't commit straight to main if it's protected;
       # a PR is reviewable and works either way.)
-      - name: Sync Nix flake release pin
+      # Regenerate nix/pkf-release.json from the freshly-built sha256, then make
+      # the consumer-facing v<ver> / v<major> tags point at a commit that
+      # ACTUALLY contains that synced pin. The binary-fetch flake reads the
+      # version+sha256 from this file, and the sha256 only exists after the
+      # build — so the canonical `pkfire@<ver>` tag (the source release commit)
+      # can never carry it. We commit the sync on top of the release commit and
+      # move v<ver>/v<major> there, so `nix run github:mizchi/pkfire/v<ver>` and
+      # `uses: mizchi/pkfire@v<ver>` resolve THIS release with no manual step.
+      # (This replaces the old v-tags.yml, which tagged the un-synced commit.)
+      - name: Sync release pin + retarget v-tags
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           version="${{ needs.resolve.outputs.version }}"
+          major="${version%%.*}"
           la=$(awk '{print $1}' dist/pkf-linux-amd64.tar.gz.sha256)
           lr=$(awk '{print $1}' dist/pkf-linux-arm64.tar.gz.sha256)
           da=$(awk '{print $1}' dist/pkf-darwin-arm64.tar.gz.sha256)
@@ -242,18 +252,26 @@ jobs:
               "aarch64-darwin": { plat: "darwin-arm64", sha256: $da }
             }
           }' > nix/pkf-release.json
-          if git diff --quiet -- nix/pkf-release.json; then
-            echo "::notice::nix/pkf-release.json already in sync with pkfire@${version}"
-            exit 0
-          fi
-          branch="nix-release-sync-${version}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add nix/pkf-release.json
-          git commit -m "nix: sync flake release pin to pkfire@${version}"
-          git push -f origin "$branch"
-          gh pr create --base main --head "$branch" \
-            --title "nix: sync flake release pin to pkfire@${version}" \
-            --body "Auto-generated after the pkfire@${version} release. Updates \`nix/pkf-release.json\` sha256 to the freshly built binaries so \`nix build\` / \`nix run github:mizchi/pkfire\` resolve the new release." \
-            || echo "::warning::could not open the sync PR — enable 'Allow GitHub Actions to create and approve pull requests' (Settings → Actions → General), or update nix/pkf-release.json by hand"
+          if git diff --quiet -- nix/pkf-release.json; then
+            echo "::notice::nix/pkf-release.json already in sync with pkfire@${version}"
+            sync_sha="$(git rev-parse HEAD)"
+          else
+            git add nix/pkf-release.json
+            git commit -m "nix: pin pkfire@${version} release sha256 [skip ci]"
+            sync_sha="$(git rev-parse HEAD)"
+            # Also land it on main so the default-branch flake (no ref) is current.
+            branch="nix-release-sync-${version}"
+            git push -f origin "HEAD:refs/heads/${branch}"
+            gh pr create --base main --head "$branch" \
+              --title "nix: sync flake release pin to pkfire@${version}" \
+              --body "Auto-generated after the pkfire@${version} release. Updates \`nix/pkf-release.json\` sha256 so the default-branch \`nix run github:mizchi/pkfire\` resolves the new release. (The v${version}/v${major} tags already point at the synced commit.)" \
+              || echo "::warning::could not open the sync PR — enable 'Allow GitHub Actions to create and approve pull requests', or merge nix-release-sync-${version} by hand"
+          fi
+          # Point the @-free consumer tags at the synced commit. The canonical
+          # pkfire@<ver> tag stays at the source release commit (it owns the
+          # GitHub release + assets); v<ver>/v<major> are the pinnable shape.
+          git tag -f "v${version}" "$sync_sha"
+          git tag -f "v${major}"   "$sync_sha"
+          git push -f origin "refs/tags/v${version}" "refs/tags/v${major}"
