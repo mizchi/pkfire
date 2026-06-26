@@ -1,7 +1,7 @@
 {
   "is-main": true,
   "import": [
-    { "path": "mizchi/pkf-mbt/src/loader", "alias": "loader" },
+    { "path": "mizchi/pkf/src/loader", "alias": "loader" },
     { "path": "mizchi/pkl", "alias": "pkl" },
     { "path": "mizchi/x/process", "alias": "process" },
     { "path": "mizchi/x/fs", "alias": "xfs" },

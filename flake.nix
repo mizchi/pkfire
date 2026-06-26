@@ -7,8 +7,8 @@
     nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # MoonBit toolchain for the `nix develop` shell (building pkf-mbt/ from
-    # source). The package itself no longer builds from source — it installs
+    # MoonBit toolchain for the `nix develop` shell (building the pkf sources
+    # at the repo root). The package itself no longer builds from source — it installs
     # the prebuilt release binary — so the mooncakes index input is gone.
     moonbit-overlay.url = "github:moonbit-community/moonbit-overlay";
   };
@@ -95,7 +95,7 @@
         };
 
         # `nix develop` for working on pkfire itself: the MoonBit toolchain
-        # (`moon`, `moonc`, …) to build `pkf-mbt/` from source, plus the Pkl
+        # (`moon`, `moonc`, …) to build the pkf sources from source, plus the Pkl
         # CLI (needed for `pkl test` and `pkl format`).
         devShells.default = pkgs.mkShell {
           packages = [

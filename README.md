@@ -617,12 +617,12 @@ Open a PR to add yours.
 pkfire dogfoods itself: the repo's own `Taskfile.pkl` declares the
 maintenance tasks, and the build / integration gate lives in
 `examples/dogfood/Taskfile.pkl`. `pkf` itself is a MoonBit program
-(`pkf-mbt/`); build it with the MoonBit toolchain, then drive the rest
-with the freshly built binary.
+rooted at the repo root (`moon.mod.json` + `src/`); build it with the
+MoonBit toolchain, then drive the rest with the freshly built binary.
 
 ```sh
-cd pkf-mbt && moon build --target native --release && cd ..
-BIN=pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe
+moon build --target native --release
+BIN=_build/native/release/build/src/cmd/pkf/pkf.exe
 
 "$BIN" list                                      # see all maintenance tasks
 "$BIN" run preflight                             # moon check/test + pkl-test + examples + version + format

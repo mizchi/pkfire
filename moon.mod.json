@@ -1,5 +1,5 @@
 {
-  "name": "mizchi/pkf-mbt",
+  "name": "mizchi/pkf",
   "version": "0.12.1",
   "deps": {
     "mizchi/fswatch": "0.1.0",

@@ -21,16 +21,16 @@
 /// published package URI; here we want to dogfood HEAD.
 amends "pkl/Taskfile.pkl"
 
-/// MoonBit sources for the `pkf` binary (`pkf-mbt/`).
+/// MoonBit sources for the `pkf` binary (rooted at the repo root).
 local sources: Listing<String> = new {
-  "pkf-mbt/src/**/*.mbt"
-  "pkf-mbt/src/**/*.c"
-  "pkf-mbt/src/**/moon.pkg"
-  "pkf-mbt/moon.mod.json"
+  "src/**/*.mbt"
+  "src/**/*.c"
+  "src/**/moon.pkg"
+  "moon.mod.json"
 }
 
 /// Path to the native release binary the MoonBit toolchain emits.
-local pkfBin: String = "pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe"
+local pkfBin: String = "_build/native/release/build/src/cmd/pkf/pkf.exe"
 
 /// Build the host `pkf` binary from the MoonBit sources. Other dev
 /// tasks (lint / workflow check / conformance) depend on this and call
@@ -38,8 +38,8 @@ local pkfBin: String = "pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe"
 /// `pkf` happens to be on PATH.
 local buildPkf: Task = new {
   name = "build:pkf"
-  description = "Build the native release `pkf` binary from pkf-mbt/"
-  cmd = "cd pkf-mbt && moon build --target native --release"
+  description = "Build the native release `pkf` binary from the repo root"
+  cmd = "moon build --target native --release"
   inputs = sources
   outputs { pkfBin }
 }
@@ -47,14 +47,14 @@ local buildPkf: Task = new {
 local moonCheck: Task = new {
   name = "moon:check"
   description = "Type-check the MoonBit sources (native target)"
-  cmd = "cd pkf-mbt && moon check --target native"
+  cmd = "moon check --target native"
   inputs = sources
 }
 
 local moonTest: Task = new {
   name = "moon:test"
   description = "MoonBit unit tests (native target)"
-  cmd = "cd pkf-mbt && moon test --target native"
+  cmd = "moon test --target native"
   inputs = sources
 }
 
@@ -258,7 +258,7 @@ local conformance: Task = new {
 workflowTests {
   new {
     name = "MoonBit source changes run the developer gate"
-    changed { "pkf-mbt/src/cmd/pkf/main.mbt" }
+    changed { "src/cmd/pkf/main.mbt" }
     direct { "build:pkf"; "moon:check"; "moon:test" }
     tasks {
       "build:pkf"

@@ -29,12 +29,11 @@ jobs:
         run: scripts/check-version-consistency.sh
 
       - name: Build pkf (release)
-        working-directory: pkf-mbt
         run: |
           moon update
           moon build --target native --release
 
       - name: Run dogfood ci (moon check/test + schema + build + integration + init-smoke)
         run: |
-          BIN="$GITHUB_WORKSPACE/pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe"
+          BIN="$GITHUB_WORKSPACE/_build/native/release/build/src/cmd/pkf/pkf.exe"
           "$BIN" run -f examples/dogfood/Taskfile.pkl ci
