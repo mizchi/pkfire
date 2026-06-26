@@ -1,4 +1,4 @@
-// pkf-mbt — MoonBit re-implementation of pkfire.
+// pkf — MoonBit re-implementation of pkfire.
 //
 // `pkf run <task>` flow:
 //   1. Locate Taskfile.pkl (`./Taskfile.pkl` by default).
@@ -1075,7 +1075,7 @@ fn expand_inputs(root : String, patterns : Array[String]) -> Array[String] {
 // ---------------------------------------------------------------------------
 // SHA-256 + action key calculation.
 //
-// pkf-mbt's cache uses a different hash family (SHA-256) and a different
+// pkf's cache uses a different hash family (SHA-256) and a different
 // on-disk layout from go pkfire's BLAKE3 + tar.zst, so the two cannot
 // share local cache. The action-key *string* still mirrors go pkfire's
 // canonical form so a future BLAKE3 backend can produce wire-compatible
@@ -4188,7 +4188,7 @@ async fn explain_cmd(
   let positionals : Array[String] = []
   for a in args {
     if a == "--diff" {
-      // --diff is out of scope for pkf-mbt — silently skip.
+      // --diff is out of scope for pkf — silently skip.
       ()
     } else if a.has_prefix("--") {
       die("pkf explain: unknown flag `\{a}`")

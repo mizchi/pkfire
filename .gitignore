@@ -10,6 +10,11 @@
 *.out
 .DS_Store
 
+# MoonBit (pkf is now rooted at the repo root)
+_build/
+target/
+.mooncakes/
+
 # pkl
 .out/
 *.pkl-expected.pcf.actual

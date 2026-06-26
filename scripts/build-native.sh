@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the native pkf-mbt binary reproducibly.
+# Build the native pkf binary reproducibly.
 #
 # pkf uses mizchi/zlib's pure-MoonBit deflate/inflate (not the native C-FFI
 # variant), so the build needs no system zlib (no zlib.h, no -lz) — only the

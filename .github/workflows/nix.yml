@@ -6,14 +6,16 @@ on:
     paths:
       - "flake.nix"
       - "flake.lock"
-      - "pkf-mbt/**"
+      - "src/**"
+      - "moon.mod.json"
       - "pkl/**"
       - ".github/workflows/nix.yml"
   pull_request:
     paths:
       - "flake.nix"
       - "flake.lock"
-      - "pkf-mbt/**"
+      - "src/**"
+      - "moon.mod.json"
       - "pkl/**"
       - ".github/workflows/nix.yml"
   workflow_dispatch:

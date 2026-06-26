@@ -317,5 +317,5 @@ scenarios {
   // (package_amends_test.go) seeds only the pkl-mbt cache and asserts the
   // candidate evaluates a `package://` amends to a frozen expected JSON with
   // no network and no subprocess. The download path is unit-tested in
-  // pkf-mbt (download_wbtest.mbt); the conformance test covers eval-from-cache.
+  // pkf (download_wbtest.mbt); the conformance test covers eval-from-cache.
 }

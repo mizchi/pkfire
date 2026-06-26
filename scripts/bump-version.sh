@@ -26,8 +26,8 @@ perl -i -pe "s/version = \"${old}\"/version = \"${new}\"/" pkl/PklProject
 # tracks the declared version so local / `moon install` builds report
 # the right number too. The regexes are value-agnostic because the
 # binary version (0.x.y) never matched the schema version anyway.
-perl -i -pe "s/^(\s*\"version\":\s*)\"[^\"]*\"/\${1}\"${new}\"/" pkf-mbt/moon.mod.json
-perl -i -pe "s/^  \"[0-9]+\.[0-9]+\.[0-9]+\"\$/  \"${new}\"/" pkf-mbt/src/cmd/pkf/main.mbt
+perl -i -pe "s/^(\s*\"version\":\s*)\"[^\"]*\"/\${1}\"${new}\"/" moon.mod.json
+perl -i -pe "s/^  \"[0-9]+\.[0-9]+\.[0-9]+\"\$/  \"${new}\"/" src/cmd/pkf/main.mbt
 
 # Examples are deliberately excluded: they amend the public Pkl
 # package URL, which only resolves once a release tag has been

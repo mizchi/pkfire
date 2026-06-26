@@ -9,7 +9,7 @@
 #   - examples/dogfood/        (tests against the in-tree schema via
 #                              relative amends; carries no version)
 #   - .github/                 (workflow-input examples, not real refs)
-#   - pkf-mbt/                 (binary version is stamped at build time)
+#   - src/, moon.mod.json      (binary version is stamped at build time)
 set -euo pipefail
 
 declared=$(pkl eval -f json -x package.version pkl/PklProject | tr -d '"')
