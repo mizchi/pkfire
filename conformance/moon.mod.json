@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "deps": {
     "mizchi/pkf-mbt": { "path": "../pkf-mbt" },
-    "mizchi/pkl": "0.2.4",
+    "mizchi/pkl": "0.2.7",
     "mizchi/x": "0.3.3",
     "moonbitlang/async": "0.19.0",
     "moonbitlang/x": "0.4.43"
