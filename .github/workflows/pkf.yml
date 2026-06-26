@@ -7,13 +7,13 @@ on:
       - "src/**"
       - "moon.mod.json"
       - "examples/basic/**"
-      - ".github/workflows/pkf-mbt.yml"
+      - ".github/workflows/pkf.yml"
   pull_request:
     paths:
       - "src/**"
       - "moon.mod.json"
       - "examples/basic/**"
-      - ".github/workflows/pkf-mbt.yml"
+      - ".github/workflows/pkf.yml"
 
 permissions:
   contents: read
