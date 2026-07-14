@@ -12,7 +12,7 @@
 /// passing — no hand-rolled `until pg_isready` loops needed. If
 /// `pkf up dev` is already running in another shell, a second
 /// invocation reuses the existing services instead of port-colliding.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.3#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.4#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.ts"

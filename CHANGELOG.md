@@ -10,6 +10,8 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-07-15
+
 ### Changed
 
 - **MoonBit manifests and dependencies now track the current toolchain.** Root
@@ -18,6 +20,10 @@ Action version all move together — there is one tag per release
   `mizchi/fswatch` 0.2.1, `mizchi/x` 0.5.1, `mizchi/zlib` 0.4.8,
   `moonbitlang/async` 0.20.2, and `moonbitlang/x` 0.4.46. CI now enforces
   `moon check --deny-warn`. There is no Taskfile schema or CLI behavior change.
+- **The bundled pkfire skill is now an implementation-backed executable
+  specification for `pkf`.** The concise entry point routes agents to schema,
+  runtime, and CLI references; it also distinguishes the current MoonBit
+  behavior from stale Go-era flags and documents known compatibility gaps.
 
 ## [0.12.3] - 2026-06-27
 
@@ -676,7 +682,11 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.12.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.12.4...HEAD
+[0.12.4]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.4
+[0.12.3]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.3
+[0.12.2]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.2
+[0.12.1]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.1
 [0.12.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.0
 [0.11.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.11.0
 [0.10.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.10.0
