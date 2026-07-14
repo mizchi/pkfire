@@ -89,7 +89,7 @@ fn substr_index(hay : String, needle : String) -> Int {
   if nl == 0 {
     return 0
   }
-  for i in 0..=(hl - nl) {
+  for i in 0..<=(hl - nl) {
     let mut matched = true
     for j in 0..<nl {
       if hay[i + j] != needle[j] {

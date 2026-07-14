@@ -30,10 +30,12 @@
 // Anything outside that scope falls back to a diagnostic.
 
 ///|
-pub suberror LoaderError { LoaderError(String) }
+pub suberror LoaderError {
+  LoaderError(String)
+}
 
 ///|
-pub impl Show for LoaderError with output(self, logger) {
+pub impl Show for LoaderError with fn output(self, logger) {
   logger.write_string(self.message())
 }
 
@@ -73,12 +75,7 @@ fn path_join(a : String, b : String) -> String {
 ///|
 fn dir_of(path : String) -> String {
   match path.rev_find("/") {
-    Some(idx) =>
-      if idx == 0 {
-        "/"
-      } else {
-        path[0:idx].to_owned()
-      }
+    Some(idx) => if idx == 0 { "/" } else { path[0:idx].to_owned() }
     None => ""
   }
 }
@@ -230,7 +227,7 @@ async fn read_module_source(path : String) -> String raise LoaderError {
   }
   if path.has_prefix("https://") || path.has_prefix("http://") {
     // HTTP module: fetch the source text directly (redirect-following).
-    let fetched = try fetch_uri(path) catch {
+    let fetched = fetch_uri(path) catch {
       _ => raise LoaderError("failed to fetch module \{path}")
     }
     return match fetched {
@@ -263,7 +260,10 @@ async fn read_module_source(path : String) -> String raise LoaderError {
     path
   }
   @fs.read_file_to_string(fs_path) catch {
-    _ => raise LoaderError("could not read module `\{path}` (resolved to `\{fs_path}`)")
+    _ =>
+      raise LoaderError(
+        "could not read module `\{path}` (resolved to `\{fs_path}`)",
+      )
   }
 }
 
@@ -408,7 +408,9 @@ fn push_stack(stack : Array[String], path : String) -> Array[String] {
 /// AnalysisSession produces. Walks the module's amends / extends chain
 /// and non-glob imports recursively, populating the session from local
 /// files and the cached `package://` cache directory.
-pub async fn eval_module_path(path : String) -> @pkl.EvalResult raise LoaderError {
+pub async fn eval_module_path(
+  path : String,
+) -> @pkl.EvalResult raise LoaderError {
   // Clear the process-global sandbox IO cache (import_globs / read_globs / etc.)
   // so stale glob registrations from a prior eval in the same process (the
   // conformance harness, `pkf watch`) can't leak into this one.

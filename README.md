@@ -181,14 +181,14 @@ amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.12.3#/Taskf
 local build = new Task {
   name = "build"
   cmd = "moon build --target native --release"
-  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg"; "moon.mod" }
   outputs { "_build/native/release/build/main/main.exe" }
 }
 
 local test = new Task {
   name = "test"
   cmd = "moon test"
-  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg"; "moon.mod" }
   deps { build }            // direct Task reference, typo-checked by Pkl
 }
 
@@ -348,7 +348,7 @@ and `--unsorted` to preserve Taskfile declaration order.
       "visibility": "public",
       "cmd": "moon build --target native --release",
       "deps": [],
-      "inputs": ["src/**/*.mbt", "src/**/moon.pkg.json", "moon.mod.json"],
+      "inputs": ["src/**/*.mbt", "src/**/moon.pkg", "moon.mod"],
       "outputs": ["_build/native/release/build/main/main.exe"],
       "cache": true,
       "workdir": "services/api",
@@ -388,7 +388,7 @@ file-change workflow next to the tasks:
 local build = new Task {
   name = "build"
   cmd = "moon build --target native --release"
-  inputs { "src/**/*.mbt"; "moon.mod.json" }
+  inputs { "src/**/*.mbt"; "moon.mod" }
   outputs { "_build/native/release/build/main/main.exe" }
 }
 
@@ -617,16 +617,16 @@ Open a PR to add yours.
 pkfire dogfoods itself: the repo's own `Taskfile.pkl` declares the
 maintenance tasks, and the build / integration gate lives in
 `examples/dogfood/Taskfile.pkl`. `pkf` itself is a MoonBit program
-rooted at the repo root (`moon.mod.json` + `src/`); build it with the
+rooted at the repo root (`moon.mod` + `src/`); build it with the
 MoonBit toolchain, then drive the rest with the freshly built binary.
 
 ```sh
-moon build --target native --release
+moon build src/cmd/pkf --target native --release
 BIN=_build/native/release/build/src/cmd/pkf/pkf.exe
 
 "$BIN" list                                      # see all maintenance tasks
 "$BIN" run preflight                             # moon check/test + pkl-test + examples + version + format
-"$BIN" run conformance                           # contract harness: candidate vs frozen goldens (41/41)
+"$BIN" run conformance                           # contract harness: candidate vs frozen goldens (42/42)
 "$BIN" run fmt                                    # pkl format -w on Taskfile.pkl, pkl/, examples/, skills/
 "$BIN" run fmt:check                             # formatting check without writing
 "$BIN" run -f examples/dogfood/Taskfile.pkl ci   # full build + integration gate

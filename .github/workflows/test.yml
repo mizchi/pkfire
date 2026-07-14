@@ -31,7 +31,7 @@ jobs:
       - name: Build pkf (release)
         run: |
           moon update
-          moon build --target native --release
+          moon build src/cmd/pkf --target native --release
 
       - name: Run dogfood ci (moon check/test + schema + build + integration + init-smoke)
         run: |

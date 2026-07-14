@@ -18,11 +18,7 @@ pub struct RunResult {
 /// `Run`: copy fixture -> set PKFIRE_CACHE_DIR + scenario env -> run setup
 /// snippets -> snapshot -> run binary (honouring PKF_CONFORMANCE_SUBDIR) ->
 /// snapshot -> diff.
-pub async fn run(
-  bin : String,
-  s : Scenario,
-  repo_root : String,
-) -> RunResult raise {
+pub async fn run(bin : String, s : Scenario, repo_root : String) -> RunResult {
   let tmp = @xfs.tmpdir(prefix="pkfconf-\{s.id}-")
   let work = tmp + "/work"
   let cache = tmp + "/cache"
@@ -82,7 +78,7 @@ pub async fn run(
 /// Recursively copy src dir to dst, preserving content. Modes are not
 /// strictly preserved (the conformance contract does not compare modes);
 /// directories are created and regular files copied byte-for-byte.
-async fn copy_tree(src : String, dst : String) -> Unit raise {
+async fn copy_tree(src : String, dst : String) -> Unit {
   @xfs.mkdir(dst, recursive=true)
   let entries = @xfs.readdir(src, include_hidden=true)
   for name in entries {
@@ -109,7 +105,7 @@ async fn copy_tree(src : String, dst : String) -> Unit raise {
 ///|
 /// Map of relative path -> sha256 hex for every regular file under root.
 /// Mirrors Go's SnapshotTree.
-async fn snapshot_tree(root : String) -> Map[String, String] raise {
+async fn snapshot_tree(root : String) -> Map[String, String] {
   let out : Map[String, String] = Map::new()
   snapshot_into(root, "", out)
   out
@@ -120,7 +116,7 @@ async fn snapshot_into(
   dir : String,
   rel_prefix : String,
   out : Map[String, String],
-) -> Unit raise {
+) -> Unit {
   if not(@xfs.exists(dir)) {
     return
   }

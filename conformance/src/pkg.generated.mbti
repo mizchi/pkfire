@@ -1,0 +1,77 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/pkf-conformance/src"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub async fn capture_golden(String, Scenario, RunResult) -> Unit
+
+pub fn compare(Scenario, Golden, RunResult) -> String
+
+pub fn contains_normalized(String, String) -> Bool
+
+pub fn diff_json(String, String, Array[String]) -> String
+
+pub fn lex_compare(String, String) -> Int
+
+pub async fn load_golden(String, Scenario) -> Golden
+
+pub async fn load_scenarios(String) -> Array[Scenario]
+
+pub fn marshal_delta(Array[String]) -> String
+
+pub fn normalize_text(String) -> String
+
+pub async fn run(String, Scenario, String) -> RunResult
+
+pub fn strip_json_keys(String, Array[String]) -> String
+
+// Errors
+type ScenarioError derive(@debug.Debug)
+
+// Types and methods
+pub struct Contract {
+  json : Bool
+  unordered_paths : Array[String]
+  json_ignore_paths : Array[String]
+  exit : Bool
+  must_contain : Array[String]
+  fs_delta : Bool
+  env : Bool
+  must_contain_stderr : Array[String]
+  stdout_empty : Bool
+  stdout_non_empty : Bool
+}
+
+pub struct Golden {
+  stdout : String
+  stderr : String
+  exit : Int
+  fs_delta : Array[String]
+  fs_deleted : Array[String]
+}
+
+type LedgerRow
+
+pub struct RunResult {
+  stdout : String
+  stderr : String
+  exit : Int
+  fs_delta : Array[String]
+  fs_deleted : Array[String]
+}
+
+pub struct Scenario {
+  id : String
+  fixture : String
+  argv : Array[String]
+  env : Map[String, String]
+  setup : Array[String]
+  contract : Contract
+}
+
+// Type aliases
+
+// Traits

@@ -1,0 +1,28 @@
+import {
+  "mizchi/pkf/src/loader",
+  "mizchi/pkl",
+  "mizchi/x/process",
+  "mizchi/x/fs" @xfs,
+  "moonbitlang/async",
+  "moonbitlang/async/io",
+  "moonbitlang/x/crypto",
+  "moonbitlang/x/sys",
+  "moonbitlang/core/json",
+  "moonbitlang/core/strconv",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+}
+
+warnings = "-0029-0014-0024-0009-0020"
+
+pkgtype(kind: "executable")
+
+options(
+  targets: {
+    "scenario.mbt": [ "native" ],
+    "runner.mbt": [ "native" ],
+    "golden.mbt": [ "native" ],
+    "main.mbt": [ "native" ],
+    "differ_wbtest.mbt": [ "native" ],
+  },
+)

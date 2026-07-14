@@ -10,6 +10,15 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Changed
+
+- **MoonBit manifests and dependencies now track the current toolchain.** Root
+  and conformance use the `moon.mod` / `moon.pkg` DSL under a two-member
+  `moon.work`; direct dependencies move to `mizchi/pkl` 0.3.3,
+  `mizchi/fswatch` 0.2.1, `mizchi/x` 0.5.1, `mizchi/zlib` 0.4.8,
+  `moonbitlang/async` 0.20.2, and `moonbitlang/x` 0.4.46. CI now enforces
+  `moon check --deny-warn`. There is no Taskfile schema or CLI behavior change.
+
 ## [0.12.3] - 2026-06-27
 
 ### Fixed

@@ -153,11 +153,7 @@ fn tar_iter(data : Bytes) -> Array[TarEntry] {
       for i in 0..<size {
         cbuf[i] = data[pos + i]
       }
-      out.push(TarEntry::{
-        name,
-        content: Bytes::from_array(cbuf),
-        mode,
-      })
+      out.push(TarEntry::{ name, content: Bytes::from_array(cbuf), mode })
     }
     let padded = (size + 511) / 512 * 512
     pos = pos + padded

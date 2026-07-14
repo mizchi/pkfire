@@ -17,8 +17,7 @@ async test "read_module_source downloads package:// on cache miss then reads cac
     // Key the cache dir on the ephemeral port so each run starts on a true
     // cache MISS (ports differ run-to-run; no stale-cache cleanup needed).
     set_temp_cache_root("read-module-\{port}")
-    let metadata =
-      "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"\{zip_sha}\"}}"
+    let metadata = "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"\{zip_sha}\"}}"
     group.spawn_bg(() => {
       defer server.close()
       // Request 1: metadata JSON
@@ -32,15 +31,13 @@ async test "read_module_source downloads package:// on cache miss then reads cac
         conn.end_response()
       }
       // Request 2: the zip bytes
-      {
-        let (conn, _) = server.accept()
-        defer conn.close()
-        ignore(conn.read_request())
-        conn.skip_request_body()
-        conn.send_response(200, "OK")
-        conn.write(zip)
-        conn.end_response()
-      }
+      let (conn, _) = server.accept()
+      defer conn.close()
+      ignore(conn.read_request())
+      conn.skip_request_body()
+      conn.send_response(200, "OK")
+      conn.write(zip)
+      conn.end_response()
     })
     let uri = "package://127.0.0.1:\{port}/rm/readmod@1.0.0#/dir/a.txt"
     // Cache miss: downloads then reads; `dir/a.txt` in the fixture is "A".

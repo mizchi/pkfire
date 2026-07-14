@@ -7,7 +7,8 @@ on:
       - "flake.nix"
       - "flake.lock"
       - "src/**"
-      - "moon.mod.json"
+      - "moon.mod"
+      - "moon.work"
       - "pkl/**"
       - ".github/workflows/nix.yml"
   pull_request:
@@ -15,7 +16,8 @@ on:
       - "flake.nix"
       - "flake.lock"
       - "src/**"
-      - "moon.mod.json"
+      - "moon.mod"
+      - "moon.work"
       - "pkl/**"
       - ".github/workflows/nix.yml"
   workflow_dispatch:

@@ -28,13 +28,22 @@ pub struct Scenario {
 }
 
 ///|
-suberror ScenarioError String derive(Show)
+suberror ScenarioError {
+  ScenarioError(String)
+} derive(Debug)
+
+///|
+impl Show for ScenarioError with fn output(self, logger) {
+  match self {
+    ScenarioError(message) => logger.write_string(message)
+  }
+}
 
 ///|
 /// Evaluate the scenarios module at `path` (relative to cwd) and return the
 /// scenario list. Uses the embedded loader's amends-chain registration so
 /// scenarios.pkl's `amends "Conformance.pkl"` resolves in-process.
-pub async fn load_scenarios(path : String) -> Array[Scenario] raise {
+pub async fn load_scenarios(path : String) -> Array[Scenario] {
   let value = match (try? @loader.eval_module_path(path)) {
     Ok(@pkl.EvalOk(v)) => v
     Ok(@pkl.EvalError(errors)) => {

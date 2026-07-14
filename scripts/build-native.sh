@@ -10,6 +10,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-moon build --target native --release "$@"
+moon build src/cmd/pkf --target native --release "$@"
 
 echo "built: $(pwd)/_build/native/release/build/src/cmd/pkf/pkf.exe"

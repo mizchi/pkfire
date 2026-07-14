@@ -22,7 +22,8 @@ local sources: Listing<String> = new {
   "src/**/*.mbt"
   "src/**/*.c"
   "src/**/moon.pkg"
-  "moon.mod.json"
+  "moon.mod"
+  "moon.work"
 }
 
 local repoRoot: String = "../.."
@@ -33,7 +34,7 @@ local pkfBin: String = "_build/native/release/build/src/cmd/pkf/pkf.exe"
 local moonCheck: Task = new {
   name = "moon-check"
   description = "Type-check the MoonBit sources (native target)"
-  cmd = "moon check --target native"
+  cmd = "moon check src/cmd/pkf src/loader --target native --deny-warn"
   workdir = repoRoot
   inputs = sources
 }
@@ -41,7 +42,7 @@ local moonCheck: Task = new {
 local build: Task = new {
   name = "build"
   description = "Build the native release `pkf` binary"
-  cmd = "moon build --target native --release"
+  cmd = "moon build src/cmd/pkf --target native --release"
   workdir = repoRoot
   inputs = sources
   outputs { pkfBin }
@@ -50,7 +51,7 @@ local build: Task = new {
 local moonTest: Task = new {
   name = "moon-test"
   description = "MoonBit unit tests (native target)"
-  cmd = "moon test --target native"
+  cmd = "moon test src/cmd/pkf src/loader --target native"
   workdir = repoRoot
   inputs = sources
 }

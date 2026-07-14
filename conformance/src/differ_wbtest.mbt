@@ -31,7 +31,11 @@ fn scen(c : Contract) -> Scenario {
 }
 
 ///|
-fn result(stdout~ : String = "", stderr~ : String = "", exit~ : Int = 0) -> RunResult {
+fn result(
+  stdout? : String = "",
+  stderr? : String = "",
+  exit? : Int = 0,
+) -> RunResult {
   RunResult::{ stdout, stderr, exit, fs_delta: [], fs_deleted: [] }
 }
 
@@ -140,7 +144,9 @@ test "compare json ignore paths" {
     stdout="{\"taskfile\":\"/tmp/DIFFERENT/Taskfile.pkl\",\"schemaVersion\":\"pkfire@0.10.0\"}",
   )
   assert_eq(compare(s, want, got), "")
-  let got2 = result(stdout="{\"taskfile\":\"/x\",\"schemaVersion\":\"pkfire@0.11.0\"}")
+  let got2 = result(
+    stdout="{\"taskfile\":\"/x\",\"schemaVersion\":\"pkfire@0.11.0\"}",
+  )
   assert_true(compare(s, want, got2) != "")
 }
 
@@ -156,9 +162,13 @@ test "strip json keys recursive" {
     fs_delta: [],
     fs_deleted: [],
   }
-  let got = result(stdout="{\"findings\":[{\"path\":\"/tmp/DIFF\",\"line\":3,\"kind\":\"x\"}]}")
+  let got = result(
+    stdout="{\"findings\":[{\"path\":\"/tmp/DIFF\",\"line\":3,\"kind\":\"x\"}]}",
+  )
   assert_eq(compare(s, want, got), "")
-  let got2 = result(stdout="{\"findings\":[{\"path\":\"/x\",\"line\":9,\"kind\":\"x\"}]}")
+  let got2 = result(
+    stdout="{\"findings\":[{\"path\":\"/x\",\"line\":9,\"kind\":\"x\"}]}",
+  )
   assert_true(compare(s, want, got2) != "")
 }
 

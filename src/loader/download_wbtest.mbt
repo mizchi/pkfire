@@ -39,8 +39,7 @@ async test "download_package_uri_to_cache extracts at the loader-resolved path" 
     // The downloader derives the metadata URL from the `package://` URI:
     //   package://127.0.0.1:<port>/p/n@1.0.0  ->  http://127.0.0.1:<port>/p/n@1.0.0
     // and the zip URL comes back inside the metadata body.
-    let metadata =
-      "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"\{zip_sha}\"}}"
+    let metadata = "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"\{zip_sha}\"}}"
     group.spawn_bg(() => {
       defer server.close()
       // Request 1: metadata JSON at /p/n@1.0.0
@@ -54,15 +53,13 @@ async test "download_package_uri_to_cache extracts at the loader-resolved path" 
         conn.end_response()
       }
       // Request 2: the zip bytes at /p.zip
-      {
-        let (conn, _) = server.accept()
-        defer conn.close()
-        ignore(conn.read_request())
-        conn.skip_request_body()
-        conn.send_response(200, "OK")
-        conn.write(zip)
-        conn.end_response()
-      }
+      let (conn, _) = server.accept()
+      defer conn.close()
+      ignore(conn.read_request())
+      conn.skip_request_body()
+      conn.send_response(200, "OK")
+      conn.write(zip)
+      conn.end_response()
     })
     let uri = "package://127.0.0.1:\{port}/p/n@1.0.0"
     download_package_uri_to_cache(uri)
@@ -84,8 +81,7 @@ async test "download_package_uri_to_cache raises on sha256 mismatch" {
   @async.with_task_group(group => {
     let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
-    let metadata =
-      "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"deadbeef\"}}"
+    let metadata = "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"deadbeef\"}}"
     group.spawn_bg(() => {
       defer server.close()
       {
@@ -97,15 +93,13 @@ async test "download_package_uri_to_cache raises on sha256 mismatch" {
         conn.write_string(metadata)
         conn.end_response()
       }
-      {
-        let (conn, _) = server.accept()
-        defer conn.close()
-        ignore(conn.read_request())
-        conn.skip_request_body()
-        conn.send_response(200, "OK")
-        conn.write(zip)
-        conn.end_response()
-      }
+      let (conn, _) = server.accept()
+      defer conn.close()
+      ignore(conn.read_request())
+      conn.skip_request_body()
+      conn.send_response(200, "OK")
+      conn.write(zip)
+      conn.end_response()
     })
     let uri = "package://127.0.0.1:\{port}/p/n@1.0.0"
     let raised = try {

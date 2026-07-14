@@ -6,8 +6,8 @@ recipes, examples, and bug reports are all welcome.
 ## Local setup
 
 ```sh
-cd pkf-mbt && moon build --target native --release && cd ..   # build pkf
-BIN=pkf-mbt/_build/native/release/build/src/cmd/pkf/pkf.exe
+moon build src/cmd/pkf --target native --release  # build pkf
+BIN=_build/native/release/build/src/cmd/pkf/pkf.exe
 pkl test --project-dir pkl                      # schema-level tests
 "$BIN" run -f examples/dogfood/Taskfile.pkl ci  # the full dogfood gate
 ```
@@ -22,7 +22,7 @@ goldens — run it after any behavior-affecting change.
 
 - **Pkl schema** lives in `pkl/Taskfile.pkl`. Schema-level tests live
   in `pkl/Taskfile.test.pkl` (`pkl test`).
-- **`pkf` runner** is a MoonBit program under `pkf-mbt/src/`
+- **`pkf` runner** is a MoonBit program under `src/`
   (`cmd/pkf` CLI entry + `loader` for the embedded Pkl evaluator).
   Contract tests live in `conformance/` (MoonBit runner + frozen
   `golden/`).

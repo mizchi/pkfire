@@ -259,7 +259,7 @@ Capture golden (oracle exits 0, prints version). Confirm oracle self-consistency
     }
 ```
 
-Add a `pkf_version()` returning a version constant (e.g. `"0.0.1"` to match `moon.mod.json`, or a build-stamped value):
+Add a `pkf_version()` returning a version constant (e.g. `"0.0.1"` to match `moon.mod`, or a build-stamped value):
 
 ```moonbit
 fn pkf_version() -> String {

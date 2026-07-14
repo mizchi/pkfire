@@ -23,15 +23,13 @@ async test "fetch_uri follows a relative 302 redirect" {
         conn.end_response()
       }
       // Second request: /b -> 200 "hello"
-      {
-        let (conn, _) = server.accept()
-        defer conn.close()
-        ignore(conn.read_request())
-        conn.skip_request_body()
-        conn.send_response(200, "OK")
-        conn.write_string("hello")
-        conn.end_response()
-      }
+      let (conn, _) = server.accept()
+      defer conn.close()
+      ignore(conn.read_request())
+      conn.skip_request_body()
+      conn.send_response(200, "OK")
+      conn.write_string("hello")
+      conn.end_response()
     })
     let got = fetch_uri("http://127.0.0.1:\{port}/a")
     assert_eq(got, Some("hello"))

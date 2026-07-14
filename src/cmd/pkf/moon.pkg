@@ -1,31 +1,29 @@
 import {
-  "mizchi/fswatch" @fswatch,
-  "mizchi/pkf/src/loader" @loader,
-  "mizchi/pkl" @pkl,
+  "mizchi/fswatch",
+  "mizchi/pkf/src/loader",
+  "mizchi/pkl",
   "mizchi/x/fs" @xfs,
-  "mizchi/x/http" @http,
-  "mizchi/x/process" @process,
-  "mizchi/x/signal" @signal,
-  "mizchi/x/socket" @socket,
-  "mizchi/zlib" @zlib,
+  "mizchi/x/http",
+  "mizchi/x/process",
+  "mizchi/x/signal",
+  "mizchi/x/socket",
+  "mizchi/zlib",
   "moonbitlang/async",
-  "moonbitlang/core/buffer" @buffer,
-  "moonbitlang/core/encoding/utf8" @utf8,
-  "moonbitlang/core/env" @env,
-  "moonbitlang/core/json" @json,
-  "moonbitlang/core/string" @string,
-  "moonbitlang/x/crypto" @crypto,
-  "moonbitlang/x/fs" @fs,
-  "moonbitlang/x/sys" @sys,
+  "moonbitlang/core/buffer",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+  "moonbitlang/core/json",
+  "moonbitlang/core/string",
+  "moonbitlang/x/crypto",
+  "moonbitlang/x/fs",
+  "moonbitlang/x/sys",
 }
 
 warnings = "-0029-0014-0024-0009"
 
+pkgtype(kind: "executable")
+
 options(
-  "is-main": true,
   "native-stub": [ "stat_native.c", "signal_native.c", "eprint_native.c" ],
-  targets: {
-    "main.mbt": [ "native" ],
-    "tar.mbt": [ "native" ],
-  },
+  targets: { "main.mbt": [ "native" ], "tar.mbt": [ "native" ] },
 )

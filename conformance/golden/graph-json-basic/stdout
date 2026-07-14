@@ -10,8 +10,8 @@
       ],
       "inputs": [
         "src/**/*.mbt",
-        "src/**/moon.pkg.json",
-        "moon.mod.json"
+        "src/**/moon.pkg",
+        "moon.mod"
       ],
       "outputs": [
         "_build/native/release/build/main/main.exe"
@@ -52,8 +52,8 @@
       ],
       "inputs": [
         "src/**/*.mbt",
-        "src/**/moon.pkg.json",
-        "moon.mod.json"
+        "src/**/moon.pkg",
+        "moon.mod"
       ],
       "cache": true,
       "service": false,

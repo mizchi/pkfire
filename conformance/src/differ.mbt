@@ -13,7 +13,11 @@
 /// Null / Bool / Number / String / Array / Object exactly as Go's
 /// `reflect.TypeOf` does, so a stringified number/bool ("1" vs 1) is a type
 /// mismatch, not equality.
-pub fn diff_json(want : String, got : String, unordered : Array[String]) -> String {
+pub fn diff_json(
+  want : String,
+  got : String,
+  unordered : Array[String],
+) -> String {
   let wv = try? @json.parse(want)
   let wv = match wv {
     Ok(v) => v
@@ -112,7 +116,7 @@ fn scalar_type(j : Json) -> Int {
     Null => 0
     True => 1
     False => 1
-    Number(_) => 2
+    Number(_, ..) => 2
     String(_) => 3
     Array(_) => 4
     Object(_) => 5
@@ -128,7 +132,7 @@ fn scalar_eq(a : Json, b : Json) -> Bool {
     (True, False) => false
     (False, True) => false
     // Compare numbers by value, not repr: Go parses to float64 so 1 == 1.0.
-    (Number(x), Number(y)) => x == y
+    (Number(x, ..), Number(y, ..)) => x == y
     (String(x), String(y)) => x == y
     _ => false
   }
@@ -139,7 +143,7 @@ fn type_name(j : Json) -> String {
   match j {
     Null => "null"
     True | False => "bool"
-    Number(_) => "number"
+    Number(_, ..) => "number"
     String(_) => "string"
     Array(_) => "array"
     Object(_) => "object"
@@ -152,7 +156,7 @@ fn scalar_show(j : Json) -> String {
     Null => "<nil>"
     True => "true"
     False => "false"
-    Number(x) => {
+    Number(x, ..) => {
       // Go prints float64 with %v; integers come out without a decimal point.
       let n = x.to_int()
       if n.to_double() == x {
@@ -187,7 +191,7 @@ fn canon_json(j : Json) -> String {
     Null => "null"
     True => "true"
     False => "false"
-    Number(x) => {
+    Number(x, ..) => {
       let n = x.to_int()
       if n.to_double() == x {
         "\{n}"

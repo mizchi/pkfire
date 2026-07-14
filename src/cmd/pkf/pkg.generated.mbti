@@ -1,0 +1,27 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/pkf/src/cmd/pkf"
+
+// Values
+
+// Errors
+
+// Types and methods
+type LintFinding
+
+type LocalTaskDecl
+
+type Param
+
+type ParsedRunArgs
+
+type Plan
+
+type RunningService
+
+type Task
+
+type WorkflowTest
+
+// Type aliases
+
+// Traits

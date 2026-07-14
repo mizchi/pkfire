@@ -10,14 +10,14 @@ local hello = new Task {
 local build = new Task {
   name = "build"
   cmd = "moon build --target native --release"
-  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg"; "moon.mod" }
   outputs { "_build/native/release/build/main/main.exe" }
 }
 
 local test = new Task {
   name = "test"
   cmd = "moon test"
-  inputs { "src/**/*.mbt"; "src/**/moon.pkg.json"; "moon.mod.json" }
+  inputs { "src/**/*.mbt"; "src/**/moon.pkg"; "moon.mod" }
   deps { build }
 }
 

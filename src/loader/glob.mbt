@@ -319,9 +319,7 @@ fn walk_glob(
   if depth > walk_glob_max_depth {
     return
   }
-  let entries = @fs.read_dir(dir) catch {
-    _ => return
-  }
+  let entries = @fs.read_dir(dir) catch { _ => return }
   for name in entries {
     if name == "." || name == ".." {
       continue
@@ -332,9 +330,7 @@ fn walk_glob(
       rel_prefix + "/" + name
     }
     let full = path_join(dir, name)
-    let is_dir = @fs.is_dir(full) catch {
-      _ => false
-    }
+    let is_dir = @fs.is_dir(full) catch { _ => false }
     if glob_match(pattern, rel) && !is_dir {
       out.push(rel)
     }

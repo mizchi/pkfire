@@ -5,13 +5,15 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "moon.mod.json"
+      - "moon.mod"
+      - "moon.work"
       - "examples/basic/**"
       - ".github/workflows/pkf.yml"
   pull_request:
     paths:
       - "src/**"
-      - "moon.mod.json"
+      - "moon.mod"
+      - "moon.work"
       - "examples/basic/**"
       - ".github/workflows/pkf.yml"
 
@@ -47,13 +49,10 @@ jobs:
         run: moon update
 
       - name: Moon check
-        # NOT --deny-warn — pkf intentionally carries a few pre-existing
-        # @debug warnings; cleaning those is tracked separately. CI catches
-        # actual errors (compile + smoke) for now.
-        run: moon check --target native
+        run: moon check src/cmd/pkf src/loader --target native --deny-warn
 
       - name: Build pkf (release)
-        run: moon build --target native --release
+        run: moon build src/cmd/pkf --target native --release
 
       - name: Smoke - pkf list (examples/basic)
         working-directory: examples/basic

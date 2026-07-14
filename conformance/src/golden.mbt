@@ -17,7 +17,7 @@ fn golden_dir(root : String, s : Scenario) -> String {
 
 ///|
 /// Read a previously captured golden for scenario `s` under `root`.
-pub async fn load_golden(root : String, s : Scenario) -> Golden raise {
+pub async fn load_golden(root : String, s : Scenario) -> Golden {
   let dir = golden_dir(root, s)
   let stdout = read_text(dir + "/stdout")
   let exit_raw = read_text(dir + "/exit")
@@ -36,7 +36,7 @@ pub async fn load_golden(root : String, s : Scenario) -> Golden raise {
 }
 
 ///|
-async fn read_text(path : String) -> String raise {
+async fn read_text(path : String) -> String {
   let data = @xfs.read_file(path)
   bytes_to_string(data.binary())
 }
@@ -78,7 +78,7 @@ pub async fn capture_golden(
   root : String,
   s : Scenario,
   res : RunResult,
-) -> Unit raise {
+) -> Unit {
   let dir = golden_dir(root, s)
   if not(@xfs.exists(dir)) {
     @xfs.mkdir(dir, recursive=true)

@@ -26,7 +26,8 @@ local sources: Listing<String> = new {
   "src/**/*.mbt"
   "src/**/*.c"
   "src/**/moon.pkg"
-  "moon.mod.json"
+  "moon.mod"
+  "moon.work"
 }
 
 /// Path to the native release binary the MoonBit toolchain emits.
@@ -39,7 +40,7 @@ local pkfBin: String = "_build/native/release/build/src/cmd/pkf/pkf.exe"
 local buildPkf: Task = new {
   name = "build:pkf"
   description = "Build the native release `pkf` binary from the repo root"
-  cmd = "moon build --target native --release"
+  cmd = "moon build src/cmd/pkf --target native --release"
   inputs = sources
   outputs { pkfBin }
 }
@@ -47,14 +48,14 @@ local buildPkf: Task = new {
 local moonCheck: Task = new {
   name = "moon:check"
   description = "Type-check the MoonBit sources (native target)"
-  cmd = "moon check --target native"
+  cmd = "moon check src/cmd/pkf src/loader --target native --deny-warn"
   inputs = sources
 }
 
 local moonTest: Task = new {
   name = "moon:test"
   description = "MoonBit unit tests (native target)"
-  cmd = "moon test --target native"
+  cmd = "moon test src/cmd/pkf src/loader --target native"
   inputs = sources
 }
 
@@ -244,7 +245,7 @@ local preCommit: Task = new {
 
 local conformance: Task = new {
   name = "conformance"
-  description = "MoonBit pkf contract harness: candidate vs frozen goldens (41/41 strict)"
+  description = "MoonBit pkf contract harness: candidate vs frozen goldens (42/42 strict)"
   cmd =
     """
     set -euo pipefail

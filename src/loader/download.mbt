@@ -144,7 +144,7 @@ async fn download_package_uri_to_cache(uri : String) -> Unit raise LoaderError {
     Some(url) => url
     None => raise LoaderError("malformed package URI: \{uri}")
   }
-  let metadata_fetched = try fetch_uri(metadata_url) catch {
+  let metadata_fetched = fetch_uri(metadata_url) catch {
     _ => raise LoaderError("metadata fetch failed: \{metadata_url}")
   }
   let metadata = match metadata_fetched {
@@ -159,7 +159,7 @@ async fn download_package_uri_to_cache(uri : String) -> Unit raise LoaderError {
     Some(value) => value
     None => raise LoaderError("metadata is missing packageZipChecksums.sha256")
   }
-  let fetched = try fetch_uri_bytes(zip_url) catch {
+  let fetched = fetch_uri_bytes(zip_url) catch {
     _ => raise LoaderError("zip fetch failed: \{zip_url}")
   }
   let zip_bytes = match fetched {

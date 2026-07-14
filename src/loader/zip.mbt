@@ -17,7 +17,11 @@ priv struct ZipEntry {
 }
 
 ///|
-fn zip_bytes_slice(data : Bytes, start : Int, end : Int) -> Bytes raise LoaderError {
+fn zip_bytes_slice(
+  data : Bytes,
+  start : Int,
+  end : Int,
+) -> Bytes raise LoaderError {
   if start < 0 || end < start || end > data.length() {
     raise LoaderError("byte slice out of range")
   }
@@ -89,7 +93,7 @@ fn read_zip_entries(data : Bytes) -> Array[ZipEntry] raise LoaderError {
     let name_start = offset + 46
     let name_end = name_start + name_len
     let name_bytes = zip_bytes_slice(data, name_start, name_end)
-    let name = try @utf8.decode(name_bytes[:]) catch {
+    let name = @utf8.decode(name_bytes[:]) catch {
       _ => raise LoaderError("invalid utf-8 in zip entry name")
     }
     let is_dir = name.has_suffix("/")
@@ -107,7 +111,7 @@ fn read_zip_entries(data : Bytes) -> Array[ZipEntry] raise LoaderError {
       match compression_method {
         0 => compressed
         8 =>
-          try @zlib.deflate_decompress(compressed, max_size=uncompressed_size) catch {
+          @zlib.deflate_decompress(compressed, max_size=uncompressed_size) catch {
             _ => raise LoaderError("zip deflate decompression failed: \{name}")
           }
         _ =>
@@ -162,8 +166,8 @@ fn zip_ensure_dir(path : String) -> Unit raise LoaderError {
   while i <= path.length() {
     if i == path.length() || path[i].to_int().unsafe_to_char() == '/' {
       let part = String::unsafe_substring(path, start=0, end=i)
-      if part != "" && part != "/" && !(@fs.path_exists(part)) {
-        try @fs.create_dir(part) catch {
+      if part != "" && part != "/" && !@fs.path_exists(part) {
+        @fs.create_dir(part) catch {
           _ => raise LoaderError("failed to create directory: \{part}")
         }
       }
@@ -173,10 +177,13 @@ fn zip_ensure_dir(path : String) -> Unit raise LoaderError {
 }
 
 ///|
-fn extract_zip_to_dir(data : Bytes, package_dir : String) -> Unit raise LoaderError {
+fn extract_zip_to_dir(
+  data : Bytes,
+  package_dir : String,
+) -> Unit raise LoaderError {
   zip_ensure_dir(package_dir)
   for entry in read_zip_entries(data) {
-    if !(zip_entry_path_is_safe(entry.path)) {
+    if !zip_entry_path_is_safe(entry.path) {
       raise LoaderError("unsafe zip entry path: \{entry.path}")
     }
     let target = path_join(package_dir, entry.path)
@@ -184,7 +191,7 @@ fn extract_zip_to_dir(data : Bytes, package_dir : String) -> Unit raise LoaderEr
       zip_ensure_dir(target)
     } else {
       zip_ensure_dir(dir_of(target))
-      try @fs.write_bytes_to_file(target, entry.content) catch {
+      @fs.write_bytes_to_file(target, entry.content) catch {
         _ => raise LoaderError("failed to write zip entry: \{target}")
       }
     }
