@@ -31,7 +31,7 @@ local sources: Listing<String> = new {
 }
 
 /// Path to the native release binary the MoonBit toolchain emits.
-local pkfBin: String = "_build/native/release/build/src/cmd/pkf/pkf.exe"
+local pkfBin: String = "_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe"
 
 /// Build the host `pkf` binary from the MoonBit sources. Other dev
 /// tasks (lint / workflow check / conformance) depend on this and call

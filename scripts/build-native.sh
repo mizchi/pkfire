@@ -12,4 +12,4 @@ cd "$(dirname "$0")/.."
 
 moon build src/cmd/pkf --target native --release "$@"
 
-echo "built: $(pwd)/_build/native/release/build/src/cmd/pkf/pkf.exe"
+echo "built: $(pwd)/_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe"

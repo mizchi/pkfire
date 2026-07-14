@@ -31,7 +31,7 @@ jobs:
       - name: Run MoonBit conformance runner (42/42 strict)
         working-directory: conformance
         env:
-          PKF_MBT_BIN: ${{ github.workspace }}/_build/native/release/build/src/cmd/pkf/pkf.exe
+          PKF_MBT_BIN: ${{ github.workspace }}/_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
         run: |
           moon update
           moon run --target native --release src

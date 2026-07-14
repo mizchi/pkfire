@@ -622,7 +622,7 @@ MoonBit toolchain, then drive the rest with the freshly built binary.
 
 ```sh
 moon build src/cmd/pkf --target native --release
-BIN=_build/native/release/build/src/cmd/pkf/pkf.exe
+BIN=_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
 
 "$BIN" list                                      # see all maintenance tasks
 "$BIN" run preflight                             # moon check/test + pkl-test + examples + version + format

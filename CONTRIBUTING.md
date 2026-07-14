@@ -7,7 +7,7 @@ recipes, examples, and bug reports are all welcome.
 
 ```sh
 moon build src/cmd/pkf --target native --release  # build pkf
-BIN=_build/native/release/build/src/cmd/pkf/pkf.exe
+BIN=_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
 pkl test --project-dir pkl                      # schema-level tests
 "$BIN" run -f examples/dogfood/Taskfile.pkl ci  # the full dogfood gate
 ```

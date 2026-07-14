@@ -35,5 +35,5 @@ jobs:
 
       - name: Run dogfood ci (moon check/test + schema + build + integration + init-smoke)
         run: |
-          BIN="$GITHUB_WORKSPACE/_build/native/release/build/src/cmd/pkf/pkf.exe"
+          BIN="$GITHUB_WORKSPACE/_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe"
           "$BIN" run -f examples/dogfood/Taskfile.pkl ci

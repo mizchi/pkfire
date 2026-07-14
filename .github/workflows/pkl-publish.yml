@@ -131,7 +131,7 @@ jobs:
         run: |
           target="${{ matrix.target }}"
           mkdir -p dist
-          cp _build/native/release/build/src/cmd/pkf/pkf.exe dist/pkf
+          cp _build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe dist/pkf
           chmod +x dist/pkf
           tar -czf "pkf-${target}.tar.gz" -C dist pkf
           # shasum -a 256 is present on both macOS and ubuntu; sha256sum is

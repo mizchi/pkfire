@@ -56,11 +56,11 @@ jobs:
 
       - name: Smoke - pkf list (examples/basic)
         working-directory: examples/basic
-        run: ../../_build/native/release/build/src/cmd/pkf/pkf.exe list
+        run: ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe list
 
       - name: Smoke - pkf graph (examples/basic)
         working-directory: examples/basic
-        run: ../../_build/native/release/build/src/cmd/pkf/pkf.exe graph
+        run: ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe graph
 
       - name: Smoke - pkf run hello (cache miss + cache hit)
         working-directory: examples/basic
@@ -68,5 +68,5 @@ jobs:
           PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-mbt-cache
         run: |
           rm -rf "$PKFIRE_MBT_CACHE_DIR"
-          ../../_build/native/release/build/src/cmd/pkf/pkf.exe run hello
-          ../../_build/native/release/build/src/cmd/pkf/pkf.exe run hello
+          ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe run hello
+          ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe run hello

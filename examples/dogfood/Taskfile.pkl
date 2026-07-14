@@ -29,7 +29,7 @@ local sources: Listing<String> = new {
 local repoRoot: String = "../.."
 
 /// Path to the native release binary the MoonBit toolchain emits.
-local pkfBin: String = "_build/native/release/build/src/cmd/pkf/pkf.exe"
+local pkfBin: String = "_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe"
 
 local moonCheck: Task = new {
   name = "moon-check"

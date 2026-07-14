@@ -10,6 +10,14 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Fixed
+
+- **Active build, CI, conformance, and release scripts now use the
+  workspace-qualified MoonBit binary path.** After introducing `moon.work`,
+  the executable is emitted under `build/mizchi/pkf/src/cmd/pkf/pkf.exe`;
+  the old unqualified path could silently select a stale local artifact and
+  fails on a clean checkout.
+
 ## [0.12.4] - 2026-07-15
 
 ### Changed
