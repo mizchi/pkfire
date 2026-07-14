@@ -11,4 +11,14 @@ import {
   "moonbitlang/x@0.4.46",
 }
 
+readme = "README.md"
+
+repository = "https://github.com/mizchi/pkfire"
+
+license = "MIT"
+
+keywords = [ "moonbit", "pkl", "task-runner", "build-tool" ]
+
+description = "A Pkl-native task runner with a pure MoonBit implementation."
+
 preferred_target = "native"
