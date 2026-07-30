@@ -19,11 +19,14 @@ import {
   "moonbitlang/x/sys",
 }
 
-warnings = "-0029-0014-0024-0009"
-
 pkgtype(kind: "executable")
 
 options(
   "native-stub": [ "stat_native.c", "signal_native.c", "eprint_native.c" ],
-  targets: { "main.mbt": [ "native" ], "tar.mbt": [ "native" ] },
+  targets: {
+    "main.mbt": [ "native" ],
+    "tar.mbt": [ "native" ],
+    "watch_cycle.mbt": [ "native" ],
+    "watch_cycle_wbtest.mbt": [ "native" ],
+  },
 )

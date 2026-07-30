@@ -37,9 +37,8 @@ async fn main {
     }
   }
   let repo_root = parent_dir(cwd)
-  let scenarios = match (try? load_scenarios("scenarios.pkl")) {
-    Ok(s) => s
-    Err(e) => {
+  let scenarios = load_scenarios("scenarios.pkl") catch {
+    e => {
       println("conformance: load scenarios: \{e}")
       @sys.exit(2)
       return
@@ -68,32 +67,33 @@ async fn main {
   let mut pass = 0
   for s in scenarios {
     let cmd = if s.argv.length() > 0 { s.argv[0] } else { "" }
-    let row = match (try? load_golden("golden", s)) {
-      Err(e) =>
+    let row = try load_golden("golden", s) catch {
+      e =>
         LedgerRow::{
           id: s.id,
           command: cmd,
           status: "RED",
           detail: "load golden: \{e}",
         }
-      Ok(g) =>
-        match (try? run(bin, s, repo_root)) {
-          Err(e) =>
+    } noraise {
+      g =>
+        try {
+          let res = run(bin, s, repo_root)
+          let d = compare(s, g, res)
+          if d == "" {
+            pass = pass + 1
+            LedgerRow::{ id: s.id, command: cmd, status: "PASS", detail: "" }
+          } else {
+            LedgerRow::{ id: s.id, command: cmd, status: "RED", detail: d }
+          }
+        } catch {
+          e =>
             LedgerRow::{
               id: s.id,
               command: cmd,
               status: "RED",
               detail: "run error: \{e}",
             }
-          Ok(res) => {
-            let d = compare(s, g, res)
-            if d == "" {
-              pass = pass + 1
-              LedgerRow::{ id: s.id, command: cmd, status: "PASS", detail: "" }
-            } else {
-              LedgerRow::{ id: s.id, command: cmd, status: "RED", detail: d }
-            }
-          }
         }
     }
     rows.push(row)
@@ -133,6 +133,6 @@ fn parent_dir(path : String) -> String {
   if last <= 0 {
     "."
   } else {
-    path.substring(start=0, end=last)
+    path[0:last].to_owned()
   }
 }

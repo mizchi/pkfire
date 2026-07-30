@@ -1614,6 +1614,50 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
 }
 
 ///|
+fn resolved_task_outputs(
+  repo_root : String,
+  task_cwd : String,
+  patterns : Array[String],
+) -> Array[String] {
+  let cwd = match @env.current_dir() {
+    Some(dir) => dir
+    None => repo_root
+  }
+  let absolute_repo = absolute_lexical_path(repo_root, cwd)
+  let absolute_task_root = absolute_lexical_path(task_cwd, cwd)
+  let seen : Map[String, Bool] = Map([], capacity=patterns.length())
+  for pattern in patterns {
+    let local_matches : Array[String] = []
+    if pattern.contains("*") ||
+      pattern.contains("?") ||
+      pattern.contains("[") ||
+      pattern.contains("{") {
+      for matched in expand_inputs(absolute_task_root, [pattern]) {
+        local_matches.push(matched)
+      }
+    } else {
+      let absolute_output = absolute_lexical_path(pattern, absolute_task_root)
+      if @fs.path_exists(absolute_output) {
+        local_matches.push(pattern)
+      }
+    }
+    for matched in local_matches {
+      let absolute_output = absolute_lexical_path(matched, absolute_task_root)
+      match path_relative_to(absolute_repo, absolute_output) {
+        Some(relative) if relative.length() > 0 => seen[relative] = true
+        _ => ()
+      }
+    }
+  }
+  let outputs : Array[String] = []
+  for relative, _ in seen {
+    outputs.push(relative)
+  }
+  outputs.sort_by(fn(a, b) { lex_cmp(a, b) })
+  outputs
+}
+
+///|
 async fn[X] run_task(
   group : @async.TaskGroup[X],
   plan : Plan,
@@ -1626,16 +1670,29 @@ async fn[X] run_task(
     // deps-only umbrella task — nothing to spawn.
     return 0
   }
+  // Inputs, outputs and the command share the same task root. This keeps
+  // action-key expansion aligned with affected/watch for workdir tasks.
+  let task_cwd = match task.workdir {
+    Some(wd) =>
+      if wd.has_prefix("/") {
+        wd
+      } else if repo_root.length() == 0 || repo_root == "." {
+        wd
+      } else {
+        repo_root + "/" + wd
+      }
+    None => if repo_root.length() == 0 { "." } else { repo_root }
+  }
   // Compute the action key and consult the cache when caching is on.
   let mut key : String? = None
   if task.cache {
-    let resolved_inputs = expand_inputs(repo_root, task.inputs)
+    let resolved_inputs = expand_inputs(task_cwd, task.inputs)
     let input_hashes : Array[(String, FixedArray[Byte])] = []
     for rel in resolved_inputs {
-      let src = if repo_root.length() == 0 || repo_root == "." {
+      let src = if task_cwd.length() == 0 || task_cwd == "." {
         rel
       } else {
-        join_path(repo_root, rel)
+        join_path(task_cwd, rel)
       }
       input_hashes.push((rel, hash_file(src)))
     }
@@ -1707,20 +1764,6 @@ async fn[X] run_task(
     }
   }
   println("pkf: $ \{task.name}")
-  // C2: always run the task command in the Taskfile's directory (repo_root)
-  // so that inputs/outputs resolve relative to the project root, not the
-  // caller's cwd. If task.workdir is set, resolve it against repo_root.
-  let task_cwd = match task.workdir {
-    Some(wd) =>
-      if wd.has_prefix("/") {
-        wd
-      } else if repo_root.length() == 0 || repo_root == "." {
-        wd
-      } else {
-        repo_root + "/" + wd
-      }
-    None => if repo_root.length() == 0 { "." } else { repo_root }
-  }
   let code = @process.run_inherit(
     task.shell.view(),
     argv[:],
@@ -1732,7 +1775,11 @@ async fn[X] run_task(
   if code == 0 {
     match key {
       Some(k) => {
-        let resolved_outputs = expand_inputs(repo_root, task.outputs)
+        let resolved_outputs = resolved_task_outputs(
+          repo_root,
+          task_cwd,
+          task.outputs,
+        )
         cache_store(k, repo_root, resolved_outputs)
         cache_remote_push(k)
       }
@@ -1763,7 +1810,11 @@ fn locate_taskfile(explicit : String?) -> String {
   match explicit {
     Some(p) =>
       if @fs.path_exists(p) {
-        p
+        let cwd = match @env.current_dir() {
+          Some(dir) => dir
+          None => "."
+        }
+        absolute_lexical_path(p, cwd)
       } else {
         die("Taskfile.pkl not found: \{p}")
         panic()
@@ -1979,7 +2030,7 @@ fn validate_param_value(p : Param, value : String) -> Bool {
 
 ///|
 fn pkf_version() -> String {
-  "0.12.4"
+  "0.13.0"
 }
 
 ///|
@@ -2092,9 +2143,14 @@ fn suggest_task_name(target : String, plan : Plan) -> Unit {
 // ---------------------------------------------------------------------------
 
 ///|
-fn task_inputs_match_any(task : Task, changed : Array[String]) -> Bool {
+fn task_inputs_match_any(
+  task : Task,
+  changed : Array[String],
+  repo_root : String,
+) -> Bool {
+  let patterns = task_watch_input_patterns(repo_root, task)
   for change in changed {
-    for pattern in task.inputs {
+    for pattern in patterns {
       if glob_match(pattern, change) {
         return true
       }
@@ -2107,6 +2163,7 @@ fn task_inputs_match_any(task : Task, changed : Array[String]) -> Bool {
 fn compute_affected(
   plan : Plan,
   changed : Array[String],
+  repo_root : String,
 ) -> (Array[String], Array[String]) {
   // Direct hits: tasks whose inputs glob matches a changed path.
   let direct_set : Map[String, Bool] = Map(
@@ -2119,7 +2176,7 @@ fn compute_affected(
       Some(t) => t
       None => continue
     }
-    if task_inputs_match_any(task, changed) {
+    if task_inputs_match_any(task, changed, repo_root) {
       direct_set[name] = true
       direct.push(name)
     }
@@ -2239,6 +2296,7 @@ async fn affected_cmd(
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
+  let repo_root = taskfile_dir(taskfile)
   if check_mode {
     if plan.workflow_tests.length() == 0 {
       println("pkf affected --check: no workflowTests declared")
@@ -2246,7 +2304,7 @@ async fn affected_cmd(
     }
     let mut failed = 0
     for wt in plan.workflow_tests {
-      let (direct, computed) = compute_affected(plan, wt.changed)
+      let (direct, computed) = compute_affected(plan, wt.changed, repo_root)
       let plan_ok = string_arrays_equal(computed, wt.tasks)
       let direct_ok = wt.direct.length() == 0 ||
         string_arrays_equal(direct, wt.direct)
@@ -2303,7 +2361,7 @@ async fn affected_cmd(
       }
       None => ()
     }
-    let (_, computed) = compute_affected(plan, changed)
+    let (_, computed) = compute_affected(plan, changed, repo_root)
     for name in computed {
       println(name)
     }
@@ -2541,16 +2599,7 @@ async fn graph_cmd(
 /// Skip paths that should never trigger a re-run: build output, VCS state,
 /// dependency caches, OS metadata.
 fn watch_exclude(path : String) -> Bool {
-  path.contains("/_build/") ||
-  path.contains("/_build") ||
-  path.contains("/.git/") ||
-  path.contains("/.git") ||
-  path.contains("/node_modules/") ||
-  path.contains("/node_modules") ||
-  path.contains("/.cache/") ||
-  path.contains("/target/") ||
-  path.has_suffix("/.DS_Store") ||
-  path.has_suffix("~")
+  watch_cycle_path_excluded(path)
 }
 
 ///|
@@ -2573,6 +2622,19 @@ async fn[X] watch_cmd(
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json)
   let repo_root = taskfile_dir(taskfile)
+  let cycles = watch_cycles_for_plan(plan, repo_root, scope_set)
+  if cycles.length() > 0 {
+    eprintln(
+      "pkf watch: refusing to start because the task graph can trigger an infinite watch loop:",
+    )
+    for cycle in cycles {
+      eprintln("  - " + watch_cycle_message(cycle))
+    }
+    eprintln(
+      "pkf watch: narrow the glob patterns or move the cache, then run `pkf lint --json` for structured diagnostics",
+    )
+    return 2
+  }
   println("pkf watch: monitoring `.` (Ctrl-C to stop)")
   let watcher = @fswatch.start([repo_root], exclude=watch_exclude)
   for ;; {
@@ -2583,12 +2645,15 @@ async fn[X] watch_cmd(
     let seen : Map[String, Bool] = Map([], capacity=events.length())
     let changed : Array[String] = []
     for e in events {
-      if !seen.contains(e.path) {
-        seen[e.path] = true
-        changed.push(e.path)
+      match repo_relative_watch_path(repo_root, e.path) {
+        Some(relative) if relative.length() > 0 && !seen.contains(relative) => {
+          seen[relative] = true
+          changed.push(relative)
+        }
+        _ => ()
       }
     }
-    let (_, affected) = compute_affected(plan, changed)
+    let (_, affected) = compute_affected(plan, changed, repo_root)
     let to_run : Array[String] = []
     for name in affected {
       if scope_set.is_empty() || scope_set.contains(name) {
@@ -3122,7 +3187,7 @@ struct LintFinding {
 }
 
 ///|
-/// Build the 5 rendered-task lint rules over `plan.tasks`, iterating task
+/// Build rendered-task lint rules over `plan.tasks`, iterating task
 /// names in sorted order. `line_of` maps a task name to its source line
 /// (from the local decl scan), defaulting to 1. Mirrors Go's lintRenderedTasks.
 fn lint_rendered_tasks(
@@ -3228,6 +3293,25 @@ fn lint_rendered_tasks(
         false,
       )
     }
+  }
+  // Static watch-loop rules. The glob product solver returns a concrete
+  // witness path without relying on files that happen to exist today.
+  let no_scope : Map[String, Bool] = Map([], capacity=0)
+  for cycle in watch_cycles_for_plan(plan, taskfile_dir(taskfile), no_scope) {
+    let task = cycle.producer
+    let line = match line_of.get(task) {
+      Some(value) if value != 0 => value
+      _ => 1
+    }
+    mk(
+      line,
+      "error",
+      watch_cycle_lint_kind(cycle),
+      task,
+      watch_cycle_message(cycle),
+      watch_cycle_suggestion(cycle),
+      false,
+    )
   }
   findings
 }

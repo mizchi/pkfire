@@ -115,7 +115,7 @@ fn glob_segs(
     if pi >= p.length() {
       return si >= s.length()
     }
-    let seg = p[pi].to_string()
+    let seg = p[pi].to_owned()
     if seg == "**" {
       if pi == p.length() - 1 {
         return true
@@ -130,7 +130,7 @@ fn glob_segs(
     if si >= s.length() {
       return false
     }
-    if !glob_segment_matches(seg, s[si].to_string()) {
+    if !glob_segment_matches(seg, s[si].to_owned()) {
       return false
     }
     pi = pi + 1
@@ -264,7 +264,7 @@ fn collect_glob_alt(
 ) -> Unit raise {
   // Split off the longest fixed (glob-free) leading directory prefix so we
   // only walk the relevant subtree.
-  let segs = pattern.split("/").map(v => v.to_string()).collect()
+  let segs = pattern.split("/").map(v => v.to_owned()).collect()
   let mut fixed_count = 0
   for i in 0..<segs.length() {
     if i == segs.length() - 1 || seg_has_glob(segs[i]) {

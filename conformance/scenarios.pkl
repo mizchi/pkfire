@@ -171,6 +171,13 @@ scenarios {
     contract = new { json = true; exit = true; jsonIgnorePaths { "path" } }
   }
   new {
+    id = "lint-watch-cycle"
+    fixture = "examples/lint-watch-cycle"
+    argv { "lint"; "--json" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { json = true; exit = true; jsonIgnorePaths { "path" } }
+  }
+  new {
     id = "doctor-structural"
     fixture = "examples/basic"
     argv { "doctor"; "--json" }

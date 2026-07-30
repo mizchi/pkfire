@@ -103,9 +103,9 @@ fn extract_package_zip_url(body : String) -> String? {
 /// Pluck `packageZipChecksums.sha256` from the metadata JSON body via the JSON
 /// parser (matches the reference). `None` when absent or malformed.
 fn extract_package_zip_sha256(body : String) -> String? {
-  let parsed = try? @json.parse(body[:])
+  let parsed = @json.parse(body[:]) catch { _ => return None }
   match parsed {
-    Ok(Object(top)) =>
+    Object(top) =>
       match top.get("packageZipChecksums") {
         Some(Object(checksums)) =>
           match checksums.get("sha256") {

@@ -27,7 +27,7 @@ pub async fn run(bin : String, s : Scenario, repo_root : String) -> RunResult {
 
   // Environment: process env + PKFIRE_CACHE_DIR + scenario env (extra_env on
   // top of the inherited environment, matching Go's os.Environ()+overrides).
-  let extra : Map[String, String] = Map::new()
+  let extra : Map[String, String] = Map([])
   extra["PKFIRE_CACHE_DIR"] = cache
   for k, v in s.env {
     extra[k] = v
@@ -70,7 +70,9 @@ pub async fn run(bin : String, s : Scenario, repo_root : String) -> RunResult {
     fs_delta: delta_paths(before, after),
     fs_deleted: deleted_paths(before, after),
   }
-  ignore(try? @xfs.rmdir(tmp, recursive=true))
+  @xfs.rmdir(tmp, recursive=true) catch {
+    _ => ()
+  }
   result
 }
 
@@ -93,9 +95,8 @@ async fn copy_tree(src : String, dst : String) -> Unit {
       SymLink =>
         // Resolve & copy the target's bytes (fixtures here have no symlinks;
         // mirror Go's copyTree which reads file bytes).
-        match (try? @xfs.read_file(s_path)) {
-          Ok(data) => @xfs.write_file(d_path, data.binary())
-          Err(_) => ()
+        @xfs.write_file(d_path, @xfs.read_file(s_path).binary()) catch {
+          _ => ()
         }
       _ => ()
     }
@@ -106,7 +107,7 @@ async fn copy_tree(src : String, dst : String) -> Unit {
 /// Map of relative path -> sha256 hex for every regular file under root.
 /// Mirrors Go's SnapshotTree.
 async fn snapshot_tree(root : String) -> Map[String, String] {
-  let out : Map[String, String] = Map::new()
+  let out : Map[String, String] = Map([])
   snapshot_into(root, "", out)
   out
 }
@@ -117,7 +118,7 @@ async fn snapshot_into(
   rel_prefix : String,
   out : Map[String, String],
 ) -> Unit {
-  if not(@xfs.exists(dir)) {
+  if !@xfs.exists(dir) {
     return
   }
   let entries = @xfs.readdir(dir, include_hidden=true)
@@ -184,9 +185,9 @@ fn sha256_hex(b : Bytes) -> String {
 ///|
 fn hex_nibble(n : Int) -> Char {
   if n < 10 {
-    Char::from_int('0'.to_int() + n)
+    ('0'.to_int() + n).unsafe_to_char()
   } else {
-    Char::from_int('a'.to_int() + (n - 10))
+    ('a'.to_int() + (n - 10)).unsafe_to_char()
   }
 }
 

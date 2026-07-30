@@ -24,7 +24,7 @@ fn scen(c : Contract) -> Scenario {
     id: "t",
     fixture: "",
     argv: [],
-    env: Map::new(),
+    env: Map([]),
     setup: [],
     contract: c,
   }
@@ -87,9 +87,9 @@ test "json number int float equal" {
 
 ///|
 test "fsdelta detects write" {
-  let before : Map[String, String] = Map::new()
+  let before : Map[String, String] = Map([])
   before["a.txt"] = "h1"
-  let after : Map[String, String] = Map::new()
+  let after : Map[String, String] = Map([])
   after["a.txt"] = "h1"
   after["b.txt"] = "h2"
   let got = delta_paths(before, after)
@@ -99,9 +99,9 @@ test "fsdelta detects write" {
 
 ///|
 test "fsdelta detects modify" {
-  let before : Map[String, String] = Map::new()
+  let before : Map[String, String] = Map([])
   before["a.txt"] = "h1"
-  let after : Map[String, String] = Map::new()
+  let after : Map[String, String] = Map([])
   after["a.txt"] = "h2"
   let got = delta_paths(before, after)
   assert_eq(got.length(), 1)
@@ -110,10 +110,10 @@ test "fsdelta detects modify" {
 
 ///|
 test "deleted paths" {
-  let before : Map[String, String] = Map::new()
+  let before : Map[String, String] = Map([])
   before["a.txt"] = "h1"
   before["b.txt"] = "h2"
-  let after : Map[String, String] = Map::new()
+  let after : Map[String, String] = Map([])
   after["a.txt"] = "h1"
   let got = deleted_paths(before, after)
   assert_eq(got.length(), 1)
@@ -233,8 +233,8 @@ test "lex compare matches go sort.Strings" {
 
 ///|
 test "delta paths lex-sorted like go" {
-  let before : Map[String, String] = Map::new()
-  let after : Map[String, String] = Map::new()
+  let before : Map[String, String] = Map([])
+  let after : Map[String, String] = Map([])
   after[".git/hooks/pre-push"] = "h1"
   after[".git/hooks/pre-commit"] = "h2"
   let got = delta_paths(before, after)

@@ -6,6 +6,12 @@ package "mizchi/pkf/src/cmd/pkf"
 // Errors
 
 // Types and methods
+type GlobCharProductState
+
+type GlobCharTransition
+
+type GlobPathProductState
+
 type LintFinding
 
 type LocalTaskDecl
@@ -19,6 +25,12 @@ type Plan
 type RunningService
 
 type Task
+
+type WatchCycle
+
+type WatchEdge
+
+type WatchTaskContract
 
 type WorkflowTest
 

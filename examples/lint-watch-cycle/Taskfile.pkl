@@ -1,0 +1,11 @@
+/// Fixture for static watch-loop diagnostics.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local build = new Task {
+  name = "build"
+  cmd = "mkdir -p dist && printf built > dist/app.js"
+  inputs { "**/*" }
+  outputs { "dist" }
+}
+
+tasks { build }

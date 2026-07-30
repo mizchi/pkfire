@@ -18,17 +18,13 @@ pub fn diff_json(
   got : String,
   unordered : Array[String],
 ) -> String {
-  let wv = try? @json.parse(want)
-  let wv = match wv {
-    Ok(v) => v
-    Err(e) => return "golden is not valid JSON: \{e}"
+  let wv = @json.parse(want) catch {
+    e => return "golden is not valid JSON: \{e}"
   }
-  let gv = try? @json.parse(got)
-  let gv = match gv {
-    Ok(v) => v
-    Err(e) => return "candidate stdout is not valid JSON: \{e}"
+  let gv = @json.parse(got) catch {
+    e => return "candidate stdout is not valid JSON: \{e}"
   }
-  let set : Map[String, Bool] = Map::new()
+  let set : Map[String, Bool] = Map([])
   for p in unordered {
     set[p] = true
   }
@@ -99,7 +95,7 @@ fn json_diff(
       if scalar_type(want) != scalar_type(got) {
         return "\{path_or_root(path)}: type \{type_name(want)} != \{type_name(got)}"
       }
-      if not(scalar_eq(want, got)) {
+      if !scalar_eq(want, got) {
         return "\{path_or_root(path)}: \{scalar_show(want)} != \{scalar_show(got)}"
       }
       ""
@@ -288,11 +284,8 @@ pub fn strip_json_keys(raw : String, keys : Array[String]) -> String {
   if keys.length() == 0 {
     return raw
   }
-  let v = match (try? @json.parse(raw)) {
-    Ok(v) => v
-    Err(_) => return raw
-  }
-  let set : Map[String, Bool] = Map::new()
+  let v = @json.parse(raw) catch { _ => return raw }
+  let set : Map[String, Bool] = Map([])
   for k in keys {
     set[k] = true
   }
@@ -304,7 +297,7 @@ pub fn strip_json_keys(raw : String, keys : Array[String]) -> String {
 fn strip_walk(n : Json, set : Map[String, Bool]) -> Json {
   match n {
     Object(o) => {
-      let out : Map[String, Json] = Map::new()
+      let out : Map[String, Json] = Map([])
       for k, v in o {
         if set.get(k) is Some(true) {
           continue
@@ -392,7 +385,7 @@ pub fn compare(s : Scenario, want : Golden, got : RunResult) -> String {
     }
   }
   for sub in s.contract.must_contain {
-    if not(contains_normalized(got.stdout, sub)) {
+    if !contains_normalized(got.stdout, sub) {
       return "mustContain: \"\{sub}\" not found in normalized stdout"
     }
   }
@@ -415,7 +408,7 @@ pub fn compare(s : Scenario, want : Golden, got : RunResult) -> String {
     }
   }
   for sub in s.contract.must_contain_stderr {
-    if not(contains_normalized(got.stderr, sub)) {
+    if !contains_normalized(got.stderr, sub) {
       return "mustContainStderr: \"\{sub}\" not found in normalized stderr"
     }
   }

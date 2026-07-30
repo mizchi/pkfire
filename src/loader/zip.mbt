@@ -156,7 +156,7 @@ fn zip_ensure_dir(path : String) -> Unit raise LoaderError {
     return
   }
   if @fs.path_exists(path) {
-    let dir_ok = (try? @fs.is_dir(path)).unwrap_or(false)
+    let dir_ok = @fs.is_dir(path) catch { _ => false }
     if dir_ok {
       return
     }

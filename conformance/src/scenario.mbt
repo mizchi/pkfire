@@ -44,21 +44,22 @@ impl Show for ScenarioError with fn output(self, logger) {
 /// scenario list. Uses the embedded loader's amends-chain registration so
 /// scenarios.pkl's `amends "Conformance.pkl"` resolves in-process.
 pub async fn load_scenarios(path : String) -> Array[Scenario] {
-  let value = match (try? @loader.eval_module_path(path)) {
-    Ok(@pkl.EvalOk(v)) => v
-    Ok(@pkl.EvalError(errors)) => {
+  let result = @loader.eval_module_path(path) catch {
+    err => raise ScenarioError("pkl eval \{path}: \{err}")
+  }
+  let value = match result {
+    @pkl.EvalOk(v) => v
+    @pkl.EvalError(errors) => {
       let msgs : Array[String] = []
       for e in errors {
         msgs.push(e.message)
       }
       raise ScenarioError("pkl eval \{path}: " + join_strings(msgs, "; "))
     }
-    Err(err) => raise ScenarioError("pkl eval \{path}: \{err}")
   }
   let rendered = @pkl.render_value_as_json(value)
-  let root = match (try? @json.parse(rendered)) {
-    Ok(v) => v
-    Err(e) => raise ScenarioError("decode scenarios json: \{e}")
+  let root = @json.parse(rendered) catch {
+    e => raise ScenarioError("decode scenarios json: \{e}")
   }
   let scenarios_json = match root {
     Object(o) =>
@@ -140,7 +141,7 @@ fn get_string_array(o : Map[String, Json], k : String) -> Array[String] {
 
 ///|
 fn get_string_map(o : Map[String, Json], k : String) -> Map[String, String] {
-  let out : Map[String, String] = Map::new()
+  let out : Map[String, String] = Map([])
   match o.get(k) {
     Some(Object(m)) =>
       for mk, mv in m {
