@@ -12,7 +12,7 @@
 ///   pkf doctor --json
 ///   pkf doctor --fix --dry-run
 ///   pkf explain --diff old/Taskfile.pkl ci
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.13.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.0#/Taskfile.pkl"
 
 local strictShellFlags: List<String> = List("-eu", "-o", "pipefail", "-c")
 

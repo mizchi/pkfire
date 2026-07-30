@@ -8,7 +8,7 @@
 /// This is also a good template for any "same task across N
 /// configurations" pattern (e.g. test under multiple Node versions,
 /// build for multiple WASM targets, etc.).
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.13.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "**/*.go"

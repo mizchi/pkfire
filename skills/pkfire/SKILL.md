@@ -7,7 +7,7 @@ description: Explain, operate, and troubleshoot `pkf`, the pure-MoonBit CLI for 
 
 ## Version and authority
 
-Treat this skill as the operational specification for `pkf 0.13.0`.
+Treat this skill as the operational specification for `pkf 0.14.0`.
 Start by running `pkf version`; when the installed version differs,
 inspect that checkout's sources before relying on version-sensitive
 details.
@@ -74,7 +74,7 @@ top-level properties.
 Start from:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.13.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.mbt"
@@ -154,7 +154,7 @@ export PKFIRE_MBT_REMOTE_TOKEN=secret
 
 The default root is `$XDG_CACHE_HOME/pkfire-mbt` or
 `$HOME/.cache/pkfire-mbt`. Names without `_MBT_` belong to the older
-implementation and are not read by `pkf 0.13.0`.
+implementation and are not read by `pkf 0.14.0`.
 
 ## Services
 
@@ -221,7 +221,7 @@ pkf init
 
 ### Version-sensitive limitations
 
-For `0.13.0`, do not claim or generate these older interfaces:
+For `0.14.0`, do not claim or generate these older interfaces:
 
 - `pkf run` has no default target, multi-target mode, `--dry-run`,
   `--print-hash`, `--no-cache`, `--refresh`, `--timing`,
@@ -233,7 +233,7 @@ For `0.13.0`, do not claim or generate these older interfaces:
 - `pkf lint --fix/--dry-run`, `pkf explain --diff`, and
   `pkf clean --dry-run` are accepted compatibility no-ops.
   In particular, `clean --dry-run` still removes outputs.
-- The local store writes `entry.tar.gz`, but the `0.13.0` hit check still
+- The local store writes `entry.tar.gz`, but the `0.14.0` hit check still
   looks for the removed `manifest` marker. Newly stored entries therefore
   appear in cache statistics but are not reused as local hits. Do not
   promise working local reuse until that implementation gap is fixed.

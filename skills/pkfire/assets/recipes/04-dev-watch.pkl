@@ -10,7 +10,7 @@
 ///   pkf run --watch test   # auto-test on every save
 ///   pkf run dev            # foreground dev server (no watch needed,
 ///                            it's the dev server that watches)
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.13.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.ts"

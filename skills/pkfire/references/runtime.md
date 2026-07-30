@@ -1,7 +1,7 @@
 # pkf runtime contract
 
 This reference describes observable behavior of the pure-MoonBit
-`pkf 0.13.0` implementation.
+`pkf 0.14.0` implementation.
 
 ## Discovery and evaluation
 
@@ -116,7 +116,7 @@ After a successful miss, pkf expands existing `outputs`, archives
 regular files and recursive directory contents, preserves file modes
 best-effort, and writes the entry.
 
-Known `0.13.0` implementation gap: `cache_store` writes only
+Known `0.14.0` implementation gap: `cache_store` writes only
 `entry.tar.gz`, while `cache_hit` still tests for a legacy `manifest`
 file. A newly stored local entry is visible to `cache stats` but is not
 recognized as a hit. A remote GET can still restore an archive, but the
