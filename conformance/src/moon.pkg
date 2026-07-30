@@ -8,12 +8,10 @@ import {
   "moonbitlang/x/crypto",
   "moonbitlang/x/sys",
   "moonbitlang/core/json",
-  "moonbitlang/core/strconv",
+  "moonbitlang/core/string",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
 }
-
-warnings = "-0029-0014-0024-0009-0020"
 
 pkgtype(kind: "executable")
 

@@ -96,7 +96,7 @@ fn normalize_path(path : String) -> String {
   }
   let segs : Array[String] = []
   for seg in rest.split("/") {
-    let s = seg.to_string()
+    let s = seg.to_owned()
     if s == "" || s == "." {
       continue
     }

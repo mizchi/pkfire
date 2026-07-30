@@ -4,16 +4,17 @@ import {
   "mizchi/zlib",
   "moonbitlang/core/json",
   "moonbitlang/x/crypto",
-  "moonbitlang/async",
-  "moonbitlang/async/http" @async_http,
-  "moonbitlang/async/socket",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/x/fs",
   "moonbitlang/x/sys",
   "moonbitlang/core/string",
 }
 
-warnings = "-0029-0014-0024-0009-0020"
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/http" @async_http,
+  "moonbitlang/async/socket",
+} for "wbtest"
 
 options(
   // The loader is consumed only by the native `cmd/pkf` binary and depends

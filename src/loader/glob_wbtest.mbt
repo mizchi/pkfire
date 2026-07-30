@@ -58,7 +58,7 @@ async test "embedded loader resolves glob imports keyed by glob-relative path" {
       for d in diags {
         msgs.push(d.message)
       }
-      fail("eval failed: \{msgs}")
+      fail("eval failed: \{repr(msgs)}")
     }
   }
   // Keys must be the glob-relative paths and the matched modules' values.

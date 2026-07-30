@@ -1,6 +1,6 @@
 # pkf CLI contract
 
-This is the implemented `pkf 0.12.4` command surface. Prefer the
+This is the implemented `pkf 0.13.0` command surface. Prefer the
 dispatcher in `src/cmd/pkf/main.mbt` over generated completions or
 older README examples.
 

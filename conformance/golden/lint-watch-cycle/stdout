@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "path": "/tmp/pkfconf-lint-watch-cycle/work/Taskfile.pkl",
+      "line": 4,
+      "level": "error",
+      "kind": "input-output-watch-cycle",
+      "task": "build",
+      "message": "task \"build\" watches input \"**/*\" which overlaps its output \"dist/**\" (example: \"dist\")",
+      "suggestion": "exclude generated outputs from the task inputs, or narrow the input/output glob patterns so they are disjoint"
+    },
+    {
+      "path": "/tmp/pkfconf-lint-watch-cycle/work/Taskfile.pkl",
+      "line": 4,
+      "level": "error",
+      "kind": "input-cache-watch-cycle",
+      "task": "build",
+      "message": "task \"build\" watches input \"**/*\" which overlaps local cache writes \".pkf-cache/cas/**\" (example: \".pkf-cache/cas\")",
+      "suggestion": "move PKFIRE_MBT_CACHE_DIR outside the watched repository, use an excluded .cache directory, or narrow the task inputs"
+    }
+  ]
+}

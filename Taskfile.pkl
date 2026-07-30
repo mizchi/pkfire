@@ -141,7 +141,7 @@ local fmt: Task = new {
   description = "Format all Pkl files in the repo"
   // examples/unformatted is intentionally non-canonical (conformance fixture).
   cmd =
-    "pkl format -w Taskfile.pkl pkl skills examples/basic examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/lint-dead examples/lint-rules examples/lint-string-safe examples/monorepo examples/node examples/remote-cache-worker examples/rust examples/split-import examples/with-pkspec"
+    "pkl format -w Taskfile.pkl pkl skills examples/basic examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/lint-dead examples/lint-rules examples/lint-string-safe examples/lint-watch-cycle examples/monorepo examples/node examples/remote-cache-worker examples/rust examples/split-import examples/with-pkspec"
   cache = false
 }
 
@@ -150,7 +150,7 @@ local fmtCheck: Task = new {
   description = "Check Pkl formatting without writing changes"
   // examples/unformatted is intentionally non-canonical (conformance fixture).
   cmd =
-    "pkl format --diff-name-only Taskfile.pkl pkl skills examples/basic examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/lint-dead examples/lint-rules examples/lint-string-safe examples/monorepo examples/node examples/remote-cache-worker examples/rust examples/split-import examples/with-pkspec"
+    "pkl format --diff-name-only Taskfile.pkl pkl skills examples/basic examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/lint-dead examples/lint-rules examples/lint-string-safe examples/lint-watch-cycle examples/monorepo examples/node examples/remote-cache-worker examples/rust examples/split-import examples/with-pkspec"
   inputs {
     "Taskfile.pkl"
     "pkl/**/*.pkl"
@@ -245,7 +245,7 @@ local preCommit: Task = new {
 
 local conformance: Task = new {
   name = "conformance"
-  description = "MoonBit pkf contract harness: candidate vs frozen goldens (42/42 strict)"
+  description = "MoonBit pkf contract harness: candidate vs frozen goldens (43/43 strict)"
   cmd =
     """
     set -euo pipefail

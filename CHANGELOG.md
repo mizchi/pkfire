@@ -10,6 +10,43 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-30
+
+### Added
+
+- **`pkf lint` and `pkf watch` now detect task-graph watch loops before they
+  spin.** A product-automaton glob solver proves intersections across literals,
+  `*`, `**`, `?`, character classes, and brace alternatives while producing a
+  concrete witness path. The analyzer reports self output loops, local-cache
+  loops, and cross-task strongly connected components; `pkf watch` refuses to
+  start when any such cycle is present.
+- **Watch-cycle coverage now includes 20 focused tests plus a bounded
+  adversarial corpus.** The corpus cross-checks 20 patterns over 1,110 paths,
+  while graph tests cover self loops, disjoint and three-task SCCs, duplicate
+  declarations, exclusions, workdirs, cache regions, and path normalization.
+
+### Changed
+
+- **Watch inputs and outputs are resolved consistently from each task's
+  `workdir`.** Affected-task matching, action-key input hashing, watch analysis,
+  and output archive paths now use the same repo-relative contract.
+- **MoonBit and embedded Pkl dependencies track the current warning-clean
+  toolchain.** `mizchi/pkl` moves to 0.3.4, `mizchi/x` to 0.5.2, and
+  `moonbitlang/async` to 0.20.3.
+
+### Fixed
+
+- **Watcher exclusions match complete path segments.** `.git`, `.cache`,
+  `_build`, `node_modules`, and `target` remain ignored without accidentally
+  hiding visible names such as `.gitignore`, `_builder`, or `targeted`.
+- **Excluded first-choice glob witnesses no longer hide a visible
+  intersection.** The solver continues through alternative characters and
+  brace branches instead of treating an excluded candidate as proof that no
+  actionable overlap exists.
+- **Latest MoonBit warnings are removed instead of suppressed.** Conformance
+  and loader code use current error handling, collection construction, string,
+  and package APIs, and all active packages pass `moon check --deny-warn`.
+
 ## [0.12.4] - 2026-07-15
 
 ### Changed
@@ -690,7 +727,8 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.12.4...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.13.0...HEAD
+[0.13.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.13.0
 [0.12.4]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.4
 [0.12.3]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.3
 [0.12.2]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.2

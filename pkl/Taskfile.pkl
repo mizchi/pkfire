@@ -81,6 +81,9 @@ class Task {
 
   /// Glob patterns of input files. Their content hash feeds the action key.
   ///
+  /// Paths are relative to `workdir` (or the Taskfile's directory when
+  /// `workdir` is null), matching the directory in which `cmd` runs.
+  ///
   /// Patterns support `*`, `**`, `?`, and character classes via doublestar.
   /// Literal paths that do not exist are *silently ignored* (matched 0 times),
   /// which means a missing file does NOT raise an error — it just contributes
