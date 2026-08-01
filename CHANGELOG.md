@@ -10,6 +10,8 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-01
+
 ### Added
 
 - **Homebrew installation for Apple Silicon macOS.** The repository now ships
@@ -741,7 +743,8 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.13.0...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.14.1...HEAD
+[0.14.1]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.14.1
 [0.13.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.13.0
 [0.12.4]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.4
 [0.12.3]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.3
