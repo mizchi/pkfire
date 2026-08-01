@@ -54,6 +54,20 @@ mode that reruns only the affected subgraph.
 
 ## Install
 
+### Homebrew (Apple Silicon macOS)
+
+This repository doubles as a custom Homebrew tap. Register its explicit URL
+once, then install `pkf`; Homebrew also installs the required Pkl CLI:
+
+```sh
+brew tap mizchi/pkfire https://github.com/mizchi/pkfire
+brew install mizchi/pkfire/pkf
+```
+
+Upgrade later with `brew update && brew upgrade pkf`. Intel macOS is not
+supported because the MoonBit toolchain does not provide an x86_64 macOS
+binary.
+
 ### Install script
 
 `pkf` is a self-contained MoonBit binary. The installer detects your

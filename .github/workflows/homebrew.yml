@@ -1,0 +1,44 @@
+name: Homebrew
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Formula/**"
+      - "scripts/homebrew_test.sh"
+      - "scripts/sync-release-metadata.sh"
+      - ".github/workflows/homebrew.yml"
+  pull_request:
+    paths:
+      - "Formula/**"
+      - "scripts/homebrew_test.sh"
+      - "scripts/sync-release-metadata.sh"
+      - ".github/workflows/homebrew.yml"
+  workflow_dispatch:
+
+jobs:
+  formula:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Contract tests
+        run: scripts/homebrew_test.sh
+
+      - name: Tap checkout
+        run: brew tap --custom-remote mizchi/pkfire "$GITHUB_WORKSPACE"
+
+      - name: Style
+        run: brew style mizchi/pkfire/pkf
+
+      - name: Audit
+        run: brew audit --strict --new --online mizchi/pkfire/pkf
+
+      - name: Install
+        run: brew install mizchi/pkfire/pkf
+
+      - name: Test
+        run: |
+          brew test mizchi/pkfire/pkf
+          "$(brew --prefix pkf)/bin/pkf" version

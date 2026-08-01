@@ -10,6 +10,12 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- **Homebrew installation for Apple Silicon macOS.** The repository now ships
+  `Formula/pkf.rb`, installs the Pkl CLI as a dependency, validates the formula
+  in macOS CI, and synchronizes its release checksum alongside the Nix pin.
+
 ## [0.13.0] - 2026-07-30
 
 ### Added

@@ -215,25 +215,14 @@ jobs:
             dist/pkf-linux-arm64.tar.gz dist/pkf-linux-arm64.tar.gz.sha256 \
             dist/pkf-darwin-arm64.tar.gz dist/pkf-darwin-arm64.tar.gz.sha256 \
             install.sh
-        # Action-friendly `v<ver>` + floating `v<major>` tags are
-        # synced by `.github/workflows/v-tags.yml`, which fires via
-        # workflow_run on this workflow's success.
+        # Action-friendly `v<ver>` + floating `v<major>` tags are retargeted
+        # by the release-metadata sync step below.
 
-      # Keep the Nix flake's binary pin in lockstep with the release.
-      # The flake fetches these exact tarballs, so regenerate
-      # nix/pkf-release.json from the freshly built checksums and open a
-      # follow-up PR. (Can't commit straight to main if it's protected;
-      # a PR is reviewable and works either way.)
-      # Regenerate nix/pkf-release.json from the freshly-built sha256, then make
-      # the consumer-facing v<ver> / v<major> tags point at a commit that
-      # ACTUALLY contains that synced pin. The binary-fetch flake reads the
-      # version+sha256 from this file, and the sha256 only exists after the
-      # build — so the canonical `pkfire@<ver>` tag (the source release commit)
-      # can never carry it. We commit the sync on top of the release commit and
-      # move v<ver>/v<major> there, so `nix run github:mizchi/pkfire/v<ver>` and
-      # `uses: mizchi/pkfire@v<ver>` resolve THIS release with no manual step.
-      # (This replaces the old v-tags.yml, which tagged the un-synced commit.)
-      - name: Sync release pin + retarget v-tags
+      # The Nix and Homebrew packages both install release artifacts whose
+      # checksums only exist after the platform build matrix finishes. Sync
+      # both consumers in one follow-up commit, then point v<ver>/v<major> at
+      # that commit so Nix, Homebrew and the setup Action resolve the release.
+      - name: Sync release metadata + retarget v-tags
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -244,30 +233,24 @@ jobs:
           la=$(awk '{print $1}' dist/pkf-linux-amd64.tar.gz.sha256)
           lr=$(awk '{print $1}' dist/pkf-linux-arm64.tar.gz.sha256)
           da=$(awk '{print $1}' dist/pkf-darwin-arm64.tar.gz.sha256)
-          jq -n --arg v "$version" --arg la "$la" --arg lr "$lr" --arg da "$da" '{
-            version: $v,
-            platforms: {
-              "x86_64-linux":  { plat: "linux-amd64",  sha256: $la },
-              "aarch64-linux": { plat: "linux-arm64",  sha256: $lr },
-              "aarch64-darwin": { plat: "darwin-arm64", sha256: $da }
-            }
-          }' > nix/pkf-release.json
+          scripts/sync-release-metadata.sh "$version" "$la" "$lr" "$da"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- nix/pkf-release.json; then
-            echo "::notice::nix/pkf-release.json already in sync with pkfire@${version}"
+          if git diff --quiet -- nix/pkf-release.json Formula/pkf.rb; then
+            echo "::notice::release metadata already in sync with pkfire@${version}"
             sync_sha="$(git rev-parse HEAD)"
           else
-            git add nix/pkf-release.json
-            git commit -m "nix: pin pkfire@${version} release sha256 [skip ci]"
+            git add nix/pkf-release.json Formula/pkf.rb
+            git commit -m "release: sync pkfire@${version} package metadata [skip ci]"
             sync_sha="$(git rev-parse HEAD)"
-            # Also land it on main so the default-branch flake (no ref) is current.
-            branch="nix-release-sync-${version}"
+            # Also land it on main so the default Nix flake and Homebrew tap
+            # resolve the release without an explicit ref.
+            branch="release-metadata-sync-${version}"
             git push -f origin "HEAD:refs/heads/${branch}"
             gh pr create --base main --head "$branch" \
-              --title "nix: sync flake release pin to pkfire@${version}" \
-              --body "Auto-generated after the pkfire@${version} release. Updates \`nix/pkf-release.json\` sha256 so the default-branch \`nix run github:mizchi/pkfire\` resolves the new release. (The v${version}/v${major} tags already point at the synced commit.)" \
-              || echo "::warning::could not open the sync PR — enable 'Allow GitHub Actions to create and approve pull requests', or merge nix-release-sync-${version} by hand"
+              --title "release: sync Nix and Homebrew metadata for pkfire@${version}" \
+              --body "Auto-generated after the pkfire@${version} release. Updates the Nix and Homebrew checksums so both package managers resolve the new binaries. The v${version}/v${major} tags already point at this synced commit." \
+              || echo "::warning::could not open the sync PR — enable 'Allow GitHub Actions to create and approve pull requests', or merge ${branch} by hand"
           fi
           # Point the @-free consumer tags at the synced commit. The canonical
           # pkfire@<ver> tag stays at the source release commit (it owns the
