@@ -4,13 +4,13 @@
   inputs = {
     # Pin a stable channel (not nixpkgs-unstable) for reproducible, non-churning
     # builds. Channel tarball (not github:) to avoid the unauthenticated GitHub API.
-    nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "https://channels.nixos.org/nixos-26.05/nixexprs.tar.xz";
+    flake-utils.url = "git+https://github.com/numtide/flake-utils.git";
 
     # MoonBit toolchain for the `nix develop` shell (building the pkf sources
     # at the repo root). The package itself no longer builds from source — it installs
     # the prebuilt release binary — so the mooncakes index input is gone.
-    moonbit-overlay.url = "github:moonbit-community/moonbit-overlay";
+    moonbit-overlay.url = "git+https://github.com/moonbit-community/moonbit-overlay.git";
   };
 
   outputs = { self, nixpkgs, flake-utils, moonbit-overlay }:
@@ -89,9 +89,11 @@
           pkfire = pkfire;
         };
 
-        apps.default = flake-utils.lib.mkApp {
+        apps.default = (flake-utils.lib.mkApp {
           drv = pkfire;
           name = "pkf";
+        }) // {
+          meta.description = "Run the pkf task runner";
         };
 
         # `nix develop` for working on pkfire itself: the MoonBit toolchain

@@ -16,6 +16,14 @@ Action version all move together — there is one tag per release
   `Formula/pkf.rb`, installs the Pkl CLI as a dependency, validates the formula
   in macOS CI, and synchronizes its release checksum alongside the Nix pin.
 
+### Changed
+
+- **Development, packaging, and CI dependencies are current.** MoonBit uses
+  `moonbitlang/x` 0.4.47, the setup Action installs Pkl 0.32.1, the Nix flake
+  tracks NixOS 26.05 and the latest MoonBit overlay, GitHub workflows use the
+  current action majors, and the remote-cache Worker uses workers-types 5,
+  TypeScript 7, and Wrangler 4.
+
 ## [0.13.0] - 2026-07-30
 
 ### Added

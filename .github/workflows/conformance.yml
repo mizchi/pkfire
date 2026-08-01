@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install MoonBit CLI
         run: |
@@ -19,7 +19,7 @@ jobs:
 
       - name: Install Pkl
         run: |
-          curl -fsSL -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          curl -fsSL -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
           chmod +x /tmp/pkl && sudo mv /tmp/pkl /usr/local/bin/pkl
           pkl --version
 

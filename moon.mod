@@ -8,7 +8,7 @@ import {
   "mizchi/x@0.5.2",
   "mizchi/zlib@0.4.8",
   "moonbitlang/async@0.20.3",
-  "moonbitlang/x@0.4.46",
+  "moonbitlang/x@0.4.47",
 }
 
 readme = "README.md"

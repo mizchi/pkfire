@@ -34,11 +34,11 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Pkl
         run: |
-          curl -L -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-amd64
+          curl -L -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
           chmod +x /tmp/pkl-cli
           sudo mv /tmp/pkl-cli /usr/local/bin/pkl
           pkl --version
@@ -69,7 +69,7 @@ jobs:
         run: ls -la "pkl/.out/${{ steps.tag.outputs.tag }}"
 
       - name: Upload pkl package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pkl-package
           path: pkl/.out/${{ steps.tag.outputs.tag }}/
@@ -98,7 +98,7 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install MoonBit CLI
         run: |
@@ -143,7 +143,7 @@ jobs:
           cat "pkf-${target}.tar.gz.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pkf-${{ matrix.target }}
           path: |
@@ -155,16 +155,16 @@ jobs:
     needs: [resolve, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download pkl package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pkl-package
           path: pkldist
 
       - name: Download pkf binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pkf-*
           merge-multiple: true

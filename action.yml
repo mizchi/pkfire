@@ -17,7 +17,7 @@ inputs:
   pkl-version:
     description: Pkl CLI version to install. Set to `none` to skip Pkl install.
     required: false
-    default: "0.31.1"
+    default: "0.32.1"
   install-dir:
     description: Directory where binaries are placed. Added to GITHUB_PATH.
     required: false
@@ -25,7 +25,7 @@ inputs:
   cache-pkl:
     description: |
       When `true`, cache `~/.pkl/cache` between runs via
-      `actions/cache@v4`. Default `false` because the cache helps
+      `actions/cache@v6`. Default `false` because the cache helps
       most for projects that hit `pkg.pkl-lang.org` repeatedly (Pkl
       package consumers) but is dead weight for one-shot setups.
     required: false
@@ -152,7 +152,7 @@ runs:
     # `pkl project resolve` re-downloads from `pkg.pkl-lang.org`.
     - name: Cache ~/.pkl/cache
       if: inputs.cache-pkl == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.pkl/cache
         key: ${{ inputs.pkl-cache-key != '' && inputs.pkl-cache-key || format('pkl-{0}', hashFiles('**/PklProject.deps.json', '**/Taskfile.pkl')) }}

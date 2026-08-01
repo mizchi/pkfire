@@ -116,7 +116,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mizchi/pkfire@v0.14.0       # or @v0 to track the latest 0.x
       - run: pkf run ci
 ```
@@ -154,7 +154,7 @@ Inputs:
 | Input | Default | Notes |
 | --- | --- | --- |
 | `version` | the action ref, falling back to the latest release | Accepts `v0.5.0`, `0.4.0`, `v0` (floating major), or the underlying `pkfire@0.14.0`. Pinning via `uses: mizchi/pkfire@v0.14.0` is the recommended form. |
-| `pkl-version` | `0.31.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
+| `pkl-version` | `0.32.1` | Set to `none` to skip the Pkl install when only `pkf` is needed. |
 | `install-dir` | `${{ runner.temp }}/pkfire-bin` | Both binaries are placed here; the dir is appended to `GITHUB_PATH`. |
 | `cache-pkl` | `false` | Set to `true` to cache `~/.pkl/cache` between runs. Useful for projects that consume remote Pkl packages (`amends` / `import` of `package://pkg.pkl-lang.org/...`). |
 | `pkl-cache-key` | `pkl-<hashFiles>` of `PklProject.deps.json` + `Taskfile.pkl` | Override only if the default key collides across unrelated jobs in the same repo. |

@@ -7,15 +7,15 @@
       "locked": {
         "lastModified": 1731533236,
         "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
-        "owner": "numtide",
-        "repo": "flake-utils",
+        "ref": "refs/heads/main",
         "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
-        "type": "github"
+        "revCount": 102,
+        "type": "git",
+        "url": "https://github.com/numtide/flake-utils.git"
       },
       "original": {
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "type": "github"
+        "type": "git",
+        "url": "https://github.com/numtide/flake-utils.git"
       }
     },
     "moonbit-overlay": {
@@ -24,26 +24,26 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1782195091,
-        "narHash": "sha256-dtOqd5Iqy24ddkRz8FeNlnT1FFThE1rjAyPLppsqWQk=",
-        "owner": "moonbit-community",
-        "repo": "moonbit-overlay",
-        "rev": "ee1047af8f4a2a5d164e4d6457d4381478c8ad0e",
-        "type": "github"
+        "lastModified": 1785562289,
+        "narHash": "sha256-Y08A4W3TNzJRt9oPRgTc9LC8m0WkMMM/Yy47Nl9VBeg=",
+        "ref": "refs/heads/master",
+        "rev": "b8565d72c23eda500279feed383c9613c92346d6",
+        "revCount": 479,
+        "type": "git",
+        "url": "https://github.com/moonbit-community/moonbit-overlay.git"
       },
       "original": {
-        "owner": "moonbit-community",
-        "repo": "moonbit-overlay",
-        "type": "github"
+        "type": "git",
+        "url": "https://github.com/moonbit-community/moonbit-overlay.git"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1781607440,
-        "narHash": "sha256-rxO+uc/KFbSJp+pgyXRuAX6QlG9hJdnt0BXpEQRXY+U=",
+        "lastModified": 1785141334,
+        "narHash": "sha256-kh35kIx7el4Jk8Ki3BH9/Pn1eZYSYLJ6LMALos0zOy0=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "3e41b24abd260e8f71dbe2f5737d24122f972158",
+        "rev": "38a4887411571457d700c51c64a6e49ead2ed5ab",
         "type": "github"
       },
       "original": {
@@ -55,15 +55,15 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1767313136,
-        "narHash": "sha256-3zSML8xJhOT2kRBCNUpniZSCeCBCPA3KGsRYh+KdtbU=",
-        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
+        "lastModified": 1785491804,
+        "narHash": "sha256-GGQER+O/plhJCG35JVsKYVwI8qtOKR7UB4E3e8DBKmQ=",
+        "rev": "5b4f72e1705a63aace42900610c4db82cb4af0ec",
         "type": "tarball",
-        "url": "https://releases.nixos.org/nixos/25.05/nixos-25.05.813814.ac62194c3917/nixexprs.tar.xz"
+        "url": "https://releases.nixos.org/nixos/26.05/nixos-26.05.6603.5b4f72e1705a/nixexprs.tar.xz"
       },
       "original": {
         "type": "tarball",
-        "url": "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz"
+        "url": "https://channels.nixos.org/nixos-26.05/nixexprs.tar.xz"
       }
     },
     "root": {
@@ -96,11 +96,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780220602,
-        "narHash": "sha256-eynAfOmbmxJnkp7YewvCEbShNnnYJ9gLLqkzsYtBPeM=",
+        "lastModified": 1784369104,
+        "narHash": "sha256-47cxbcZODibHv3rELFQ9vZly0vUNkND/atn/U7HLeb0=",
         "owner": "numtide",
         "repo": "treefmt-nix",
-        "rev": "db947814a175b7ca6ded66e21383d938df01c227",
+        "rev": "df3c0640565d04a0261253cdd89fce78ec50168a",
         "type": "github"
       },
       "original": {
