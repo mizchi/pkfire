@@ -1,9 +1,9 @@
 class Pkf < Formula
   desc "Typed task runner with content-addressed caching, configured in Pkl"
   homepage "https://github.com/mizchi/pkfire"
-  url "https://github.com/mizchi/pkfire/releases/download/pkfire@0.14.0/pkf-darwin-arm64.tar.gz"
-  version "0.14.0"
-  sha256 "fe0706a2de5470b19ef2c079c0b7b64383c98970b60d946ebbfbee06e6d2c1ac"
+  url "https://github.com/mizchi/pkfire/releases/download/pkfire@0.14.2/pkf-darwin-arm64.tar.gz"
+  version "0.14.2"
+  sha256 "02712bd298b06aea8f5b9a92cb9735c0da7de36e5fc09cef71bd62342bc1b998"
   license "MIT"
 
   depends_on arch: :arm64
