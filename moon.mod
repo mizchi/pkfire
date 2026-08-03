@@ -1,10 +1,10 @@
 name = "mizchi/pkf"
 
-version = "0.14.1"
+version = "0.14.2"
 
 import {
   "mizchi/fswatch@0.2.1",
-  "mizchi/pkl@0.3.4",
+  "mizchi/pkl@0.6.0",
   "mizchi/x@0.5.2",
   "mizchi/zlib@0.4.8",
   "moonbitlang/async@0.20.3",

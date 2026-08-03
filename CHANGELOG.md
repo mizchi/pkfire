@@ -10,6 +10,13 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-03
+
+### Changed
+
+- **The MoonBit Pkl runtime dependency now uses `mizchi/pkl` 0.6.0.** Root and
+  conformance packages share the newer evaluator and parser implementation.
+
 ## [0.14.1] - 2026-08-01
 
 ### Added

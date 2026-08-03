@@ -22,7 +22,7 @@
 /// kept in comments so the file evaluates standalone. To use, uncomment
 /// the imports / spreads and create the fragments under `tasks/` and
 /// `shared/`.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.1#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.2#/Taskfile.pkl"
 
 // import "tasks/build.pkl" as bt
 // import "tasks/test.pkl"  as tt
@@ -36,7 +36,7 @@ tasks {
 // tasks/build.pkl  (sketch)
 // ---------------------------------------------------------------
 //
-//   import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.1#/Taskfile.pkl" as schema
+//   import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.2#/Taskfile.pkl" as schema
 //   import "../shared/sources.pkl"   as src
 //   import "../shared/toolchain.pkl" as tc
 //
@@ -53,7 +53,7 @@ tasks {
 // tasks/test.pkl  (sketch)
 // ---------------------------------------------------------------
 //
-//   import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.1#/Taskfile.pkl" as schema
+//   import "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.2#/Taskfile.pkl" as schema
 //   import "../shared/sources.pkl"   as src
 //   import "build.pkl"               as bt
 //
