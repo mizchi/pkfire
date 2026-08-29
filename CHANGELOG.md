@@ -10,6 +10,34 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two loader tests shared one package cache directory.** The
+  `download_package_uri_to_cache` tests both wrote to `p/n@1.0.0`, and
+  the isolation they appeared to have was illusory:
+  `PKL_MBT_PACKAGE_CACHE` is process-global, so the per-test cache roots
+  are last-writer-wins and after a full run only one of them exists —
+  every test's package lands inside it. The success test and the
+  sha256-mismatch test therefore shared a directory, which is what made
+  the suite fail intermittently under load. Each test now uses a
+  distinct package path in its `package://` URI, so they cannot collide
+  whichever root wins or whatever order they run in.
+
+- **Every evaluation error in a Taskfile was reported as
+  "Taskfile output has no `tasks` mapping".** A typo'd identifier, an
+  unknown method, or a task listed in `tasks { … }` but never defined
+  all produced that one message, pointing the reader at the `tasks`
+  declaration — the part of the file that is almost always fine. It also
+  quietly undercut the schema's own selling point, that misspelling a
+  dependency fails at evaluation time: it does, but the message named
+  the wrong thing. The embedded evaluator renders a member it cannot
+  evaluate as `null` rather than reporting a diagnostic, so pkfire now
+  recognises `tasks: null` as a failed evaluation, says so, and points
+  at `pkl eval <taskfile>` for the exact line and column. Missing and
+  wrong-typed `tasks` are reported as themselves. Syntax errors were
+  already reported correctly and are unchanged. See #65 for the
+  upstream half.
+
 ### Changed
 
 - **`pkf doctor` reports what the cache actually costs.** The cache row

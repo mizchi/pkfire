@@ -33,10 +33,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # cachix/install-nix-action intermittently fails on the macOS runner
+      # while starting the multi-user daemon:
+      #
+      #   ~~> Setting up the nix-daemon LaunchDaemon
+      #   Could not kickstart service "org.nixos.nix-daemon": 1: Operation not permitted
+      #
+      # which fails the job in the installer, before anything is built. Its
+      # single-user mode (`install_options: --no-daemon`) would sidestep the
+      # LaunchDaemon but is documented as unsupported on macOS runners, so
+      # the remedy is the installer built for CI runners instead.
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: DeterminateSystems/nix-installer-action@v22
         with:
-          extra_nix_config: |
+          # This action defaults to installing Determinate Nix and logging
+          # in to FlakeHub. This repo just needs upstream Nix to build a
+          # flake, so the only intended change here is which installer runs
+          # — not which Nix it installs.
+          determinate: false
+          extra-conf: |
             experimental-features = nix-command flakes
             accept-flake-config = true
 

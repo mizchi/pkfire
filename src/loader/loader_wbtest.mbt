@@ -14,8 +14,10 @@ async test "read_module_source downloads package:// on cache miss then reads cac
   @async.with_task_group(group => {
     let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
-    // Key the cache dir on the ephemeral port so each run starts on a true
-    // cache MISS (ports differ run-to-run; no stale-cache cleanup needed).
+    // The cache root is process-global and last-writer-wins across tests
+    // (see `set_temp_cache_root`), so this suffix does not isolate anything
+    // — the `rm/readmod@1.0.0` package path does. Keyed on the port so a
+    // human inspecting $TMPDIR can tell runs apart.
     set_temp_cache_root("read-module-\{port}")
     let metadata = "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"\{zip_sha}\"}}"
     group.spawn_bg(() => {

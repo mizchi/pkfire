@@ -20,7 +20,11 @@ jobs:
 
       - name: Install Pkl
         run: |
-          curl -fsSL -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
+          # --retry: this download 504s from time to time, and without a
+          # retry a gateway hiccup fails the whole job before a single test
+          # has run.
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
           chmod +x /tmp/pkl-cli
           sudo mv /tmp/pkl-cli /usr/local/bin/pkl
           pkl --version
