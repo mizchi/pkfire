@@ -69,6 +69,16 @@ Action version all move together — there is one tag per release
   dependencies are bumped, and the deprecated `@sys` env / `StringBuilder`
   APIs are migrated so `moon check --deny-warn` passes again.
 
+### Changed
+
+- **`mizchi/pkl` 0.6.0 → 0.7.0, and the `mizchi/cst` workaround is
+  gone.** The broken `cst@0.1.7` reached pkfire through `pkl@0.6.0`,
+  which pinned it; pkfire could only force the resolver upward by
+  declaring `mizchi/cst@0.1.9` as a direct dependency of its own — a
+  constraint on a package pkfire does not itself use. `pkl@0.7.0` pins
+  `cst@0.1.10`, so the direct dependency is dropped and the transitive
+  graph is correct on its own.
+
 ### Added
 
 - **A canonical action descriptor behind the action key.** The key is
