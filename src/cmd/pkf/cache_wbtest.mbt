@@ -12,7 +12,12 @@ fn tar_round_trip(entries : Array[(String, String, Int)]) -> Array[TarEntry] {
   for e in entries {
     tar_write_entry(tb, e.0, @utf8.encode(e.1), e.2)
   }
-  match tar_iter(tar_finish(tb)) {
+  tar_parse(tar_finish(tb))
+}
+
+///|
+fn tar_parse(data : Bytes) -> Array[TarEntry] {
+  match tar_iter(data) {
     TarOk(out) => out
     TarMalformed(why) => abort("unexpected malformed archive: " + why)
   }
@@ -266,4 +271,92 @@ test "literal outputs exclude glob patterns" {
     outputs: ["dist/app", "dist/*.map", "out/{a,b}", "x[0-9].bin", "q?.txt"],
   }
   assert_eq(literal_outputs(task), ["dist/app"])
+}
+
+///|
+test "tar round-trips symlinks without dereferencing them" {
+  // Storing only regular files turned a symlink into a copy of its
+  // target: the restored tree had a different shape from the one the
+  // task produced, silently.
+  let tb = tar_new()
+  tar_write_entry(tb, "out/realdir/file.txt", @utf8.encode("hello"), 0o644)
+  tar_write_symlink_entry(tb, "out/link-to-file", "realdir/file.txt")
+  tar_write_symlink_entry(tb, "out/link-to-dir", "realdir")
+  let out = tar_parse(tar_finish(tb))
+  assert_eq(out.length(), 3)
+  assert_true(out[0].kind == TarFile)
+  assert_eq(out[1].name, "out/link-to-file")
+  assert_true(out[1].kind == TarSymlink("realdir/file.txt"))
+  assert_eq(out[2].name, "out/link-to-dir")
+  assert_true(out[2].kind == TarSymlink("realdir"))
+}
+
+///|
+test "tar round-trips a symlink target longer than the linkname field" {
+  // Targets past 100 bytes need the GNU 'K' member, the linkname
+  // counterpart of 'L'. Truncating one silently repoints the link.
+  let mut deep = "realdir"
+  for _ in 0..<12 {
+    deep = deep + "/abcdefghijk"
+  }
+  assert_true(@utf8.encode(deep).length() > 100)
+  let tb = tar_new()
+  tar_write_symlink_entry(tb, "out/link", deep)
+  let out = tar_parse(tar_finish(tb))
+  assert_eq(out.length(), 1)
+  assert_true(out[0].kind == TarSymlink(deep))
+}
+
+///|
+test "tar round-trips an empty directory" {
+  // A non-empty directory is implied by its members; an empty one has
+  // none, so without a directory member it vanishes on restore.
+  let tb = tar_new()
+  tar_write_dir_entry(tb, "out/emptydir", 0o755)
+  tar_write_entry(tb, "out/f.txt", @utf8.encode("x"), 0o644)
+  let out = tar_parse(tar_finish(tb))
+  assert_eq(out.length(), 2)
+  // The trailing slash ustar spells directory names with is stripped.
+  assert_eq(out[0].name, "out/emptydir")
+  assert_true(out[0].kind == TarDir)
+  assert_true(out[1].kind == TarFile)
+}
+
+///|
+test "symlink targets that escape the restore root are rejected" {
+  // The sharper half of tar path traversal: a member name can be safe
+  // while its link target points anywhere, and a later member writing
+  // through the link then lands outside the workspace.
+  assert_false(is_safe_symlink_target("out/escape", "/etc"))
+  assert_false(is_safe_symlink_target("out/escape", "/etc/passwd"))
+  assert_false(is_safe_symlink_target("out/escape", "\\windows\\system32"))
+  assert_false(is_safe_symlink_target("out/escape", "C:\\windows"))
+  assert_false(is_safe_symlink_target("out/deep/rel", "../../../../etc/passwd"))
+  assert_false(is_safe_symlink_target("out/link", ""))
+  // In-bounds links are the common case and must keep working: a
+  // sibling, a parent that stays inside, a nested path.
+  assert_true(is_safe_symlink_target("out/link-to-file", "realdir/file.txt"))
+  assert_true(is_safe_symlink_target("out/deep/ok", "../f.txt"))
+  assert_true(is_safe_symlink_target("out/deep/nested/ok", "../../f.txt"))
+  assert_true(is_safe_symlink_target("out/link", "./realdir"))
+  // A target that pops up and back down again stays inside.
+  assert_true(is_safe_symlink_target("out/a/link", "../b/file.txt"))
+  // `out/loop -> ..` resolves to the restore root itself, not outside
+  // it, so it is in bounds — writing through it lands under the root.
+  // This is the cycle shape that used to make the walker recurse.
+  assert_true(is_safe_symlink_target("out/loop", ".."))
+}
+
+///|
+test "tar rejects member kinds the cache never writes" {
+  // A hardlink ('1') is not something this cache produces, so an entry
+  // carrying one did not come from it.
+  let tb = tar_new()
+  tar_write_raw_entry(
+    tb, "out/hard", Bytes::new(0), 0o644, b'1', link_target="out/f.txt",
+  )
+  match tar_iter(tar_finish(tb)) {
+    TarOk(_) => fail("expected the hardlink member to be rejected")
+    TarMalformed(_) => ()
+  }
 }

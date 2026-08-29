@@ -1,9 +1,14 @@
 // Minimal POSIX ustar tar writer + reader. Used by the cache to pack
-// every output file into a single `entry.tar.gz` blob (gzip applied
-// externally via `@zlib.gzip_compress`). We only emit and only parse
-// regular-file entries — there's no need for symlinks, hardlinks, or
-// directory entries: the cache stores a flat set of regular files with
-// their unix mode bits.
+// every output into a single `entry.tar.gz` blob (gzip applied
+// externally via `@zlib.gzip_compress`).
+//
+// Three member kinds are emitted: regular files, symlinks, and
+// directories. Symlinks and directories are not decoration — storing
+// only regular files meant the cache silently reshaped what it restored:
+// a symlink came back as a copy of its target, an empty directory
+// vanished, and a link pointing back up the tree (`out/loop -> ..`) was
+// walked until the OS path limit stopped it, dragging files from
+// outside the declared outputs into the entry.
 //
 // Two properties matter more here than in a general-purpose tar, because
 // with a remote cache configured the reader is parsing bytes fetched
@@ -44,32 +49,89 @@ fn tar_write_entry(
   // The real header still holds a truncated copy for readers that do
   // not understand 'L'; ours reads the LongLink.
   if name_bytes.length() > 100 {
-    // GNU writes the name NUL-terminated in the LongLink payload.
-    let payload = @buffer.Buffer(size_hint=name_bytes.length() + 1)
-    for b in name_bytes {
-      payload.write_byte(b)
-    }
-    payload.write_byte(b'\x00')
-    tar_write_raw_entry(tb, "././@LongLink", payload.to_bytes(), 0o644, b'L')
+    tar_write_long_name(tb, name_bytes, b'L')
   }
-  tar_write_raw_entry(tb, name, content, mode, b'0')
+  tar_write_raw_entry(tb, name, content, mode, b'0', link_target="")
+}
+
+///|
+/// Append a directory member. Only emitted for directories that would
+/// otherwise leave no trace — a non-empty directory is implied by its
+/// members, but an empty one has none.
+fn tar_write_dir_entry(tb : TarBuilder, name : String, mode : Int) -> Unit {
+  // ustar spells directory names with a trailing slash.
+  let name = if name.has_suffix("/") { name } else { name + "/" }
+  let name_bytes = @utf8.encode(name)
+  if name_bytes.length() > 100 {
+    tar_write_long_name(tb, name_bytes, b'L')
+  }
+  tar_write_raw_entry(tb, name, Bytes::new(0), mode, b'5', link_target="")
+}
+
+///|
+/// Append a symlink member. The target is stored verbatim (it may be
+/// relative) — resolving it here would defeat the point of preserving
+/// the link.
+fn tar_write_symlink_entry(
+  tb : TarBuilder,
+  name : String,
+  target : String,
+) -> Unit {
+  let name_bytes = @utf8.encode(name)
+  if name_bytes.length() > 100 {
+    tar_write_long_name(tb, name_bytes, b'L')
+  }
+  // GNU 'K' is to the linkname field what 'L' is to the name field.
+  let target_bytes = @utf8.encode(target)
+  if target_bytes.length() > 100 {
+    tar_write_long_name(tb, target_bytes, b'K')
+  }
+  tar_write_raw_entry(
+    tb, name, Bytes::new(0), 0o777, b'2', link_target=target,
+  )
+}
+
+///|
+/// Emit a GNU long-name member carrying `value`, which overrides the
+/// next member's truncated name ('L') or link target ('K').
+fn tar_write_long_name(
+  tb : TarBuilder,
+  value : Bytes,
+  typeflag : Byte,
+) -> Unit {
+  let payload = @buffer.Buffer(size_hint=value.length() + 1)
+  for b in value {
+    payload.write_byte(b)
+  }
+  payload.write_byte(b'\x00')
+  tar_write_raw_entry(
+    tb, "././@LongLink", payload.to_bytes(), 0o644, typeflag, link_target="",
+  )
 }
 
 ///|
 /// Append one member with an explicit typeflag. Regular files use '0';
-/// the GNU long-name extension uses 'L'.
+/// the GNU long-name extensions use 'L' / 'K'; directories use '5' and
+/// symlinks '2'.
 fn tar_write_raw_entry(
   tb : TarBuilder,
   name : String,
   content : Bytes,
   mode : Int,
   typeflag : Byte,
+  link_target~ : String,
 ) -> Unit {
   let header : FixedArray[Byte] = FixedArray::make(512, b'\x00')
   let name_bytes = @utf8.encode(name)
   let nl = if name_bytes.length() < 100 { name_bytes.length() } else { 100 }
   for i in 0..<nl {
     header[i] = name_bytes[i]
+  }
+  // Linkname field: 100 bytes at offset 157, used by typeflag '2'.
+  let link_bytes = @utf8.encode(link_target)
+  let ll = if link_bytes.length() < 100 { link_bytes.length() } else { 100 }
+  for i in 0..<ll {
+    header[157 + i] = link_bytes[i]
   }
   // Mode (8 bytes): "0000644\0" style. Trailing NUL + space matches GNU.
   tar_write_octal(header, 100, 7, mode)
@@ -153,10 +215,21 @@ fn tar_write_octal(
 }
 
 ///|
+/// What an archive member is. Restoring a `TarSymlink` as a regular
+/// file (which is what storing only file members amounted to) turns a
+/// link into a copy — a different tree, silently.
+priv enum TarKind {
+  TarFile
+  TarDir
+  TarSymlink(String)
+} derive(Eq)
+
+///|
 priv struct TarEntry {
   name : String
   content : Bytes
   mode : Int
+  kind : TarKind
 }
 
 ///|
@@ -183,6 +256,9 @@ fn tar_iter(data : Bytes) -> TarResult {
   // Set by a preceding GNU LongLink ('L') member; overrides the next
   // regular member's truncated 100-byte name.
   let mut pending_long_name : String? = None
+  // Set by a preceding GNU 'K' member; overrides the next member's
+  // truncated 100-byte link target.
+  let mut pending_long_link : String? = None
   while pos + 512 <= data.length() {
     // EOF marker: a block of all-zeros means we're done.
     let mut all_zero = true
@@ -202,6 +278,7 @@ fn tar_iter(data : Bytes) -> TarResult {
     let mode = tar_read_octal(data, pos + 100, 8)
     let size = tar_read_octal(data, pos + 124, 12)
     let typeflag = data[pos + 156].to_int()
+    let link_name = tar_read_cstring(data, pos + 157, 100)
     if size < 0 {
       return TarMalformed("negative member size at offset \{pos}")
     }
@@ -211,37 +288,64 @@ fn tar_iter(data : Bytes) -> TarResult {
         "member `\{name}` runs past the end of the archive",
       )
     }
+    // The two GNU long-name extensions carry the *next* member's name
+    // ('L') or link target ('K') as their payload, NUL-terminated.
     if typeflag == 'L'.to_int() {
-      // GNU long name: the payload is the real name of the *next*
-      // member, NUL-terminated.
       pending_long_name = Some(tar_read_cstring(data, pos, size))
-    } else if typeflag == 0 || typeflag == '0'.to_int() {
+    } else if typeflag == 'K'.to_int() {
+      pending_long_link = Some(tar_read_cstring(data, pos, size))
+    } else {
       let effective_name = match pending_long_name {
         Some(n) => n
         None => name
       }
-      pending_long_name = None
-      if effective_name.length() > 0 {
-        let cbuf : FixedArray[Byte] = FixedArray::make(size, b'\x00')
-        for i in 0..<size {
-          cbuf[i] = data[pos + i]
-        }
-        out.push(
-          TarEntry::{
-            name: effective_name,
-            content: Bytes::from_array(cbuf),
-            mode,
-          },
-        )
+      let effective_link = match pending_long_link {
+        Some(l) => l
+        None => link_name
       }
-    } else {
-      // Any other member kind (symlink, hardlink, directory, pax
-      // header) is one we never write. Refuse rather than skip: a
-      // remote entry containing one is not an archive this cache
-      // produced.
-      return TarMalformed(
-        "unsupported tar member type \{typeflag} for `\{name}`",
-      )
+      pending_long_name = None
+      pending_long_link = None
+      let kind = if typeflag == '5'.to_int() {
+        Some(TarDir)
+      } else if typeflag == '2'.to_int() {
+        Some(TarSymlink(effective_link))
+      } else if typeflag == 0 || typeflag == '0'.to_int() {
+        Some(TarFile)
+      } else {
+        // A member kind we never write (hardlink, device, pax header).
+        // Refuse rather than skip: a remote entry containing one is not
+        // an archive this cache produced.
+        None
+      }
+      match kind {
+        None =>
+          return TarMalformed(
+            "unsupported tar member type \{typeflag} for `\{name}`",
+          )
+        Some(kind) =>
+          if effective_name.length() > 0 {
+            let cbuf : FixedArray[Byte] = FixedArray::make(size, b'\x00')
+            for i in 0..<size {
+              cbuf[i] = data[pos + i]
+            }
+            // ustar writes directory names with a trailing slash; the
+            // restore path wants them without.
+            let stored_name = if kind == TarDir &&
+              effective_name.has_suffix("/") {
+              effective_name[0:effective_name.length() - 1].to_owned()
+            } else {
+              effective_name
+            }
+            out.push(
+              TarEntry::{
+                name: stored_name,
+                content: Bytes::from_array(cbuf),
+                mode,
+                kind,
+              },
+            )
+          }
+      }
     }
     let padded = (size + 511) / 512 * 512
     pos = pos + padded
