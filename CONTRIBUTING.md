@@ -36,7 +36,21 @@ goldens — run it after any behavior-affecting change.
 ## Cutting a release
 
 ```sh
-scripts/bump-version.sh <new-version>
+# 1. Rename CHANGELOG.md's `## [Unreleased]` heading to
+#    `## [<new-version>] - <YYYY-MM-DD>` and add the release's link
+#    reference at the bottom of the file. The publish workflow lifts
+#    the release body straight out of that section (see
+#    scripts/release-notes.sh), so a heading still reading
+#    "Unreleased" ships a release page with the fallback body.
+$EDITOR CHANGELOG.md
+scripts/release-notes.sh <new-version>   # preview what the release page gets
+
+# 2. Sweep every pkfire@<old> reference and the declared versions.
+scripts/bump-version.sh <new-version>    # or: pkf run bump --to=<new-version>
+
+# 3. Gate, commit, tag, push.
+pkf run preflight
+pkf run conformance
 git commit -am "release: pkfire@<new-version>"
 git tag    "pkfire@<new-version>"
 git push origin main "pkfire@<new-version>"
@@ -46,6 +60,11 @@ The Release workflow runs `dogfood ci`, then publishes the Pkl
 package and the `pkf` binaries to a single GitHub release tagged
 `pkfire@<new-version>`. After that the Action becomes resolvable as
 `mizchi/pkfire@pkfire@<new-version>`.
+
+`examples/` is deliberately left on the previous version by
+`bump-version.sh`: the examples amend the published package URI, which
+only resolves once the release exists. Bump them in a follow-up commit
+after the publish workflow has uploaded the package.
 
 ## Style notes
 

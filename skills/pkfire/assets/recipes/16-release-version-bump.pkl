@@ -43,7 +43,7 @@
 /// rewrite `10.1.9` — but it WILL rewrite `0.1.90` if such a string
 /// happens to exist elsewhere in the listed files. Audit the diff
 /// before committing.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.2#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.15.0#/Taskfile.pkl"
 
 /// Files that pin the release version. Edit this list for your repo.
 /// Keep paths repo-root-relative; the task runs from the Taskfile dir.

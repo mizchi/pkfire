@@ -30,6 +30,21 @@ local sources: Listing<String> = new {
   "moon.work"
 }
 
+/// `moon check` runs over both workspace members, so it needs a wider
+/// input set than `sources`: the toolchain deprecates APIs on its own
+/// schedule, and a deprecation landing in `conformance/` is exactly
+/// the drift this gate exists to catch.
+local checkSources: Listing<String> = new {
+  "src/**/*.mbt"
+  "src/**/*.c"
+  "src/**/moon.pkg"
+  "conformance/src/**/*.mbt"
+  "conformance/src/**/moon.pkg"
+  "conformance/moon.mod"
+  "moon.mod"
+  "moon.work"
+}
+
 /// Path to the native release binary the MoonBit toolchain emits.
 local pkfBin: String = "_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe"
 
@@ -48,8 +63,8 @@ local buildPkf: Task = new {
 local moonCheck: Task = new {
   name = "moon:check"
   description = "Type-check the MoonBit sources (native target)"
-  cmd = "moon check src/cmd/pkf src/loader --target native --deny-warn"
-  inputs = sources
+  cmd = "moon check src/cmd/pkf src/loader conformance/src --target native --deny-warn"
+  inputs = checkSources
 }
 
 local moonTest: Task = new {

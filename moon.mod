@@ -1,6 +1,6 @@
 name = "mizchi/pkf"
 
-version = "0.14.2"
+version = "0.15.0"
 
 import {
   "mizchi/fswatch@0.2.1",

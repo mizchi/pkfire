@@ -3,7 +3,7 @@
 /// One `build` produces a binary, `test` depends on `build` (so it
 /// rebuilds first), and `ci` ties them together for a single
 /// command. Replace the `cmd` and `inputs` to match your project.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.2#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.15.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   // EDIT: globs your build/test reads from.

@@ -173,7 +173,7 @@ fn deleted_paths(
 ///|
 fn sha256_hex(b : Bytes) -> String {
   let digest = @crypto.sha256(b)
-  let hex = StringBuilder::new()
+  let hex = StringBuilder()
   for i in 0..<digest.length() {
     let byte = digest[i].to_int() & 0xff
     hex.write_char(hex_nibble(byte / 16))

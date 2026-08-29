@@ -322,7 +322,7 @@ fn strip_walk(n : Json, set : Map[String, Bool]) -> Json {
 /// matching Go's `strings.Join(strings.Fields(s), " ")`.
 pub fn normalize_text(s : String) -> String {
   let fields : Array[String] = []
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   fn flush() {
     let w = buf.to_string()
     if w.length() > 0 {

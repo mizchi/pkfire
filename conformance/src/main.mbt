@@ -18,8 +18,8 @@ struct LedgerRow {
 
 ///|
 async fn main {
-  let args = @sys.get_cli_args()
-  let mut update = @sys.get_env_var("PKF_CONFORMANCE_UPDATE") is Some("1")
+  let args = @env.args()
+  let mut update = @env.get_env_var("PKF_CONFORMANCE_UPDATE") is Some("1")
   for i in 1..<args.length() {
     if args[i] == "--update" {
       update = true
@@ -44,7 +44,7 @@ async fn main {
       return
     }
   }
-  let bin = match @sys.get_env_var("PKF_MBT_BIN") {
+  let bin = match @env.get_env_var("PKF_MBT_BIN") {
     Some(b) => b
     None => {
       println("conformance: PKF_MBT_BIN not set")
