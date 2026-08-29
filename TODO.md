@@ -26,32 +26,23 @@ glob `{a,b}` / `[abc]`) landed. This file tracks what's left.
 
 ## Blocked on the MoonBit ecosystem
 
-### Single-archive entry format (tar + zstd)
+### zstd-compressed entries
 
-Today each cache entry is a flat directory: `<key>/manifest` +
-`<key>/outputs/<rel>` per output file. N+1 HTTP requests on remote
-fetch / push, no compression, no atomicity for large entries.
-
-Go pkfire uses a single `outputs.tar.zst` blob per entry. To match
-that requires both:
-
-- A tar writer/reader in MoonBit (mizchi/x ships nothing; ~200 lines of
-  clean code).
-- A zstd encoder/decoder. The MoonBit ecosystem ships `mizchi/zlib`
-  (DEFLATE) but no zstd. Until zstd lands, an interop option is
-  `outputs.tar.gz` (slower on the wire, but interoperable with
-  `mizchi/zlib`).
-
-Defer until the ecosystem has at least one of these primitives. The
-current flat layout works fine for moderate output sizes (<100 files
-per task).
+Cache entries are a single `entry.tar.gz` blob (tar writer/reader in
+`src/cmd/pkf/tar.mbt`, gzip via `mizchi/zlib`), published by an atomic
+rename. Go pkfire uses `outputs.tar.zst`; matching it needs a zstd
+encoder/decoder, and the MoonBit ecosystem ships `mizchi/zlib`
+(DEFLATE) but no zstd. Defer until one lands — gzip is slower on the
+wire but correct and interoperable today.
 
 ### BLAKE3 action keys
 
 Today the action key uses SHA-256 (`moonbitlang/x/crypto`). Go pkfire
-uses BLAKE3. The hashing path produces wire-compatible action-key
-strings (same canonical form), so swapping in BLAKE3 would let
-pkf-mbt and go pkf share cache entries.
+uses BLAKE3. Swapping in BLAKE3 would be one line in `action_key_of`
+now that the canonical form is a single serialization
+(`canonical_form`), but wire compatibility with go pkf also needs the
+two canonical forms to agree, and pkf's descriptor now covers fields go
+pkf's key does not (outputs, workdir, execution platform).
 
 Requires a BLAKE3 implementation in MoonBit. None published yet.
 
@@ -72,6 +63,27 @@ Track upstream and update mizchi/x when it lands.
 Workaround in the meantime: pkf-mbt walks the parent-pid tree via
 `pkill -P` to catch any descendants that escaped the pgid set. Good
 enough for most service shells (`bash -c "..."` re-fork patterns).
+
+## Bazel-style build engine
+
+Tracked as a roadmap in
+[issue #60](https://github.com/mizchi/pkfire/issues/60). The P0 items —
+the local cache-hit bug, runner-flag/task-param separation, a canonical
+`ActionDescriptor` behind the action key, and archive safety — have
+landed. What is left, roughly in order:
+
+1. Task -> Action lowering that can emit more than one action per task
+   (`lower_task_to_action` is the seam; it returns a single
+   `SpawnAction` today).
+2. First-class artifacts, so a consumer's `inputs` can name a producer's
+   output without restating the path.
+3. A hermetic sandbox executor: materialize only the declared inputs,
+   pass only the declared env, collect only the declared outputs. This
+   is also what would let `pkf trace`'s observed read set become the
+   cache key rather than an audit (see `docs/auto-inputs.md`).
+4. A parallel DAG scheduler, which is what `-j` / `--jobs` need before
+   they can stop being rejected.
+5. Splitting the remote cache into ActionCache + CAS.
 
 ## CLI ergonomics
 

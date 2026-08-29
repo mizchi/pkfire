@@ -33,7 +33,7 @@ struct GlobPathProductState {
 
 ///|
 fn append_glob_char(text : String, ch : Int) -> String {
-  let out = StringBuilder::new(size_hint=text.length() + 1)
+  let out = StringBuilder(size_hint=text.length() + 1)
   out.write_string(text)
   out.write_char(ch.unsafe_to_char())
   out.to_string()
@@ -291,7 +291,7 @@ fn glob_forbidden_state_key(
   forbidden : Array[String],
   forbid_tilde_suffix : Bool,
 ) -> String {
-  let key = StringBuilder::new(size_hint=forbidden.length() * 3 + 2)
+  let key = StringBuilder(size_hint=forbidden.length() * 3 + 2)
   let mut has_prefix = false
   for i, word in forbidden {
     if word.has_prefix(text) {
@@ -835,7 +835,7 @@ fn lexical_normalize_path(path : String) -> String {
       segments.push(segment)
     }
   }
-  let out = StringBuilder::new(size_hint=path.length())
+  let out = StringBuilder(size_hint=path.length())
   if absolute {
     out.write_char('/')
   }

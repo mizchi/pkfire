@@ -1,0 +1,18 @@
+/// Fixture for `pkf trace`: the task reads a file that no declared
+/// input covers, which is exactly the cache-correctness hole
+/// `pkf trace --check` exists to surface.
+///
+/// `inputs` names only `src/`, but the command also reads
+/// `conf/settings.ini`. Editing that file would not change the action
+/// key, so the cache would hand back a stale `out/bundle.txt`.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local bundle = new Task {
+  name = "bundle"
+  description = "Concatenate a declared source and an undeclared config"
+  cmd = "mkdir -p out && cat src/a.txt conf/settings.ini > out/bundle.txt"
+  inputs { "src/**/*.txt" }
+  outputs { "out/bundle.txt" }
+}
+
+tasks { bundle }

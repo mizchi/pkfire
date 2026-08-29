@@ -36,7 +36,7 @@ fn write_glob_fixture(root : String) -> Unit raise {
 ///|
 fn glob_fixture_root() -> String {
   // Unique per-process dir to avoid cross-test sandbox contamination.
-  let base = match @sys.get_env_var("TMPDIR") {
+  let base = match @env.get_env_var("TMPDIR") {
     Some(d) => if d.has_suffix("/") { d } else { d + "/" }
     None => "/tmp/"
   }
