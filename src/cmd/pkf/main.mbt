@@ -120,7 +120,9 @@ fn parse_bool(value : Json, default~ : Bool) -> Bool {
 }
 
 ///|
-fn parse_plan(raw : String) -> Plan {
+/// `taskfile~` names the source file in diagnostics. It is optional so
+/// the JSON-only callers (tests, piped input) need not invent a path.
+fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
   let root : Json = @json.parse(raw) catch {
     _ => {
       die("could not parse Taskfile eval JSON output")
@@ -156,8 +158,32 @@ fn parse_plan(raw : String) -> Plan {
   }
   let tasks_obj = match entries.get("tasks") {
     Some(Object(e)) => e
-    _ => {
-      die("Taskfile output has no `tasks` mapping")
+    // `tasks: null` is the signature of a failed evaluation, not of a
+    // missing declaration: the embedded evaluator renders a member it
+    // could not evaluate as null rather than reporting a diagnostic
+    // (#65). Reporting this as "no `tasks` mapping" sent the reader to
+    // the one part of the file that is usually fine.
+    Some(Null) => {
+      let where_ = if taskfile.length() > 0 { taskfile } else { "the Taskfile" }
+      die(
+        "`tasks` evaluated to null — something in \{where_} failed to evaluate.\n" +
+        "  Usual causes: an unresolved identifier, an unknown method, or a task\n" +
+        "  listed in `tasks { ... }` that is never defined. The embedded\n" +
+        "  evaluator renders members it cannot evaluate as null instead of\n" +
+        "  reporting where they failed.\n" +
+        "  For the exact line and column, run:  pkl eval \{where_}",
+      )
+      panic()
+    }
+    Some(_) => {
+      die("Taskfile `tasks` is not a mapping — it must be `tasks { taskA; taskB }`")
+      panic()
+    }
+    None => {
+      let where_ = if taskfile.length() > 0 { taskfile } else { "the Taskfile" }
+      die(
+        "\{where_} declares no `tasks` — add a module-level `tasks { taskA; taskB }`",
+      )
       panic()
     }
   }
@@ -2930,7 +2956,7 @@ async fn affected_cmd(
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let repo_root = taskfile_dir(taskfile)
   if check_mode {
     if plan.workflow_tests.length() == 0 {
@@ -3051,7 +3077,7 @@ async fn list_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   if json_flag {
     let arr : Array[Json] = []
     for t in sorted_visible_tasks(plan, show_all) {
@@ -3181,7 +3207,7 @@ async fn graph_cmd(
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   if json_flag {
     let visible = sorted_visible_tasks(plan, show_all)
     // Build the visible-name set for filtering deps/edges (mirrors Go's
@@ -3255,7 +3281,7 @@ async fn[X] watch_cmd(
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let repo_root = taskfile_dir(taskfile)
   let cycles = watch_cycles_for_plan(plan, repo_root, scope_set)
   if cycles.length() > 0 {
@@ -3354,7 +3380,7 @@ async fn[X] up_cmd(
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   // Pick service tasks in authored order so dependents start after their
   // backends (matches Apple pkfire's reuse semantics).
   let services_to_start : Array[String] = []
@@ -3970,7 +3996,7 @@ async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let src = @fs.read_file_to_string(taskfile) catch {
     _ => {
       die("could not read Taskfile source: \{taskfile}")
@@ -4131,7 +4157,7 @@ async fn info_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let (amends, schema) = scan_amends_and_schema(taskfile)
   if json_flag {
     let root : Map[String, Json] = Map([], capacity=8)
@@ -4939,7 +4965,7 @@ async fn explain_cmd(
   let task_name = positionals[0]
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let task = match plan.tasks.get(task_name) {
     Some(t) => t
     None => {
@@ -5169,7 +5195,7 @@ async fn clean_cmd(
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let repo_root = taskfile_dir(taskfile)
 
   // Resolve the set of task names to clean.
@@ -5298,7 +5324,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       }
       let taskfile = locate_taskfile(explicit_taskfile)
       let raw_json = eval_taskfile(taskfile)
-      let plan = parse_plan(raw_json)
+      let plan = parse_plan(raw_json, taskfile~)
       // No target named: fall back to `default`, per README.
       let requested = if parsed.targets.length() == 0 {
         ["default"]
@@ -5451,7 +5477,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       let task_name = task_names[0]
       let taskfile = locate_taskfile(explicit_taskfile)
       let raw_json = eval_taskfile(taskfile)
-      let plan = parse_plan(raw_json)
+      let plan = parse_plan(raw_json, taskfile~)
       let task = match plan.tasks.get(task_name) {
         Some(t) => t
         None => {
@@ -6008,7 +6034,7 @@ async fn hooks_cmd(
 
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
-  let plan = parse_plan(raw_json)
+  let plan = parse_plan(raw_json, taskfile~)
   let task_dir = taskfile_dir(taskfile)
 
   let hooks_dir = match find_git_hooks_dir(task_dir) {
