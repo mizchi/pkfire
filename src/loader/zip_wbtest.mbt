@@ -150,7 +150,7 @@ test "zip_entry_path_is_safe rejects traversal" {
 ///|
 test "extract_zip_to_dir writes both files" {
   let data = build_fixture_zip()
-  let base = match @sys.get_env_var("TMPDIR") {
+  let base = match @env.get_env_var("TMPDIR") {
     Some(d) => d
     None => "/tmp"
   }

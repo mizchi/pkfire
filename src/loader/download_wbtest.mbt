@@ -18,11 +18,11 @@ fn hex_of_bytes(b : Bytes) -> String {
 /// Point the package cache root at a fresh temp dir (read by loader.mbt's
 /// `package_cache_root()` and thus by the downloader's write path).
 fn set_temp_cache_root(suffix : String) -> Unit {
-  let base = match @sys.get_env_var("TMPDIR") {
+  let base = match @env.get_env_var("TMPDIR") {
     Some(d) => d
     None => "/tmp"
   }
-  @sys.set_env_var(
+  @env.set_env_var(
     "PKL_MBT_PACKAGE_CACHE",
     path_join(base, "pkf-download-wbtest-\{suffix}"),
   )

@@ -264,15 +264,12 @@ pkf list --color=always        # force ANSI color (auto, always, never)
 pkf list -v                    # add cmd preview and deps
 pkf list --json                # machine-readable (for editor / CI tooling)
 pkf run test                   # builds first, then tests; second run hits cache
-pkf run -j 8 test              # cap parallelism at 8
-pkf run --watch test           # re-run on input changes (Ctrl+C to stop)
 pkf run --dry-run test         # preview: per-task hit/will-run/uncached status + cmd
 pkf run --print-hash test      # print action keys, do not execute
 pkf run --explain-cache test   # explain cache hit/miss/forced-run decisions
 pkf run --no-cache test        # bypass cache lookup AND store for this run
 pkf run --refresh test         # bypass cache lookup but DO re-store (re-baseline)
 pkf up dev                     # start every service:true task in dev's subgraph
-pkf up --watch dev             # same, plus restart-on-change
 pkf graph                      # emit Graphviz DOT for the full DAG
 pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
 pkf graph --json               # machine-readable graph (tasks + edges)
@@ -284,8 +281,8 @@ pkf format                     # pkl format -w on the Taskfile's directory
 pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
 pkf hooks install              # write .git/hooks/<event> shims for matching tasks
 pkf hooks list                 # show which hook events are wired
-pkf affected --since=origin/main test  # run only tasks affected by the PR diff
-pkf affected --files src/main.go --explain --dry-run  # inspect file -> task matches
+pkf affected src/main.go       # list tasks affected by the given changed paths
+pkf affected --changed=changed.txt     # read newline-separated changed paths from a file
 pkf affected --check           # run workflowTests declared in Taskfile.pkl
 pkf run a b c                  # run multiple targets in one go (topological union)
 pkf run                        # no args = the `default` task (errors if absent)
@@ -306,9 +303,10 @@ pkf list --long                # audit task visibility/cache/quiet/deps/io/shell
 pkf explain build              # dump every input to the action key (cache-miss debug)
 pkf explain --diff old/Taskfile.pkl build  # compare action-key inputs against another Taskfile
 pkf run --profile=ci build     # tag the run; $PKF_PROFILE + cache splits per profile
-pkf run --on-fail=shell build  # drop into $SHELL in the failed task's workdir on error
 pkf run --remote-only build    # skip local cache, only consult remote (verify remote populated)
-pkf affected --watch           # re-evaluate affected set on every file change
+pkf trace build                # list the workspace files the task actually read
+pkf trace --check build        # fail when a file is read but no declared input covers it
+pkf trace --emit build         # print an `inputs { ... }` block matching the observed reads
 pkf graph --target build --depth=1   # show only direct deps (one hop)
 pkf graph --format tree        # terminal-readable dependency tree (roots only when no target)
 pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
@@ -461,17 +459,57 @@ Every `cmd` runs against an env merged from four layers:
 Plus, when `acceptsArgs = true`, anything after `--` on the command
 line is forwarded as `$1`, `$2`, ..., `"$@"`.
 
+### A task with no `inputs` is never cached
+
+`cache` defaults to `true`, but a task that declares no `inputs` is run
+every time regardless. Its action key depends only on the command and
+its environment, so nothing you edit can change it: the first run would
+store an entry and every run after it would be a permanent hit. `pkf run
+--dry-run` says so explicitly:
+
+```
+pkf: pre-push  will run (uncached: no declared inputs)  bb57cea3
+```
+
+Declaring `inputs` is what opts a task into caching. A task with
+`inputs` and no `outputs` — a type-check or a linter — still caches
+usefully: the hit means "these exact sources already passed".
+
+### The action descriptor
+
+The action key is a SHA-256 over a canonical serialization of the
+*action descriptor* — the complete description of the process a task
+spawns. Every value that reaches the command, and every value that
+decides what the command is expected to leave behind, is a field of the
+descriptor, so nothing can be visible to `cmd` and invisible to the key
+by accident:
+
+```
+mnemonic  executable  argv  env  inheritEnv
+inputs (path + digest)  outputs  workingDirectory
+executionPlatform  executionProperties
+```
+
+`pkf run --explain-cache <task>` prints it; that dump is the answer to
+"why did this miss?", because a miss is always one of those lines
+differing from last time.
+
 ### Two contracts that are NOT the same
 
 | | Visible to `cmd`? | Part of the action key? |
 | --- | :---: | :---: |
 | host env (when `inheritEnv = true`, the default) | ✓ | ✗ |
 | host env (when `inheritEnv = false`, allowlist only: `PATH HOME LANG ...`) | partial | ✗ |
+| the `inheritEnv` flag itself | — | ✓ |
 | `defaults.Env` | ✓ | ✓ |
 | `task.Env` | ✓ | ✓ |
 | resolved `params` values (`$NAME`) | ✓ | ✓ (when `cache = true`) |
 | tail args from `-- a b c` (`$@`) | ✓ | ✓ (when `cache = true`) |
 | `task.Tools` | as env hints only | ✓ |
+| declared `outputs` | ✗ | ✓ |
+| `workdir` | ✓ (it is the cwd) | ✓ |
+| execution platform (`<os>/<arch>`) | ✗ | ✓ |
+| `--profile=NAME` (`$PKF_PROFILE`) | ✓ | ✓ |
 
 The mismatch on the "host env" row is deliberate. `cmd` should be
 able to use `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, your `LANG`, your
@@ -622,10 +660,10 @@ Open a PR to add yours.
 | --- | --- | --- |
 | 0 | Pkl schema, `pkl test` baseline, CLI skeleton | ✅ |
 | 1 | Load `Taskfile.pkl` via `pkl-go`, build DAG, run serially | ✅ |
-| 2 | Parallel execution honoring `deps` (per-task IO capture) | ✅ |
-| 3 | Action key (BLAKE3 over cmd / shell flags / env / inputs / tools / config) | ✅ |
+| 2 | Parallel execution honoring `deps` (per-task IO capture) | ⛔ the MoonBit runner executes the topological order sequentially; `-j` / `--jobs` are rejected rather than ignored |
+| 3 | Action key (SHA-256 over a canonical action descriptor) | ✅ |
 | 4 | Local CAS, hit/miss, output restore | ✅ |
-| 5 | Watch mode (`pkf run --watch`) | ✅ |
+| 5 | Watch mode (`pkf watch <task>`) | ✅ |
 | 6 | Remote cache (HTTP backend + reference Cloudflare Worker) | ✅ |
 | 7 | Pkl package publish (`pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire`) | ✅ |
 | 8 | GitHub Action (`mizchi/pkfire@pkfire@<ver>`) + pre-built binaries on release | ✅ |
@@ -633,6 +671,13 @@ Open a PR to add yours.
 | 10 | `services { ... }` on a body task: `pkf run e2e` brings up live servers, runs the test, releases everything | ✅ |
 | 11 | Readiness probes (`readyPort` / `readyCmd`): reuse already-running services and gate dependents on real readiness | ✅ |
 | 12 | Env inheritance default + variadic tail args (`acceptsArgs`) + typed named params (`params` w/ string/enum/int/bool) + `/` in task names | ✅ |
+| 13 | Input auditing via libc interposition (`pkf trace`) — see [docs/auto-inputs.md](./docs/auto-inputs.md) | ✅ Linux only |
+
+The [Bazel-style build engine roadmap][roadmap] tracks what separates
+this from a real action-graph engine: hermetic execution, a parallel
+scheduler, an ActionCache/CAS split, and remote execution.
+
+[roadmap]: https://github.com/mizchi/pkfire/issues/60
 
 ## Development
 
@@ -648,7 +693,7 @@ BIN=_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
 
 "$BIN" list                                      # see all maintenance tasks
 "$BIN" run preflight                             # moon check/test + pkl-test + examples + version + format
-"$BIN" run conformance                           # contract harness: candidate vs frozen goldens (43/43)
+"$BIN" run conformance                           # contract harness: candidate vs frozen goldens (44/44)
 "$BIN" run fmt                                    # pkl format -w on Taskfile.pkl, pkl/, examples/, skills/
 "$BIN" run fmt:check                             # formatting check without writing
 "$BIN" run -f examples/dogfood/Taskfile.pkl ci   # full build + integration gate

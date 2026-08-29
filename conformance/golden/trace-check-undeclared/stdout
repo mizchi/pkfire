@@ -1,0 +1,7 @@
+pkf: $ bundle  (traced)
+
+pkf: bundle read 2 file(s) under the workspace
+
+pkf: WARN 1 file(s) read but not covered by `inputs`:
+pkf:        conf/settings.ini
+pkf:      editing one of these will NOT invalidate the cache.

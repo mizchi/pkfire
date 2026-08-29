@@ -2,11 +2,11 @@ import {
   "mizchi/pkl",
   "mizchi/x/http",
   "mizchi/zlib",
+  "moonbitlang/core/env",
   "moonbitlang/core/json",
   "moonbitlang/x/crypto",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/x/fs",
-  "moonbitlang/x/sys",
   "moonbitlang/core/string",
 }
 

@@ -10,6 +10,94 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Fixed
+
+- **The local cache never hit.** `cache_hit` probed for a `manifest`
+  file, but the entry format has been a single `entry.tar.gz` blob since
+  the archive rewrite, so a freshly stored entry missed on the next run
+  and a remote hit was re-fetched every time. The probe now checks the
+  file that is actually written, and validates its gzip magic so a
+  half-written blob reads as a miss.
+- **A failed restore counted as a cache hit.** `cache_restore` swallowed
+  every error and returned `Unit`, so a corrupt or unreadable entry left
+  the task reported as "cache hit" with nothing restored. It now returns
+  whether it succeeded, and a failure falls through to executing the
+  action.
+- **Runner flags were silently ignored.** `parse_run_args` only
+  understood a single target, named task params, and positionals; every
+  documented runner flag fell through into the task-param map and was
+  dropped. `pkf run --dry-run deploy` deployed. Reserved flags are now
+  parsed by the runner, and an unknown `--flag` that is not a param the
+  target declares is an error rather than a silent default.
+- **A typo'd param ran the task anyway.** `--verison=1.2.3` was
+  discarded and the task ran with the declared default for `version`.
+  Unknown params are now rejected.
+- **The action key was blind to values that change the build.** It
+  covered `cmd`, shell, `task.env`, `tools`, inputs, params and
+  positionals — but not the module-level `defaults.env` (which is handed
+  to the command), `inheritEnv`, the declared `outputs`, the workdir, or
+  the execution platform. Two actions that produce different results
+  could share an entry. See "Added: action descriptor" below.
+- **Cache archives were not safe to unpack.** Entry names over the
+  100-byte ustar limit were silently truncated (restoring a deep output
+  to the wrong path); header checksums were not verified and a malformed
+  archive returned the members read so far, indistinguishable from a
+  complete one; a remote entry could carry an absolute or `../` path and
+  write outside the workspace; there was no cap on the expanded size;
+  and entries were written in place rather than published by rename.
+  All six are fixed — long names use a GNU `LongLink` member, checksums
+  are verified, escaping paths and oversized expansions are rejected,
+  and every entry is published by an atomic rename.
+- **A task with no declared `inputs` is no longer cached.** Its action
+  key depends on nothing a user can edit, so with the cache-hit bug
+  fixed the first run would have stored an entry and every run after it
+  would have been a permanent hit — a git hook task installed by
+  `pkf hooks install` would have fired exactly once. `cache` still
+  defaults to `true`; declaring `inputs` is what opts a task into it.
+- **A task could "succeed" without producing its declared outputs.** A
+  command that exits 0 having written none of its literal `outputs` now
+  fails, instead of publishing an empty cache entry that later restores
+  over a working tree.
+- **`quiet = true` on a task did nothing.** The schema field and the
+  README described suppressing pkfire's per-task diagnostic lines, but
+  the runner never read it. It now does, and `pkf run --quiet` does the
+  same for a whole run.
+- **The build was broken against the current MoonBit toolchain.**
+  `mizchi/cst@0.1.7` imports `moonbitlang/core/immut/array`, which the
+  core library has replaced with `immut/vector`, and
+  `moonbitlang/x@0.4.47` binds a runtime symbol that was renamed. Both
+  dependencies are bumped, and the deprecated `@sys` env / `StringBuilder`
+  APIs are migrated so `moon check --deny-warn` passes again.
+
+### Added
+
+- **A canonical action descriptor behind the action key.** The key is
+  now a SHA-256 over a length-prefixed serialization of an
+  `ActionDescriptor` — mnemonic, executable, argv, effective env,
+  `inheritEnv`, inputs with digests, declared outputs, working
+  directory, execution platform, and execution properties. Adding a
+  field to the key means adding a field to the IR, so a value cannot
+  reach the command while staying invisible to the cache. Length
+  prefixes make the form injection-proof: a `cmd` containing the
+  serializer's own separators cannot forge a neighbouring field.
+- **`pkf run` reserved flags now work**: `--dry-run`, `--print-hash`,
+  `--explain-cache`, `--no-cache`, `--refresh`, `--remote-only`,
+  `--quiet`, `--timing`, `--keep-going`, `--profile=NAME`. Multiple
+  targets (`pkf run a b c`) and glob targets (`pkf run 'test:*'`) run
+  the topological union. `-j` / `--jobs`, `--watch` and `--on-fail` are
+  rejected with the reason rather than ignored — the runner is
+  sequential, and `pkf watch` is the watch entry point.
+- **`pkf trace <task>`** — discover a task's real inputs by observing
+  what it reads, using an `LD_PRELOAD` shim over libc's `open` family
+  (the approach [vite-task uses][vite-task]). `--check` audits the
+  observed reads against the declared `inputs` and exits non-zero when a
+  file is read that no input covers; `--emit` prints an `inputs { … }`
+  block matching reality. Linux only; see
+  [docs/auto-inputs.md](./docs/auto-inputs.md) for the mechanism and its
+  limits.
+
+[vite-task]: https://zenn.dev/herp_inc/articles/strange-task-runner
+
 ## [0.14.2] - 2026-08-03
 
 ### Changed

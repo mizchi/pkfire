@@ -525,18 +525,18 @@ test "watch plan respects task scope and skips services" {
 
 ///|
 test "cache region is only modeled when it is visible inside the repository" {
-  let previous = @sys.get_env_var("PKFIRE_MBT_CACHE_DIR")
-  @sys.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repo/.pkf-cache")
+  let previous = @env.get_env_var("PKFIRE_MBT_CACHE_DIR")
+  @env.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repo/.pkf-cache")
   assert_eq(watch_cache_pattern("/repo"), Some(".pkf-cache/cas/**"))
-  @sys.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repo/.cache/pkf")
+  @env.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repo/.cache/pkf")
   assert_eq(watch_cache_pattern("/repo"), None)
-  @sys.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repository/cache")
+  @env.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repository/cache")
   assert_eq(watch_cache_pattern("/repo"), None)
-  @sys.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repo")
+  @env.set_env_var("PKFIRE_MBT_CACHE_DIR", "/repo")
   assert_eq(watch_cache_pattern("/repo"), Some("cas/**"))
   match previous {
-    Some(value) => @sys.set_env_var("PKFIRE_MBT_CACHE_DIR", value)
-    None => @sys.unset_env_var("PKFIRE_MBT_CACHE_DIR")
+    Some(value) => @env.set_env_var("PKFIRE_MBT_CACHE_DIR", value)
+    None => @env.unset_env_var("PKFIRE_MBT_CACHE_DIR")
   }
 }
 

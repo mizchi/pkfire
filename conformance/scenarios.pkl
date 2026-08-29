@@ -253,6 +253,18 @@ scenarios {
     contract = new { exit = true; mustContain { "running pre-push" } }
   }
   new {
+    id = "trace-check-undeclared"
+    fixture = "examples/trace-inputs"
+    argv { "trace"; "--check"; "bundle" }
+    contract = new {
+      exit = true
+      mustContain {
+        "read but not covered"
+        "conf/settings.ini"
+      }
+    }
+  }
+  new {
     id = "clean-removes-outputs"
     fixture = "examples/cat-io"
     argv { "clean" }

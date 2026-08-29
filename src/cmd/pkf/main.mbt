@@ -1086,7 +1086,7 @@ fn hex_digit(n : Int) -> Char {
 
 ///|
 fn hex_encode(bytes : FixedArray[Byte]) -> String {
-  let buf = StringBuilder::new(size_hint=bytes.length() * 2)
+  let buf = StringBuilder(size_hint=bytes.length() * 2)
   for i in 0..<bytes.length() {
     let b = bytes[i].to_int()
     buf.write_char(hex_digit((b >> 4) & 0xf))
@@ -1112,43 +1112,23 @@ fn hash_file(path : String) -> FixedArray[Byte] {
 }
 
 ///|
-fn compute_action_key(
-  task : Task,
-  input_hashes : Array[(String, FixedArray[Byte])],
-  params : Map[String, String],
-  positionals : Array[String],
-) -> String {
-  let h = @crypto.SHA256::new()
-  h.update(@utf8.encode("cmd:" + task.cmd + "\n"))
-  h.update(@utf8.encode("shell:" + task.shell + "\n"))
-  for i, flag in task.shell_flags {
-    let line = "shell-flag:" + i.to_string() + ":" + flag + "\n"
-    h.update(@utf8.encode(line))
+/// Hash every declared input file, returning (path, hex digest) pairs in
+/// the order `expand_inputs` produced them (already sorted).
+fn hash_task_inputs(
+  task_cwd : String,
+  patterns : Array[String],
+) -> Array[(String, String)] {
+  let resolved = expand_inputs(task_cwd, patterns)
+  let out : Array[(String, String)] = []
+  for rel in resolved {
+    let src = if task_cwd.length() == 0 || task_cwd == "." {
+      rel
+    } else {
+      join_path(task_cwd, rel)
+    }
+    out.push((rel, hex_encode(hash_file(src))))
   }
-  let env_keys = sorted_keys(task.env)
-  for k in env_keys {
-    let v = task.env.get(k).unwrap()
-    h.update(@utf8.encode("env:" + k + "=" + v + "\n"))
-  }
-  let tool_keys = sorted_keys(task.tools)
-  for k in tool_keys {
-    let v = task.tools.get(k).unwrap()
-    h.update(@utf8.encode("tool:" + k + "=" + v + "\n"))
-  }
-  for entry in input_hashes {
-    let path = entry.0
-    let digest = entry.1
-    h.update(@utf8.encode("in:" + path + ":" + hex_encode(digest) + "\n"))
-  }
-  let param_keys = sorted_keys(params)
-  for k in param_keys {
-    let v = params.get(k).unwrap()
-    h.update(@utf8.encode("param:" + k + "=" + v + "\n"))
-  }
-  for i, arg in positionals {
-    h.update(@utf8.encode("arg:" + i.to_string() + ":" + arg + "\n"))
-  }
-  hex_encode(h.finalize())
+  out
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,13 +1139,13 @@ fn compute_action_key(
 
 ///|
 fn cache_root() -> String {
-  match @sys.get_env_var("PKFIRE_MBT_CACHE_DIR") {
+  match @env.get_env_var("PKFIRE_MBT_CACHE_DIR") {
     Some(d) => d
     None =>
-      match @sys.get_env_var("XDG_CACHE_HOME") {
+      match @env.get_env_var("XDG_CACHE_HOME") {
         Some(base) => join_path(base, "pkfire-mbt")
         None =>
-          match @sys.get_env_var("HOME") {
+          match @env.get_env_var("HOME") {
             Some(home) => join_path(join_path(home, ".cache"), "pkfire-mbt")
             None => ".pkfire-mbt-cache"
           }
@@ -1181,19 +1161,99 @@ fn entry_dir(key : String) -> String {
 }
 
 ///|
-fn cache_hit(key : String) -> Bool {
-  let marker = join_path(entry_dir(key), "manifest")
-  @fs.path_exists(marker)
+/// Name of the single blob every cache entry consists of.
+const CACHE_ENTRY_FILE : String = "entry.tar.gz"
+
+///|
+/// Cap on the bytes a single entry may expand to. A cache entry is
+/// attacker-influenced input the moment a remote cache is configured:
+/// without a cap, a 1 MB gzip bomb turns into an unbounded write into
+/// the workspace. 4 GiB is far above any real task output and far below
+/// "fills the disk before anyone notices".
+const CACHE_MAX_EXPANDED_BYTES : Int64 = 4294967296L
+
+///|
+/// Whether `key` names a usable local entry.
+///
+/// This used to probe for a `manifest` file — which `cache_store` has
+/// not written since the entry format became a single archive, so every
+/// local lookup missed and every run re-executed (and re-fetched from
+/// the remote). Probe the file that is actually written, and check its
+/// gzip magic so a truncated or half-written blob reads as a miss
+/// rather than as a hit that restores nothing.
+///
+/// A full gzip+tar decode would be a stronger check, but it costs a
+/// decompression per lookup. The blob is only ever published by an
+/// atomic rename, so a present, gzip-magic'd file is complete; the
+/// decode still happens in `cache_restore`, and a failure there falls
+/// back to executing the action.
+async fn cache_hit(key : String) -> Bool {
+  let path = join_path(entry_dir(key), CACHE_ENTRY_FILE)
+  if !@fs.path_exists(path) {
+    return false
+  }
+  // Read only the three-byte header, not the whole blob: this runs once
+  // per task per run, and an entry can be hundreds of megabytes.
+  let file = @xfs.open(path.view(), mode=ReadOnly) catch { _ => return false }
+  defer file.close()
+  let header = file.read_exactly_at(3, position=0L) catch { _ => return false }
+  // gzip magic (0x1f 0x8b) + deflate method (0x08).
+  header[0] == b'\x1f' && header[1] == b'\x8b' && header[2] == b'\x08'
 }
 
 ///|
-fn cache_store(key : String, root : String, outputs : Array[String]) -> Unit {
-  // Single-archive format: every output goes into one `entry.tar.gz` blob
-  // under <cache_dir>/<key[0:2]>/<key[2:]>/. Tar headers carry the mode,
-  // so there's no separate manifest file. Wire-incompatible with go
-  // pkfire (BLAKE3 + zstd) on purpose.
+/// Reject an archive member whose name would write outside the restore
+/// root. Absolute paths, `..` components, and Windows drive letters all
+/// escape; a remote cache entry is untrusted input and must not be able
+/// to drop a file into `~/.ssh` or `/etc`.
+fn is_safe_archive_path(name : String) -> Bool {
+  let bytes = @utf8.encode(name)
+  if bytes.length() == 0 {
+    return false
+  }
+  // Leading separator: absolute path.
+  if bytes[0] == b'/' || bytes[0] == b'\\' {
+    return false
+  }
+  // `C:\...` style absolute paths.
+  if bytes.length() >= 2 && bytes[1] == b':' {
+    return false
+  }
+  // Walk the components, splitting on both separators — a tar written
+  // on Windows may use `\`. Reject any `..` component.
+  let mut seg_start = 0
+  let mut i = 0
+  while i <= bytes.length() {
+    let at_end = i == bytes.length()
+    let is_sep = !at_end && (bytes[i] == b'/' || bytes[i] == b'\\')
+    if at_end || is_sep {
+      let len = i - seg_start
+      if len == 2 && bytes[seg_start] == b'.' && bytes[seg_start + 1] == b'.' {
+        return false
+      }
+      seg_start = i + 1
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
+/// Pack `outputs` (paths relative to `root`) into the entry for `key`.
+///
+/// Returns false when nothing could be written. Publication is atomic:
+/// the archive is built in a temp file inside the entry directory and
+/// renamed into place, so a concurrent `cache_hit` either sees no blob
+/// or sees a complete one. Two processes storing the same key race on
+/// the rename, and the loser's identical bytes are simply replaced —
+/// the content is a pure function of the key, so either winner is
+/// correct.
+async fn cache_store(
+  key : String,
+  root : String,
+  outputs : Array[String],
+) -> Bool {
   let dir = entry_dir(key)
-  rm_rf(dir)
   mkdir_p(dir)
   let tb = tar_new()
   for rel in outputs {
@@ -1222,18 +1282,74 @@ fn cache_store(key : String, root : String, outputs : Array[String]) -> Unit {
     }
   }
   let archive = @zlib.gzip_compress(tar_finish(tb))
-  @fs.write_bytes_to_file(join_path(dir, "entry.tar.gz"), archive) catch {
-    _ => ()
-  }
+  cache_publish_archive(dir, archive)
 }
 
 ///|
-async fn cache_restore(key : String, root : String) -> Unit {
+/// Write `archive` to `<dir>/entry.tar.gz` via a temp file + rename.
+///
+/// Shared by the local store and the remote fetch so both publish
+/// entries the same way: no reader ever observes a partial blob.
+async fn cache_publish_archive(dir : String, archive : Bytes) -> Bool {
+  mkdir_p(dir)
+  let final_path = join_path(dir, CACHE_ENTRY_FILE)
+  // The temp name carries the pid so two concurrent stores of the same
+  // key do not scribble on each other's partial file before the rename.
+  // A process killed between the write and the rename leaves the temp
+  // file behind; `pkf cache prune` / `clear` reclaim it, and it is never
+  // mistaken for an entry because lookups name `entry.tar.gz` exactly.
+  let tmp_path = final_path + ".tmp." + current_pid().to_string()
+  @fs.write_bytes_to_file(tmp_path, archive) catch {
+    _ => return false
+  }
+  @xfs.rename(tmp_path.view(), final_path.view(), replace=true) catch {
+    _ => {
+      @fs.remove_file(tmp_path) catch { _ => () }
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Restore the entry for `key` under `root`.
+///
+/// Returns false when the entry is unusable — missing, not gzip, not a
+/// valid tar, over the expansion cap, or containing a path that escapes
+/// `root`. Callers must treat false as a cache miss and execute the
+/// action: silently returning "restored" on a corrupt entry is how a
+/// cache hands back an empty build tree and calls it success.
+async fn cache_restore(key : String, root : String) -> Bool {
   let dir = entry_dir(key)
-  let archive_path = join_path(dir, "entry.tar.gz")
-  let gz = @fs.read_file_to_bytes(archive_path) catch { _ => return }
-  let tar = @zlib.gzip_decompress(gz) catch { _ => return }
-  for entry in tar_iter(tar) {
+  let archive_path = join_path(dir, CACHE_ENTRY_FILE)
+  let gz = @fs.read_file_to_bytes(archive_path) catch { _ => return false }
+  let tar = @zlib.gzip_decompress(gz) catch { _ => return false }
+  let entries = match tar_iter(tar) {
+    TarOk(es) => es
+    TarMalformed(why) => {
+      eprintln("pkf: cache entry \{key[0:8].to_owned()} rejected: \{why}")
+      return false
+    }
+  }
+  // Validate the whole archive before touching the filesystem, so a
+  // bad member cannot leave a half-restored tree behind.
+  let mut total = 0L
+  for entry in entries {
+    if !is_safe_archive_path(entry.name) {
+      eprintln(
+        "pkf: cache entry \{key[0:8].to_owned()} rejected: unsafe path `\{entry.name}`",
+      )
+      return false
+    }
+    total = total + entry.content.length().to_int64()
+    if total > CACHE_MAX_EXPANDED_BYTES {
+      eprintln(
+        "pkf: cache entry \{key[0:8].to_owned()} rejected: expands past the \{CACHE_MAX_EXPANDED_BYTES} byte cap",
+      )
+      return false
+    }
+  }
+  for entry in entries {
     let dst = if root.length() == 0 || root == "." {
       entry.name
     } else {
@@ -1244,7 +1360,7 @@ async fn cache_restore(key : String, root : String) -> Unit {
       mkdir_p(parent)
     }
     @fs.write_bytes_to_file(dst, entry.content) catch {
-      _ => continue
+      _ => return false
     }
     // Preserve the recorded mode (executable bit, etc.). Best-effort:
     // chmod failures are swallowed so a read-only target FS doesn't
@@ -1253,6 +1369,7 @@ async fn cache_restore(key : String, root : String) -> Unit {
       _ => ()
     }
   }
+  true
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,7 +1389,7 @@ async fn cache_restore(key : String, root : String) -> Unit {
 
 ///|
 fn remote_base() -> String? {
-  match @sys.get_env_var("PKFIRE_MBT_REMOTE_CACHE") {
+  match @env.get_env_var("PKFIRE_MBT_REMOTE_CACHE") {
     Some(s) =>
       if s.length() == 0 {
         None
@@ -1287,7 +1404,7 @@ fn remote_base() -> String? {
 
 ///|
 fn remote_token() -> String? {
-  @sys.get_env_var("PKFIRE_MBT_REMOTE_TOKEN")
+  @env.get_env_var("PKFIRE_MBT_REMOTE_TOKEN")
 }
 
 ///|
@@ -1346,20 +1463,25 @@ async fn cache_remote_fetch(key : String, root : String) -> Bool {
     Some(b) => b
     None => return false
   }
-  let entry_url = remote_entry_url(base, key) + "/entry.tar.gz"
+  let entry_url = remote_entry_url(base, key) + "/" + CACHE_ENTRY_FILE
   let archive = match remote_get_bytes(entry_url) {
     Some(b) => b
     None => return false
   }
   let dir = entry_dir(key)
-  mkdir_p(dir)
-  @fs.write_bytes_to_file(join_path(dir, "entry.tar.gz"), archive) catch {
-    _ => {
-      rm_rf(dir)
-      return false
-    }
+  // Publish into the local CAS the same way a local store does, so the
+  // fetched entry is a real local hit on the next run rather than a
+  // repeated remote round-trip.
+  if !cache_publish_archive(dir, archive) {
+    return false
   }
-  cache_restore(key, root)
+  // A remote entry is untrusted input. `cache_restore` validates it and
+  // returns false on anything it will not unpack; drop the local copy
+  // in that case so the bad blob is not re-read as a local hit forever.
+  if !cache_restore(key, root) {
+    rm_rf(dir)
+    return false
+  }
   true
 }
 
@@ -1372,9 +1494,9 @@ async fn cache_remote_push(key : String) -> Unit {
     None => return
   }
   let dir = entry_dir(key)
-  let archive_path = join_path(dir, "entry.tar.gz")
+  let archive_path = join_path(dir, CACHE_ENTRY_FILE)
   let body = @fs.read_file_to_bytes(archive_path) catch { _ => return }
-  let entry_url = remote_entry_url(base, key) + "/entry.tar.gz"
+  let entry_url = remote_entry_url(base, key) + "/" + CACHE_ENTRY_FILE
   let ok = remote_put_bytes(entry_url, body)
   if !ok {
     println("pkf: remote cache PUT failed for \{key[0:8].to_owned()} (ignored)")
@@ -1658,21 +1780,76 @@ fn resolved_task_outputs(
 }
 
 ///|
-async fn[X] run_task(
-  group : @async.TaskGroup[X],
+/// Cache and reporting policy for one `pkf run` invocation.
+///
+/// These used to be documented in the README and silently dropped by the
+/// argument parser, so `pkf run --dry-run deploy` deployed. They are now
+/// a value the runner reads.
+struct RunOptions {
+  /// Skip cache lookup *and* store. The action always executes and
+  /// leaves no entry behind.
+  no_cache : Bool
+  /// Skip cache lookup but still store. Re-baselines an entry whose
+  /// contents drifted out from under the key.
+  refresh : Bool
+  /// Report what each task would do, execute nothing.
+  dry_run : Bool
+  /// Print each task's action key instead of executing.
+  print_hash : Bool
+  /// Print the full action descriptor behind each key.
+  explain_cache : Bool
+  /// Consult only the remote cache, never the local CAS. Used to verify
+  /// that CI actually populated the remote.
+  remote_only : Bool
+  /// Suppress the per-task `$ name` / `# name` log lines.
+  quiet : Bool
+  /// Print per-task wall time after the run.
+  timing : Bool
+  /// Cache-partition tag; also exported to the command as `$PKF_PROFILE`.
+  profile : String
+}
+
+///|
+fn RunOptions::default() -> RunOptions {
+  RunOptions::{
+    no_cache: false,
+    refresh: false,
+    dry_run: false,
+    print_hash: false,
+    explain_cache: false,
+    remote_only: false,
+    quiet: false,
+    timing: false,
+    profile: "",
+  }
+}
+
+///|
+/// Build the action descriptor for `task` as it would execute now.
+///
+/// Split out of `run_task` so `--print-hash`, `--dry-run` and
+/// `pkf explain` derive their key from exactly the same lowering the
+/// runner uses. A key that only agrees with the runner "most of the
+/// time" is worse than no key at all.
+fn action_for_task(
   plan : Plan,
   task : Task,
-  repo_root : String,
+  task_cwd : String,
   params : Map[String, String],
   positionals : Array[String],
-) -> Int {
-  if task.cmd.length() == 0 {
-    // deps-only umbrella task — nothing to spawn.
-    return 0
-  }
-  // Inputs, outputs and the command share the same task root. This keeps
-  // action-key expansion aligned with affected/watch for workdir tasks.
-  let task_cwd = match task.workdir {
+  opts : RunOptions,
+) -> ActionDescriptor {
+  let input_hashes = hash_task_inputs(task_cwd, task.inputs)
+  lower_task_to_action(
+    plan, task, input_hashes, params, positionals, opts.profile,
+  )
+}
+
+///|
+/// Absolute-ish root a task's inputs, outputs and command all resolve
+/// against.
+fn task_root_of(repo_root : String, task : Task) -> String {
+  match task.workdir {
     Some(wd) =>
       if wd.has_prefix("/") {
         wd
@@ -1683,30 +1860,125 @@ async fn[X] run_task(
       }
     None => if repo_root.length() == 0 { "." } else { repo_root }
   }
+}
+
+///|
+/// Declared outputs that are literal paths (no glob metacharacters).
+/// Only these can be checked for existence after a run: a glob that
+/// matches nothing is a legitimate "this task produced no files of that
+/// shape", but a literal `outputs { "dist/app" }` that is absent means
+/// the action did not do what it declared.
+fn literal_outputs(task : Task) -> Array[String] {
+  let out : Array[String] = []
+  for pattern in task.outputs {
+    if !(pattern.contains("*") ||
+      pattern.contains("?") ||
+      pattern.contains("[") ||
+      pattern.contains("{")) {
+      out.push(pattern)
+    }
+  }
+  out
+}
+
+///|
+async fn[X] run_task(
+  group : @async.TaskGroup[X],
+  plan : Plan,
+  task : Task,
+  repo_root : String,
+  params : Map[String, String],
+  positionals : Array[String],
+  opts~ : RunOptions = RunOptions::default(),
+) -> Int {
+  if task.cmd.length() == 0 {
+    // deps-only umbrella task — nothing to spawn.
+    return 0
+  }
+  // Inputs, outputs and the command share the same task root. This keeps
+  // action-key expansion aligned with affected/watch for workdir tasks.
+  let task_cwd = task_root_of(repo_root, task)
   // Compute the action key and consult the cache when caching is on.
+  //
+  // A task that declares no inputs is never cacheable, whatever it says.
+  // Its action key depends only on the command and its environment, so
+  // nothing a user edits can change it: the first run stores an entry
+  // and every run after that is a permanent hit. Before the cache-hit
+  // bug was fixed this was invisible — no local lookup ever succeeded —
+  // which is how `cache = true` (the schema default) ended up on tasks
+  // that only ever want to run. Git hook tasks are the clearest case:
+  // `pkf run pre-push` must run the hook every time.
+  let uncacheable_reason = if !task.cache {
+    Some("cache = false")
+  } else if task.inputs.length() == 0 {
+    Some("no declared inputs")
+  } else if opts.no_cache {
+    Some("--no-cache")
+  } else {
+    None
+  }
+  let cacheable = uncacheable_reason is None
   let mut key : String? = None
-  if task.cache {
-    let resolved_inputs = expand_inputs(task_cwd, task.inputs)
-    let input_hashes : Array[(String, FixedArray[Byte])] = []
-    for rel in resolved_inputs {
-      let src = if task_cwd.length() == 0 || task_cwd == "." {
-        rel
-      } else {
-        join_path(task_cwd, rel)
+  if cacheable || opts.print_hash || opts.explain_cache || opts.dry_run {
+    let action = action_for_task(
+      plan, task, task_cwd, params, positionals, opts,
+    )
+    let k = action_key_of(action)
+    if opts.explain_cache {
+      println("pkf: action \{task.name} \{k}")
+      println(describe_action(action))
+    }
+    if opts.print_hash {
+      println("\{k}  \{task.name}")
+      return 0
+    }
+    // Dry run reports and stops. It must not restore, fetch, or spawn:
+    // the whole point is that `pkf run --dry-run deploy` does not
+    // deploy, and a "harmless" cache restore still writes files.
+    if opts.dry_run {
+      let status = match uncacheable_reason {
+        Some(why) => "will run (uncached: " + why + ")"
+        None =>
+          if opts.refresh {
+            "will run (--refresh)"
+          } else if !opts.remote_only && cache_hit(k) {
+            "cache hit"
+          } else {
+            "will run"
+          }
       }
-      input_hashes.push((rel, hash_file(src)))
-    }
-    let k = compute_action_key(task, input_hashes, params, positionals)
-    if cache_hit(k) {
-      println("pkf: # \{task.name} (cache hit \{k[0:8].to_owned()})")
-      cache_restore(k, repo_root)
+      println("pkf: \{task.name}  \{status}  \{k[0:8].to_owned()}")
+      println("pkf:   \{task.cmd}")
       return 0
     }
-    if cache_remote_fetch(k, repo_root) {
-      println("pkf: # \{task.name} (remote cache hit \{k[0:8].to_owned()})")
-      return 0
+    if cacheable {
+      // `--refresh` deliberately skips the lookup and falls through to
+      // execution, then re-stores: it re-baselines an entry rather than
+      // trusting it.
+      if !opts.refresh {
+        if !opts.remote_only && cache_hit(k) && cache_restore(k, repo_root) {
+          if !opts.quiet {
+            println("pkf: # \{task.name} (cache hit \{k[0:8].to_owned()})")
+          }
+          return 0
+        }
+        if cache_remote_fetch(k, repo_root) {
+          if !opts.quiet {
+            println("pkf: # \{task.name} (remote cache hit \{k[0:8].to_owned()})")
+          }
+          return 0
+        }
+      }
+      key = Some(k)
     }
-    key = Some(k)
+  } else if opts.dry_run {
+    let why = match uncacheable_reason {
+      Some(w) => w
+      None => "uncached"
+    }
+    println("pkf: \{task.name}  will run (uncached: \{why})")
+    println("pkf:   \{task.cmd}")
+    return 0
   }
   // bash -c "cmd" placeholder for positional args: pkfire passes
   // positionals as `bash -c "cmd" <task-name> <positional...>` so that
@@ -1732,6 +2004,9 @@ async fn[X] run_task(
   // Param values surface as `$<NAME>` (uppercased).
   for pname, pvalue in params {
     extra_env[upcase(pname)] = pvalue
+  }
+  if opts.profile.length() > 0 {
+    extra_env["PKF_PROFILE"] = opts.profile
   }
   // Start declared services before running cmd. Cache hit above
   // short-circuits the spawn; reuse semantics apply per service.
@@ -1763,7 +2038,9 @@ async fn[X] run_task(
       }
     }
   }
-  println("pkf: $ \{task.name}")
+  if !opts.quiet && !task.quiet {
+    println("pkf: $ \{task.name}")
+  }
   let code = @process.run_inherit(
     task.shell.view(),
     argv[:],
@@ -1772,19 +2049,43 @@ async fn[X] run_task(
     cwd=task_cwd.view(),
   )
   stop_services(running)
-  if code == 0 {
-    match key {
-      Some(k) => {
-        let resolved_outputs = resolved_task_outputs(
-          repo_root,
-          task_cwd,
-          task.outputs,
-        )
-        cache_store(k, repo_root, resolved_outputs)
+  if code != 0 {
+    return code
+  }
+  // An action that exits 0 without producing a declared output has not
+  // done what it said it would. Caching that is how an empty entry gets
+  // published and then "restored" over a working tree on every later
+  // run, so refuse before the store rather than after.
+  let missing : Array[String] = []
+  for rel in literal_outputs(task) {
+    let abs = if task_cwd.length() == 0 || task_cwd == "." {
+      rel
+    } else {
+      join_path(task_cwd, rel)
+    }
+    if !@fs.path_exists(abs) {
+      missing.push(rel)
+    }
+  }
+  if missing.length() > 0 {
+    die(
+      "task `\{task.name}` exited 0 but did not produce its declared output(s): " +
+      join_with(missing, ", "),
+    )
+    return 1
+  }
+  match key {
+    Some(k) => {
+      let resolved_outputs = resolved_task_outputs(
+        repo_root,
+        task_cwd,
+        task.outputs,
+      )
+      if cache_store(k, repo_root, resolved_outputs) {
         cache_remote_push(k)
       }
-      None => ()
     }
+    None => ()
   }
   code
 }
@@ -1908,17 +2209,101 @@ fn extract_output_value(value : @pkl.Value) -> @pkl.Value {
 
 ///|
 struct ParsedRunArgs {
-  target : String
+  /// One or more task names, in the order given. Glob patterns are
+  /// still unexpanded here — expansion needs the loaded plan.
+  targets : Array[String]
+  /// Candidate task params: every `--name[=value]` the runner did not
+  /// claim for itself. Validated against the target's declared params
+  /// once the plan is loaded.
   flags : Map[String, String]
+  /// Args after `--`, forwarded to an `acceptsArgs` task.
   positionals : Array[String]
+  /// Runner behaviour selected by the reserved flags.
+  opts : RunOptions
+  /// Keep running independent tasks after one fails (`make -k`). Lives
+  /// here rather than in `RunOptions` because it changes what the run
+  /// loop does after a failure, not what any single task does.
+  keep_going : Bool
 }
 
 ///|
-fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs {
-  // Layout: `<task> [--name=value | --name value | --flag] [-- positional...]`
-  let mut target : String? = None
+/// Reserved runner flags that take no value.
+///
+/// The runner claims these names before task params get a look, which
+/// is why they are listed once rather than matched ad hoc: a task may
+/// not declare a param called `dry-run` and quietly shadow the runner's
+/// own flag, and the runner may not swallow a param it does not own.
+fn runner_bool_flags() -> Array[String] {
+  [
+    "dry-run", "print-hash", "explain-cache", "no-cache", "refresh",
+    "remote-only", "quiet", "timing", "keep-going",
+  ]
+}
+
+///|
+/// Reserved runner flags that take a value.
+fn runner_value_flags() -> Array[String] {
+  ["profile"]
+}
+
+///|
+/// Reserved flag names that are documented but not implemented in this
+/// runner yet, paired with the reason. Rejecting them explicitly is the
+/// point: `pkf run --dry-run deploy` used to *deploy*, because an
+/// unrecognised flag was silently dropped. A flag that does not do what
+/// its name says must fail loudly, not be ignored.
+fn runner_unimplemented_flags() -> Array[(String, String)] {
+  [
+    (
+      "jobs",
+      "parallel execution is not implemented; the runner executes the topological order sequentially",
+    ),
+    (
+      "j",
+      "parallel execution is not implemented; the runner executes the topological order sequentially",
+    ),
+    ("watch", "use `pkf watch <task>` instead"),
+    ("on-fail", "not implemented"),
+  ]
+}
+
+///|
+fn array_contains(xs : Array[String], needle : String) -> Bool {
+  for x in xs {
+    if x == needle {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Parse `pkf run` arguments.
+///
+/// Layout: `[--runner-flag]... <task>... [--task-param[=value]]... [-- positional...]`.
+/// Bare words are task names (README: `pkf run a b c` runs the
+/// topological union); anything meant for the command itself goes after
+/// `--`.
+///
+/// Returns None after printing a diagnostic when an argument cannot be
+/// interpreted. There is no "ignore it and hope" branch.
+fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
+  let targets : Array[String] = []
   let flags : Map[String, String] = Map([], capacity=4)
   let positionals : Array[String] = []
+  let bool_flags = runner_bool_flags()
+  let value_flags = runner_value_flags()
+  let unimplemented = runner_unimplemented_flags()
+  let mut no_cache = false
+  let mut refresh = false
+  let mut dry_run = false
+  let mut print_hash = false
+  let mut explain_cache = false
+  let mut remote_only = false
+  let mut quiet = false
+  let mut timing = false
+  let mut keep_going = false
+  let mut profile = ""
   let mut i = 0
   let mut after_dash_dash = false
   while i < args.length() {
@@ -1933,36 +2318,116 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs {
       i = i + 1
       continue
     }
+    // `-j 8` / `-j8`: short form of an unimplemented flag. Match it
+    // here so the diagnostic names the flag rather than "unknown task".
+    if arg.has_prefix("-j") {
+      die(
+        "pkf run: `-j` is not supported yet — parallel execution is not implemented; the runner executes the topological order sequentially",
+      )
+      return None
+    }
     if arg.has_prefix("--") {
       let stripped = arg[2:arg.length()].to_owned()
-      match stripped.find("=") {
-        Some(idx) => {
-          let key = stripped[0:idx].to_owned()
-          let value = stripped[idx + 1:stripped.length()].to_owned()
-          flags[key] = value
+      let (name, value) = match stripped.find("=") {
+        Some(idx) =>
+          (
+            stripped[0:idx].to_owned(),
+            Some(stripped[idx + 1:stripped.length()].to_owned()),
+          )
+        None => (stripped, None)
+      }
+      // Documented-but-unimplemented: reject with the reason.
+      let mut rejected = false
+      for pair in unimplemented {
+        if pair.0 == name {
+          die("pkf run: `--\{name}` is not supported yet — \{pair.1}")
+          rejected = true
+          break
         }
-        None =>
-          // bool flag: `--flag` alone means "true".
-          flags[stripped] = "true"
+      }
+      if rejected {
+        return None
+      }
+      if array_contains(value_flags, name) {
+        let v = match value {
+          Some(v) => v
+          None =>
+            if i + 1 < args.length() {
+              i = i + 1
+              args[i]
+            } else {
+              die("pkf run: `--\{name}` requires a value")
+              return None
+            }
+        }
+        if name == "profile" {
+          profile = v
+        }
+        i = i + 1
+        continue
+      }
+      if array_contains(bool_flags, name) {
+        // `--quiet=false` is accepted so scripts can un-set a flag they
+        // templated in; anything other than an explicit false is true.
+        let on = match value {
+          Some(v) => v != "false" && v != "0"
+          None => true
+        }
+        match name {
+          "dry-run" => dry_run = on
+          "print-hash" => print_hash = on
+          "explain-cache" => explain_cache = on
+          "no-cache" => no_cache = on
+          "refresh" => refresh = on
+          "remote-only" => remote_only = on
+          "quiet" => quiet = on
+          "timing" => timing = on
+          "keep-going" => keep_going = on
+          _ => ()
+        }
+        i = i + 1
+        continue
+      }
+      // Not a runner flag: a candidate task param. Validated against
+      // the target's declared params once the plan is loaded.
+      flags[name] = match value {
+        Some(v) => v
+        None => "true"
       }
       i = i + 1
       continue
     }
-    if target is None {
-      target = Some(arg)
-    } else {
-      positionals.push(arg)
+    // A single-dash token is never a task name, so it can only be a
+    // short flag the runner does not have. Reporting it as an unknown
+    // task would send the reader looking in the Taskfile.
+    if arg.has_prefix("-") && arg.length() > 1 {
+      die("pkf run: unknown flag `\{arg}`")
+      return None
     }
+    targets.push(arg)
     i = i + 1
   }
-  ParsedRunArgs::{
-    target: match target {
-      Some(t) => t
-      None => ""
-    },
+  if no_cache && refresh {
+    die("pkf run: `--no-cache` and `--refresh` are mutually exclusive")
+    return None
+  }
+  Some(ParsedRunArgs::{
+    targets,
     flags,
     positionals,
-  }
+    keep_going,
+    opts: RunOptions::{
+      no_cache,
+      refresh,
+      dry_run,
+      print_hash,
+      explain_cache,
+      remote_only,
+      quiet,
+      timing,
+      profile,
+    },
+  })
 }
 
 ///|
@@ -2035,7 +2500,7 @@ fn pkf_version() -> String {
 
 ///|
 fn upcase(name : String) -> String {
-  let buf = StringBuilder::new(size_hint=name.length())
+  let buf = StringBuilder(size_hint=name.length())
   for i in 0..<name.length() {
     let c = name[i]
     if c >= 'a' && c <= 'z' {
@@ -2832,7 +3297,7 @@ fn mask_pkl_trivia(src : String) -> String {
       i = i + 1
     }
   }
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   for ch in out {
     sb.write_char(ch)
   }
@@ -3593,7 +4058,7 @@ fn completion_bash() -> String {
     #|
     #|  # First positional = subcommand.
     #|  if [ "$COMP_CWORD" -eq 1 ]; then
-    #|    COMPREPLY=($(compgen -W "init list describe info run up doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
+    #|    COMPREPLY=($(compgen -W "init list describe info run up trace doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
     #|    return
     #|  fi
     #|
@@ -3618,7 +4083,7 @@ fn completion_bash() -> String {
     #|      ;;
     #|    affected)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --since --files --explain --check --dry-run --no-cache --refresh --timing --quiet --keep-going --profile --watch -j --jobs" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --check --changed=" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -3627,7 +4092,7 @@ fn completion_bash() -> String {
     #|      ;;
     #|    run)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --watch --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --on-fail --remote-only -j --jobs" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --remote-only" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -3636,6 +4101,15 @@ fn completion_bash() -> String {
     #|      ;;
     #|    clean|up)
     #|      if [[ "$cur" == -* ]]; then return; fi
+    #|      local tasks
+    #|      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+    #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+    #|      ;;
+    #|    trace)
+    #|      if [[ "$cur" == -* ]]; then
+    #|        COMPREPLY=($(compgen -W "-f --file --check --emit" -- "$cur"))
+    #|        return
+    #|      fi
     #|      local tasks
     #|      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
     #|      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
@@ -3720,6 +4194,7 @@ fn completion_zsh() -> String {
     #|    'info:structured snapshot (schema version + defaults + tasks + workflowTests)'
     #|    'run:run one or more tasks'
     #|    'up:supervise long-running services'
+    #|    'trace:run a task under the fspy shim and audit its declared inputs'
     #|    'doctor:diagnose pkfire setup'
     #|    'lint:detect Taskfile issues'
     #|    'format:pkl format -w wrapper'
@@ -3784,20 +4259,8 @@ fn completion_zsh() -> String {
     #|        _values 'affected option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--since[git ref to diff against]' \
-    #|          '--files[simulate changed file paths]' \
-    #|          '--explain[show matching input patterns]' \
     #|          '--check[run workflowTests]' \
-    #|          '--dry-run[preview plan without running]' \
-    #|          '--no-cache[disable cache for this run]' \
-    #|          '--refresh[skip lookup but store outputs]' \
-    #|          '--timing[print task durations]' \
-    #|          '--quiet[suppress per-task log lines]' \
-    #|          '--keep-going[do not stop on first failure]' \
-    #|          '--profile[profile name for cache keys]' \
-    #|          '--watch[recompute affected set on change]' \
-    #|          '-j[max concurrent tasks]' \
-    #|          '--jobs[max concurrent tasks]'
+    #|          '--changed[read newline-separated changed paths from a file]'
     #|      else
     #|        local -a tasks
     #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -3809,7 +4272,6 @@ fn completion_zsh() -> String {
     #|        _values 'run option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--watch[re-run on input changes]' \
     #|          '--dry-run[preview plan without running]' \
     #|          '--print-hash[print action keys and exit]' \
     #|          '--explain-cache[explain cache decisions and exit]' \
@@ -3819,10 +4281,7 @@ fn completion_zsh() -> String {
     #|          '--quiet[suppress per-task log lines]' \
     #|          '--keep-going[do not stop on first failure]' \
     #|          '--profile[profile name for cache keys]' \
-    #|          '--on-fail[action on task failure]' \
-    #|          '--remote-only[consult only remote cache]' \
-    #|          '-j[max concurrent tasks]' \
-    #|          '--jobs[max concurrent tasks]'
+    #|          '--remote-only[consult only remote cache]'
     #|      else
     #|        local -a tasks
     #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -3833,6 +4292,19 @@ fn completion_zsh() -> String {
     #|      local -a tasks
     #|      tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
     #|      _describe 'task' tasks
+    #|      ;;
+    #|    trace)
+    #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+    #|        _values 'trace option' \
+    #|          '-f[path to Taskfile.pkl]' \
+    #|          '--file[path to Taskfile.pkl]' \
+    #|          '--check[fail when a file is read but not declared]' \
+    #|          '--emit[print a matching inputs block]'
+    #|      else
+    #|        local -a tasks
+    #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+    #|        _describe 'task' tasks
+    #|      fi
     #|      ;;
     #|    describe)
     #|      if [[ "${words[$CURRENT]}" == -* ]]; then
@@ -3949,6 +4421,7 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_use_subcommand' -a clean     -d 'remove declared outputs'
     #|complete -c pkf -f -n '__fish_use_subcommand' -a cache     -d 'inspect / clean the local CAS'
     #|complete -c pkf -f -n '__fish_use_subcommand' -a completion -d 'emit shell completion script'
+    #|complete -c pkf -f -n '__fish_use_subcommand' -a trace     -d 'run a task under the fspy shim and audit its declared inputs'
     #|complete -c pkf -f -n '__fish_use_subcommand' -a graph     -d 'emit DAG (dot / mermaid / tree / json)'
     #|complete -c pkf -f -n '__fish_use_subcommand' -a explain   -d 'dump or compare inputs to the action key'
     #|complete -c pkf -f -n '__fish_use_subcommand' -a migrate   -d 'rewrite Taskfile schema version'
@@ -3957,7 +4430,7 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_use_subcommand' -a help      -d 'show usage'
     #|
     #|# Dynamic task names for the subcommands that take them.
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up explain describe' -a '(__pkf_tasks)'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run affected clean up trace explain describe' -a '(__pkf_tasks)'
     #|
     #|# Nested subcommand completions.
     #|complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
@@ -3976,20 +4449,8 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l json -d 'emit machine-readable output'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l fix -d 'apply safe fixes'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l dry-run -d 'show fixes without writing files'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l since -d 'git ref to diff against'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l files -d 'simulate changed file paths'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l explain -d 'show matching input patterns'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l check -d 'run workflowTests'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l dry-run -d 'preview plan without running'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l no-cache -d 'disable cache for this run'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l refresh -d 'skip lookup but store outputs'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l timing -d 'print task durations'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l quiet -d 'suppress per-task log lines'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l keep-going -d 'do not stop on first failure'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l profile -d 'profile name for cache keys'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l watch -d 'recompute affected set on change'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -s j -l jobs -d 'max concurrent tasks'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l watch -d 're-run on input changes'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l changed -d 'read newline-separated changed paths from a file'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l dry-run -d 'preview plan without running'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l print-hash -d 'print action keys and exit'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l explain-cache -d 'explain cache decisions and exit'
@@ -3999,9 +4460,10 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l quiet -d 'suppress per-task log lines'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l on-fail -d 'action on task failure'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l remote-only -d 'consult only remote cache'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -s j -l jobs -d 'max concurrent tasks'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -s f -l file -d 'path to Taskfile.pkl'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l check -d 'fail when a file is read but not declared'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l emit -d 'print a matching inputs block'
     #|
     #|# `pkf graph --format <TAB>`.
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree json'
@@ -4034,12 +4496,16 @@ fn usage_text() -> String {
     #|usage: pkf <command> [args...]
     #|
     #|commands:
-    #|  run <task> [--name=value]... [-- positional...]
+    #|  run <task>... [--dry-run] [--print-hash] [--no-cache] [--refresh]
+    #|              [--explain-cache] [--remote-only] [--keep-going]
+    #|              [--profile=NAME] [--quiet] [--timing]
+    #|              [--name=value]... [-- positional...]
     #|  list [-v] [--all]
     #|  graph [--all]
     #|  affected <path>... | --check
     #|  watch [task...]
     #|  up [service...]
+    #|  trace [--check] [--emit] <task>
     #|  info [--json] [--all]
     #|  completion <bash|zsh|fish>
   msg
@@ -4175,7 +4641,7 @@ async fn doctor_cmd(
   report(cache_level, "cache", cache_msg)
 
   // 4. remote cache — check PKFIRE_MBT_REMOTE_CACHE env var.
-  let remote_msg : String = match @sys.get_env_var("PKFIRE_MBT_REMOTE_CACHE") {
+  let remote_msg : String = match @env.get_env_var("PKFIRE_MBT_REMOTE_CACHE") {
     Some(url) =>
       if url.length() == 0 {
         "PKFIRE_MBT_REMOTE_CACHE not set (local-only)"
@@ -4294,23 +4760,20 @@ async fn explain_cmd(
   }
   let repo_root = taskfile_dir(taskfile)
   // Compute the effective workdir (abs path where the task runs).
-  let effective_workdir = match task.workdir {
-    Some(wd) =>
-      if wd.has_prefix("/") {
-        wd
-      } else if repo_root.length() == 0 || repo_root == "." {
-        wd
-      } else {
-        repo_root + "/" + wd
-      }
-    None => if repo_root.length() == 0 { "." } else { repo_root }
-  }
-  // Compute the action key for this task (with zero input hashes — no
-  // file I/O here, consistent with `explain` being a fast introspection
-  // command). The hash value intentionally differs from Go pkfire (SHA-256
-  // vs BLAKE3); the conformance scenario checks only that the field is
-  // present, not the value.
-  let action_key = compute_action_key(task, [], Map([], capacity=0), [])
+  let effective_workdir = task_root_of(repo_root, task)
+  // Lower the task through the same path `pkf run` uses, so the key
+  // printed here is the key the runner will look up. Inputs are hashed
+  // for real: `explain` exists to answer "why did this miss?", and an
+  // input digest is the usual answer.
+  let action = action_for_task(
+    plan,
+    task,
+    effective_workdir,
+    Map([], capacity=0),
+    [],
+    RunOptions::default(),
+  )
+  let action_key = action_key_of(action)
   // Reverse deps: O(n*m) scan over all tasks.
   let dependents : Array[String] = []
   for dep_name in plan.task_order {
@@ -4634,65 +5097,136 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
       up_cmd(explicit_taskfile, group, rest[:])
     }
+    "trace" => {
+      let (explicit_taskfile, rest) = extract_file_flag(args[1:])
+      trace_cmd(explicit_taskfile, rest[:])
+    }
     "run" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
-      let parsed = parse_run_args(rest[:])
-      if parsed.target.length() == 0 {
-        die("pkf run: missing <task> argument")
+      let parsed = match parse_run_args(rest[:]) {
+        Some(p) => p
+        None => return 2
       }
-      let target = parsed.target
       let taskfile = locate_taskfile(explicit_taskfile)
       let raw_json = eval_taskfile(taskfile)
       let plan = parse_plan(raw_json)
-      match plan.tasks.get(target) {
-        Some(t) =>
-          if t.service {
-            die(
-              "task `\{target}` is a `service` (start it with `pkf up`, not `pkf run`)",
-            )
+      // No target named: fall back to `default`, per README.
+      let requested = if parsed.targets.length() == 0 {
+        ["default"]
+      } else {
+        parsed.targets
+      }
+      // `pkf run 'test:*'` — glob over task names. Non-glob entries pass
+      // through unchanged, and a glob that matches nothing stays literal
+      // so the unknown-task path reports it.
+      let expanded = expand_task_patterns(requested, plan.tasks)
+      let targets = if expanded.length() > 0 { expanded } else { requested }
+      for target in targets {
+        match plan.tasks.get(target) {
+          Some(t) =>
+            if t.service {
+              die(
+                "task `\{target}` is a `service` (start it with `pkf up`, not `pkf run`)",
+              )
+              return 2
+            }
+          None => {
+            suggest_task_name(target, plan)
             return 2
           }
-        None => {
-          suggest_task_name(target, plan)
+        }
+      }
+      // Positional args and task params address the *last* named target
+      // only; forwarding one task's `--version` to another task that
+      // happens to declare the same param would be a silent surprise.
+      let arg_target = targets[targets.length() - 1]
+      if parsed.positionals.length() > 0 {
+        let t = plan.tasks.get(arg_target).unwrap()
+        if !t.accepts_args && !is_git_hook_event(arg_target) {
+          die(
+            "pkf run: task `\{arg_target}` does not accept positional args " +
+            "(set `acceptsArgs = true` to allow)",
+          )
           return 2
         }
       }
-      let order = topo_sort_for(target, plan)
+      // Every `--name` the runner did not claim must be a param the
+      // target declares. Unknown ones used to be dropped on the floor,
+      // so a typo'd `--verison=1.2.3` ran the task with its default.
+      if parsed.flags.length() > 0 {
+        let target_task = plan.tasks.get(arg_target).unwrap()
+        for name, _ in parsed.flags {
+          let mut declared = false
+          for p in target_task.params {
+            if p.name == name {
+              declared = true
+              break
+            }
+          }
+          if !declared {
+            die(
+              "pkf run: task `\{arg_target}` has no param `\{name}` " +
+              "(and `--\{name}` is not a runner flag)",
+            )
+            return 2
+          }
+        }
+      }
+      // Topological union across every requested target, deduplicated
+      // while preserving dependency order.
       let repo_root = taskfile_dir(taskfile)
+      let order : Array[String] = []
+      let queued : Map[String, Bool] = Map([], capacity=8)
+      for target in targets {
+        for name in topo_sort_for(target, plan) {
+          if !queued.contains(name) {
+            queued[name] = true
+            order.push(name)
+          }
+        }
+      }
+      let started = now_sec()
+      let timings : Array[(String, Int64)] = []
+      let mut exit_code = 0
       for name in order {
         let task = plan.tasks.get(name).unwrap()
-        // CLI flags / positional args only apply to the explicit target.
-        let (flags, positionals) = if name == target {
+        // CLI flags / positional args only apply to the arg target.
+        let (flags, positionals) = if name == arg_target {
           (parsed.flags, parsed.positionals)
         } else {
           (Map([], capacity=0), [])
-        }
-        if name != target && positionals.length() > 0 {
-          // unreachable — positionals are emptied for non-target tasks.
-          ignore(positionals)
-        }
-        if !task.accepts_args &&
-          name == target &&
-          parsed.positionals.length() > 0 &&
-          !is_git_hook_event(target) {
-          die(
-            "pkf run: task `\{target}` does not accept positional args " +
-            "(set `acceptsArgs = true` to allow)",
-          )
         }
         let resolved_params = match resolve_task_params(task, flags) {
           Some(m) => m
           None => return 2
         }
+        let task_started = now_sec()
         let code = run_task(
-          group, plan, task, repo_root, resolved_params, positionals,
+          group,
+          plan,
+          task,
+          repo_root,
+          resolved_params,
+          positionals,
+          opts=parsed.opts,
         )
+        timings.push((name, now_sec() - task_started))
         if code != 0 {
           println("pkf: task `\{name}` failed with exit code \{code}")
-          return code
+          exit_code = code
+          if !parsed.keep_going {
+            break
+          }
         }
       }
-      0
+      if parsed.opts.timing {
+        println("pkf: timing")
+        for entry in timings {
+          println("pkf:   \{entry.0}  \{entry.1}s")
+        }
+        println("pkf:   total  \{now_sec() - started}s")
+      }
+      exit_code
     }
     "describe" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])
@@ -4960,7 +5494,7 @@ fn replace_pkfire_version(
 ) -> (String, Bool, Bool) {
   let marker = "pkfire@"
   let mlen = marker.length()
-  let buf = StringBuilder::new(size_hint=src.length())
+  let buf = StringBuilder(size_hint=src.length())
   let mut i = 0
   let mut changed = false
   let mut found = false
@@ -5314,7 +5848,7 @@ async fn hooks_cmd(
 ///|
 /// Join an Array[String] with a separator (used for events list).
 fn join_with(items : Array[String], sep : String) -> String {
-  let buf = StringBuilder::new(size_hint=64)
+  let buf = StringBuilder(size_hint=64)
   for i, item in items {
     if i > 0 {
       buf.write_string(sep)
@@ -5452,7 +5986,7 @@ fn pad_right(s : String, width : Int) -> String {
   if len >= width {
     s
   } else {
-    let buf = StringBuilder::new(size_hint=width)
+    let buf = StringBuilder(size_hint=width)
     buf.write_string(s)
     for _ in 0..<(width - len) {
       buf.write_char(' ')
@@ -5881,7 +6415,7 @@ async fn pkl_cache_warm_cmd(args : ArrayView[String]) -> Int {
 
 ///|
 async fn main {
-  let args = @sys.get_cli_args()
+  let args = @env.args()
   // The first argv entry is the binary path; skip it.
   let trimmed : Array[String] = []
   for i in 1..<args.length() {

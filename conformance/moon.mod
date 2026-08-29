@@ -7,7 +7,7 @@ import {
   "mizchi/pkl@0.6.0",
   "mizchi/x@0.5.2",
   "moonbitlang/async@0.20.3",
-  "moonbitlang/x@0.4.47",
+  "moonbitlang/x@0.5.1",
 }
 
 preferred_target = "native"

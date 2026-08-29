@@ -47,13 +47,13 @@ pub fn LoaderError::message(self : LoaderError) -> String {
 
 ///|
 pub fn package_cache_root() -> String {
-  match @sys.get_env_var("PKL_MBT_PACKAGE_CACHE") {
+  match @env.get_env_var("PKL_MBT_PACKAGE_CACHE") {
     Some(d) => d
     None =>
-      match @sys.get_env_var("XDG_CACHE_HOME") {
+      match @env.get_env_var("XDG_CACHE_HOME") {
         Some(base) => path_join(base, "pkl-mbt/package-2")
         None =>
-          match @sys.get_env_var("HOME") {
+          match @env.get_env_var("HOME") {
             Some(home) => path_join(home, ".cache/pkl-mbt/package-2")
             None => ".cache/pkl-mbt/package-2"
           }
