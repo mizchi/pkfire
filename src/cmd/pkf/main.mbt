@@ -742,6 +742,29 @@ fn looks_executable(bytes : Bytes) -> Bool {
 extern "C" fn stat_mode_ffi(path : Bytes) -> Int = "mizchi_pkf_stat_mode"
 
 ///|
+/// FFI: lstat(2) → 1 regular, 2 directory, 3 symlink, 0 otherwise.
+#borrow(path)
+extern "C" fn lstat_kind_ffi(path : Bytes) -> Int = "mizchi_pkf_lstat_kind"
+
+///|
+/// FFI: readlink(2) → the target verbatim, empty on failure.
+#borrow(path)
+extern "C" fn readlink_ffi(path : Bytes) -> Bytes = "mizchi_pkf_readlink"
+
+///|
+/// What `path` is, *without* following symlinks. None when it is
+/// something the cache does not model (socket, device, or missing).
+fn path_kind(path : String) -> TarKind? {
+  let path_z = @utf8.encode(path + "\u{00}")
+  match lstat_kind_ffi(path_z) {
+    1 => Some(TarFile)
+    2 => Some(TarDir)
+    3 => Some(TarSymlink(@utf8.decode_lossy(readlink_ffi(path_z))))
+    _ => None
+  }
+}
+
+///|
 /// FFI: stat(2) → st_mtime as seconds since epoch, or 0 on failure.
 #borrow(path)
 extern "C" fn file_mtime_sec(path : Bytes) -> Int64 = "mizchi_pkf_mtime_sec"
@@ -788,11 +811,28 @@ fn detect_file_mode(path : String) -> Int {
 }
 
 ///|
-fn walk_files(root : String, rel_prefix : String, out : Array[String]) -> Unit {
-  // Append every regular file under `root` to `out` as a relative path
-  // built from `rel_prefix`. Symlinks are followed naively (whatever
-  // `read_dir` returns). Directory recursion is depth-first.
+/// Walk `root` depth-first, appending `(relative path, kind)` for every
+/// entry under it.
+///
+/// **Symlinks are recorded, never followed.** Following them is what
+/// made the cache dereference a link into a copy of its target, and
+/// what let `out/loop -> ..` walk back out of the declared output tree
+/// — the archive grew until the OS path-length limit stopped it, and
+/// swept in files the task never declared.
+///
+/// A directory is emitted only when it has no entries of its own: a
+/// non-empty directory is implied by its members, but an empty one
+/// leaves no trace otherwise and would silently vanish on restore.
+fn walk_tree(
+  root : String,
+  rel_prefix : String,
+  out : Array[(String, TarKind)],
+) -> Unit {
   let entries = @fs.read_dir(root) catch { _ => [] }
+  if entries.length() == 0 && rel_prefix.length() > 0 {
+    out.push((rel_prefix, TarDir))
+    return
+  }
   for entry in entries {
     let full = join_path(root, entry)
     let rel = if rel_prefix.length() == 0 {
@@ -800,11 +840,26 @@ fn walk_files(root : String, rel_prefix : String, out : Array[String]) -> Unit {
     } else {
       rel_prefix + "/" + entry
     }
-    let is_dir = @fs.is_dir(full) catch { _ => false }
-    if is_dir {
-      walk_files(full, rel, out)
-    } else {
-      out.push(rel)
+    match path_kind(full) {
+      Some(TarDir) => walk_tree(full, rel, out)
+      Some(kind) => out.push((rel, kind))
+      // Sockets, devices and anything else the cache cannot model are
+      // skipped rather than stored as an empty regular file.
+      None => ()
+    }
+  }
+}
+
+///|
+/// Names of everything under `root` that carries content — regular
+/// files and symlinks. Used by input globbing, which matches on paths
+/// and has no use for the directory members `walk_tree` emits.
+fn walk_files(root : String, rel_prefix : String, out : Array[String]) -> Unit {
+  let entries : Array[(String, TarKind)] = []
+  walk_tree(root, rel_prefix, entries)
+  for entry in entries {
+    if entry.1 != TarDir {
+      out.push(entry.0)
     }
   }
 }
@@ -1239,6 +1294,50 @@ fn is_safe_archive_path(name : String) -> Bool {
 }
 
 ///|
+/// Whether a symlink member may be created.
+///
+/// A cache entry is untrusted input once a remote cache is configured,
+/// and a symlink is the sharper half of tar path traversal: `link ->
+/// /etc` followed by a member writing through `link/passwd` escapes a
+/// restore root that only validates member *names*. Both halves are
+/// checked — the name by `is_safe_archive_path`, the target here.
+///
+/// The target is resolved lexically against the link's own directory
+/// (it is normally relative) and must land inside the restore root.
+fn is_safe_symlink_target(link_rel : String, target : String) -> Bool {
+  if target.length() == 0 {
+    return false
+  }
+  let bytes = @utf8.encode(target)
+  // Absolute targets, unix and windows, point outside by construction.
+  if bytes[0] == b'/' || bytes[0] == b'\\' {
+    return false
+  }
+  if bytes.length() >= 2 && bytes[1] == b':' {
+    return false
+  }
+  // Walk the link's directory plus the target as one component list,
+  // letting `..` pop. Dropping below depth 0 means it escaped.
+  let mut depth = 0
+  let combined = dirname(link_rel) + "/" + target
+  for segment in combined.split("/") {
+    let seg = segment.to_owned()
+    if seg.length() == 0 || seg == "." {
+      continue
+    }
+    if seg == ".." {
+      depth = depth - 1
+      if depth < 0 {
+        return false
+      }
+    } else {
+      depth = depth + 1
+    }
+  }
+  true
+}
+
+///|
 /// Pack `outputs` (paths relative to `root`) into the entry for `key`.
 ///
 /// Returns false when nothing could be written. Publication is atomic:
@@ -1256,29 +1355,37 @@ async fn cache_store(
   let dir = entry_dir(key)
   mkdir_p(dir)
   let tb = tar_new()
+  // Collect (relative path, kind) for every output, expanding declared
+  // directories through `walk_tree` — which records symlinks rather
+  // than following them, so what goes into the archive has the same
+  // shape as what the task produced.
+  let members : Array[(String, TarKind)] = []
   for rel in outputs {
     let src = if root.length() == 0 || root == "." {
       rel
     } else {
       join_path(root, rel)
     }
-    if !@fs.path_exists(src) {
-      continue
+    match path_kind(src) {
+      Some(TarDir) => walk_tree(src, rel, members)
+      Some(kind) => members.push((rel, kind))
+      None => continue
     }
-    let is_dir = @fs.is_dir(src) catch { _ => false }
-    if is_dir {
-      let inner : Array[String] = []
-      walk_files(src, rel, inner)
-      for nested in inner {
-        let nested_src = join_path(root, nested)
-        let content = @fs.read_file_to_bytes(nested_src) catch { _ => continue }
-        let mode = detect_file_mode(nested_src)
-        tar_write_entry(tb, nested, content, mode)
-      }
+  }
+  for output in members {
+    let rel = output.0
+    let src = if root.length() == 0 || root == "." {
+      rel
     } else {
-      let content = @fs.read_file_to_bytes(src) catch { _ => continue }
-      let mode = detect_file_mode(src)
-      tar_write_entry(tb, rel, content, mode)
+      join_path(root, rel)
+    }
+    match output.1 {
+      TarDir => tar_write_dir_entry(tb, rel, detect_file_mode(src))
+      TarSymlink(target) => tar_write_symlink_entry(tb, rel, target)
+      TarFile => {
+        let content = @fs.read_file_to_bytes(src) catch { _ => continue }
+        tar_write_entry(tb, rel, content, detect_file_mode(src))
+      }
     }
   }
   let archive = @zlib.gzip_compress(tar_finish(tb))
@@ -1341,6 +1448,13 @@ async fn cache_restore(key : String, root : String) -> Bool {
       )
       return false
     }
+    if entry.kind is TarSymlink(target) &&
+      !is_safe_symlink_target(entry.name, target) {
+      eprintln(
+        "pkf: cache entry \{key[0:8].to_owned()} rejected: symlink `\{entry.name}` escapes the workspace (-> `\{target}`)",
+      )
+      return false
+    }
     total = total + entry.content.length().to_int64()
     if total > CACHE_MAX_EXPANDED_BYTES {
       eprintln(
@@ -1359,8 +1473,24 @@ async fn cache_restore(key : String, root : String) -> Bool {
     if parent.length() > 0 {
       mkdir_p(parent)
     }
-    @fs.write_bytes_to_file(dst, entry.content) catch {
-      _ => return false
+    match entry.kind {
+      TarDir => mkdir_p(dst)
+      TarSymlink(target) => {
+        // A path already there is whatever the previous run left; the
+        // link cannot be created over it, so clear it first.
+        @fs.remove_file(dst) catch { _ => () }
+        @xfs.symlink(target=target.view(), dst.view()) catch {
+          _ => return false
+        }
+        // No chmod: a symlink's own mode is not meaningful, and chmod
+        // would follow the link and change the target instead.
+        continue
+      }
+      TarFile => {
+        @fs.write_bytes_to_file(dst, entry.content) catch {
+          _ => return false
+        }
+      }
     }
     // Preserve the recorded mode (executable bit, etc.). Best-effort:
     // chmod failures are swallowed so a read-only target FS doesn't
@@ -6318,7 +6448,15 @@ fn cache_clear_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
 
 ///|
 fn cache_cmd(args : Array[String]) -> Int {
-  if args.length() == 0 {
+  // `--help` / `-h` reach the usage block, not the unknown-subcommand
+  // error. `pkf`'s top level already treats all three spellings as
+  // usage; `cache` diverging from that just makes the sub-surface
+  // harder to discover than the surface above it.
+  let wants_usage = args.length() == 0 ||
+    args[0] == "--help" ||
+    args[0] == "-h" ||
+    args[0] == "help"
+  if wants_usage {
     println("pkf cache — inspect / clean the local CAS")
     println("")
     println("usage:")

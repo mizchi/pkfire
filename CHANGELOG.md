@@ -12,6 +12,30 @@ Action version all move together — there is one tag per release
 
 ### Fixed
 
+- **The cache silently reshaped output trees containing symlinks or
+  empty directories.** The output walker followed symlinks and only ever
+  stored regular files, so a round-trip through the cache rewrote what
+  the task had produced: a symlink came back as a *copy* of its target,
+  an empty directory vanished, and a link pointing back up the tree
+  (`out/loop -> ..`) was followed until the OS path-length limit stopped
+  it — one 3-byte output expanded to 121 archive members and 216 KB, and
+  swept in files from outside the declared outputs. The walker now uses
+  `lstat` and records symlinks and empty directories as their own
+  archive members (tar typeflags `2` and `5`, with the GNU `K`
+  extension for long link targets) instead of following them. The same
+  case is now 2 members and 4 KB, and restores byte-for-byte.
+- **Symlink members are validated before restore.** Adding symlinks to
+  an archive format that unpacks untrusted remote entries reopens tar
+  path traversal from the other side: a member *name* can be safe while
+  its link *target* points anywhere, and a later member writing through
+  that link lands outside the workspace. Targets are now resolved
+  lexically against the link's own directory and rejected if they leave
+  the restore root, which — like every other archive rejection — falls
+  through to executing the action.
+- **`pkf cache --help` printed "unknown cache subcommand".** `--help`,
+  `-h` and `help` now reach the usage block, matching what `pkf` itself
+  does at the top level. A genuine typo still errors as before.
+
 - **The local cache never hit.** `cache_hit` probed for a `manifest`
   file, but the entry format has been a single `entry.tar.gz` blob since
   the archive rewrite, so a freshly stored entry missed on the next run
