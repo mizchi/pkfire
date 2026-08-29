@@ -12,6 +12,17 @@ Action version all move together — there is one tag per release
 
 ### Fixed
 
+- **Two loader tests shared one package cache directory.** The
+  `download_package_uri_to_cache` tests both wrote to `p/n@1.0.0`, and
+  the isolation they appeared to have was illusory:
+  `PKL_MBT_PACKAGE_CACHE` is process-global, so the per-test cache roots
+  are last-writer-wins and after a full run only one of them exists —
+  every test's package lands inside it. The success test and the
+  sha256-mismatch test therefore shared a directory, which is what made
+  the suite fail intermittently under load. Each test now uses a
+  distinct package path in its `package://` URI, so they cannot collide
+  whichever root wins or whatever order they run in.
+
 - **Every evaluation error in a Taskfile was reported as
   "Taskfile output has no `tasks` mapping".** A typo'd identifier, an
   unknown method, or a task listed in `tasks { … }` but never defined
