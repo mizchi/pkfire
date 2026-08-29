@@ -10,6 +10,26 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Changed
+
+- **`pkf doctor` reports what the cache actually costs.** The cache row
+  counted top-level CAS shards — a number between 0 and 256 that says
+  nothing about disk use — so it could not answer the one question it
+  exists for. It now aggregates size and entry count the same way
+  `pkf cache stats` does, and turns `WARN` with a prune hint past a
+  threshold:
+
+  ```
+  WARN  cache  ~/.cache/pkfire-mbt (612.4 MB across 2103 entries)
+        consider `pkf cache prune --older-than=30d` or `pkf cache clear`
+  ```
+
+  Defaults are 500 MB and 2000 entries, overridable per machine with
+  `PKFIRE_MBT_CACHE_WARN_BYTES` / `PKFIRE_MBT_CACHE_WARN_ENTRIES`; a
+  malformed value falls back to the default rather than breaking
+  `doctor`. Multi-line check messages now indent their continuation
+  under the message column instead of breaking the table.
+
 ### Fixed
 
 - **The cache silently reshaped output trees containing symlinks or

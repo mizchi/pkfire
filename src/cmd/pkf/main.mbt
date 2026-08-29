@@ -1209,6 +1209,46 @@ fn cache_root() -> String {
 }
 
 ///|
+/// Size at which `pkf doctor` starts suggesting a prune. Overridable
+/// because "too big" depends on the machine: a CI runner with a 10 GB
+/// scratch disk and a laptop that lives on one cache want different
+/// answers.
+fn cache_warn_bytes() -> Int64 {
+  match @env.get_env_var("PKFIRE_MBT_CACHE_WARN_BYTES") {
+    Some(v) => parse_int64_or(v, 500L * 1000L * 1000L)
+    None => 500L * 1000L * 1000L
+  }
+}
+
+///|
+/// Entry count at which `pkf doctor` starts suggesting a prune. A cache
+/// can be small in bytes and still slow to walk if it holds tens of
+/// thousands of entries, so both are checked.
+fn cache_warn_entries() -> Int {
+  match @env.get_env_var("PKFIRE_MBT_CACHE_WARN_ENTRIES") {
+    Some(v) => parse_int64_or(v, 2000L).to_int()
+    None => 2000
+  }
+}
+
+///|
+/// Parse a non-negative decimal integer, falling back to `default` on
+/// anything else. A malformed threshold should not break `doctor`.
+fn parse_int64_or(text : String, default : Int64) -> Int64 {
+  if text.length() == 0 {
+    return default
+  }
+  let mut acc = 0L
+  for ch in text {
+    if ch < '0' || ch > '9' {
+      return default
+    }
+    acc = acc * 10L + (ch.to_int() - '0'.to_int()).to_int64()
+  }
+  acc
+}
+
+///|
 fn entry_dir(key : String) -> String {
   let head = key[0:2].to_owned()
   let tail = key[2:key.length()].to_owned()
@@ -4705,7 +4745,18 @@ async fn doctor_cmd(
     check_labels.push(label)
     check_messages.push(message)
     if !json_flag {
-      println("  \{level}  \{label}  \{message}")
+      // A message may carry a follow-up line (a remediation hint).
+      // Indent the continuation under the message column rather than
+      // letting it start at column 0 and break the table.
+      let mut first = true
+      for line in message.split("\n") {
+        if first {
+          println("  \{level}  \{label}  \{line}")
+          first = false
+        } else {
+          println("        \{line}")
+        }
+      }
     }
   }
 
@@ -4749,24 +4800,32 @@ async fn doctor_cmd(
   report(pkl_level, "pkl", pkl_msg)
 
   // 3. cache directory.
+  //
+  // This used to report the number of top-level CAS shards — a number
+  // between 0 and 256 that says nothing about how much disk the cache
+  // is using. It now aggregates the same way `pkf cache stats` does, so
+  // the row can actually answer "is this cache due a prune?".
   let cache_dir = cache_root()
-  let cache_msg : String = if @fs.path_exists(cache_dir) {
-    let is_dir = @fs.is_dir(cache_dir) catch { _ => false }
-    if !is_dir {
-      "\{cache_dir} exists but is not a directory"
+  let (cache_level, cache_msg) = if !@fs.path_exists(cache_dir) {
+    ("OK", "\{cache_dir} (empty — will be created on first run)")
+  } else if !(@fs.is_dir(cache_dir) catch { _ => false }) {
+    ("ERROR", "\{cache_dir} exists but is not a directory")
+  } else {
+    let mut entries = 0
+    let mut total : Int64 = 0L
+    walk_cas_entries(join_path(cache_dir, "cas"), fn(_, _, size, _) {
+      entries = entries + 1
+      total = total + size
+    })
+    let summary = "\{cache_dir} (\{human_bytes(total)} across \{entries} entries)"
+    if total >= cache_warn_bytes() || entries >= cache_warn_entries() {
+      (
+        "WARN",
+        summary + "\n" + "consider `pkf cache prune --older-than=30d` or `pkf cache clear`",
+      )
     } else {
-      // Count entries in cas/ subdirectory if it exists.
-      let cas_dir = join_path(cache_dir, "cas")
-      let entries = @fs.read_dir(cas_dir) catch { _ => [] }
-      "\{cache_dir} (\{entries.length()} top-level CAS shards)"
+      ("OK", summary)
     }
-  } else {
-    "\{cache_dir} (empty — will be created on first run)"
-  }
-  let cache_level = if cache_msg.contains("not a directory") {
-    "ERROR"
-  } else {
-    "OK"
   }
   report(cache_level, "cache", cache_msg)
 
