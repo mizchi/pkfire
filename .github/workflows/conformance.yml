@@ -19,7 +19,9 @@ jobs:
 
       - name: Install Pkl
         run: |
-          curl -fsSL -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
+          # --retry: see test.yml — the same download 504s intermittently.
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            -o /tmp/pkl https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
           chmod +x /tmp/pkl && sudo mv /tmp/pkl /usr/local/bin/pkl
           pkl --version
 

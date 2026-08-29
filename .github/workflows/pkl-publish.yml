@@ -38,7 +38,10 @@ jobs:
 
       - name: Install Pkl
         run: |
-          curl -L -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
+          # --retry: see test.yml. This is the release workflow, where a
+          # transient 504 would fail a release rather than a CI run.
+          curl -L --retry 5 --retry-delay 2 --retry-all-errors \
+            -o /tmp/pkl-cli https://github.com/apple/pkl/releases/download/0.32.1/pkl-linux-amd64
           chmod +x /tmp/pkl-cli
           sudo mv /tmp/pkl-cli /usr/local/bin/pkl
           pkl --version
