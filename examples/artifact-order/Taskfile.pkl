@@ -1,0 +1,23 @@
+/// Fixture for artifact-derived scheduling.
+///
+/// `consume` reads what `gen` writes and says nothing about `deps`.
+/// The tasks are listed consumer-first and requested consumer-first,
+/// so the order they actually run in can only come from the artifact
+/// edge the analysis phase derives.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local gen = new Task {
+  name = "gen"
+  cmd = "printf 'artifact\\n' > out.txt && echo gen ran"
+  inputs { "seed.txt" }
+  outputs { "out.txt" }
+}
+
+local consume = new Task {
+  name = "consume"
+  cmd = "echo consume read $(cat out.txt)"
+  inputs { "out.txt" }
+  cache = false
+}
+
+tasks { consume; gen }

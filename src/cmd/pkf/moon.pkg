@@ -25,6 +25,8 @@ options(
   "native-stub": [ "stat_native.c", "signal_native.c", "eprint_native.c", "platform_native.c" ],
   targets: {
     "action.mbt": [ "native" ],
+    "artifact.mbt": [ "native" ],
+    "artifact_wbtest.mbt": [ "native" ],
     "cache_wbtest.mbt": [ "native" ],
     "fspy.mbt": [ "native" ],
     "fspy_source.mbt": [ "native" ],

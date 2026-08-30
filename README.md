@@ -486,13 +486,69 @@ by accident:
 
 ```
 mnemonic  executable  argv  env  inheritEnv
-inputs (path + digest)  outputs  workingDirectory
+inputs (path + digest)  consumedArtifacts (path + digest)
+outputs  workingDirectory
 executionPlatform  executionProperties
 ```
 
 `pkf run --explain-cache <task>` prints it; that dump is the answer to
 "why did this miss?", because a miss is always one of those lines
 differing from last time.
+
+### Artifacts: the files are the edges
+
+A declared `outputs` pattern makes its task the *producer* of those
+paths. A task whose `inputs` reach into that region is a *consumer*,
+and pkfire derives the edge between them rather than making you write
+it twice:
+
+```pkl
+local build = new Task {
+  name = "build"
+  cmd = "esbuild src/app.ts --outfile=dist/app.js"
+  inputs { "src/**" }
+  outputs { "dist/app.js" }
+}
+
+local size = new Task {
+  name = "size"
+  cmd = "wc -c dist/app.js"
+  inputs { "dist/app.js" }   // no `deps { build }` needed for ordering
+}
+```
+
+Two things follow, and both are about the cache being right rather
+than about typing less:
+
+- **Order.** In any run containing both, `build` is scheduled before
+  `size`. `pkf run size build` runs them in that order regardless of
+  how you listed them.
+- **Key soundness.** The outputs of everything a task depends on are
+  hashed into its action key as `consumedArtifacts`. Before this, a
+  task that declared `deps { build }` but no matching `inputs` line had
+  a key that could not see a single byte `build` wrote — so it stayed a
+  cache hit while the thing it consumed changed underneath it.
+
+`pkf explain <task>` reports both halves: input patterns are annotated
+with the task that produces them, and an `artifacts:` line counts the
+files hashed in from dependencies.
+
+Inference orders and keys the tasks in a run; it does not change which
+tasks a run contains. `pkf run size` on its own still runs only `size`,
+because pulling in a producer would execute a command you did not ask
+for — `deps` remains how a Taskfile says "build this first". `pkf lint`
+reports the gap as `undeclared-artifact-dep` so you can write the
+`deps` line down:
+
+```
+task "size" reads "dist/app.js", which task "build" declares as output
+"dist/app.js" (e.g. dist/app.js), but does not depend on it
+```
+
+A task never consumes its own outputs: a formatter that reads and
+rewrites `src/**` is a fixpoint, not a cycle. A genuine cycle — two
+tasks each reading what the other writes — is reported before anything
+runs, naming the patterns and a path that matches both.
 
 ### Two contracts that are NOT the same
 
@@ -507,6 +563,7 @@ differing from last time.
 | tail args from `-- a b c` (`$@`) | ✓ | ✓ (when `cache = true`) |
 | `task.Tools` | as env hints only | ✓ |
 | declared `outputs` | ✗ | ✓ |
+| outputs of the tasks this one depends on | ✓ (they are on disk) | ✓ |
 | `workdir` | ✓ (it is the cwd) | ✓ |
 | execution platform (`<os>/<arch>`) | ✗ | ✓ |
 | `--profile=NAME` (`$PKF_PROFILE`) | ✓ | ✓ |

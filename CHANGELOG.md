@@ -8,6 +8,70 @@ The Pkl schema version, the `pkf` binary version, and the GitHub
 Action version all move together — there is one tag per release
 (`pkfire@<version>`) and one row per release in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Artifacts are first-class, and the files are the edges.** A
+  declared `outputs` pattern makes its task the producer of those
+  paths; a task whose `inputs` reach into that region is a consumer,
+  and pkfire now derives the edge between them instead of requiring it
+  to be written twice. Two things follow:
+
+  - **Order.** In any run containing both, the producer is scheduled
+    first. `pkf run size build` runs `build` first when `size` reads
+    what `build` declares as output, however the targets were listed.
+  - **Key soundness.** The outputs of everything a task depends on are
+    hashed into its action key as `consumedArtifacts`. A task that
+    declared `deps { build }` but no matching `inputs` line previously
+    had a key that could not see a byte `build` wrote, so it stayed a
+    cache hit while the artifact it consumed changed underneath it.
+
+  Inference orders and keys the tasks in a run; it does not change
+  which tasks a run contains, because pulling in a producer would
+  execute a command nobody asked for. `deps` remains how a Taskfile
+  says "build this first", and the new `undeclared-artifact-dep` lint
+  rule reports where that line is missing. See #60 (P1: target graph
+  and action graph, artifacts).
+
+- **`pkf run` now executes an action graph rather than walking
+  `deps`.** Analysis lowers the requested targets into
+  `ActionGraph` — nodes carrying an `ActionDescriptor`, inputs tagged
+  `SourceArtifact` or `GeneratedArtifact`, and edges tagged with why
+  they exist — and the runner executes that. Today one task lowers to
+  one `SpawnAction`, so the schedule is the same except where an
+  artifact edge reorders it; the graph is the seam a rule/provider
+  analysis phase and a parallel scheduler plug into.
+
+- **`pkf explain <task>` reports artifact provenance.** Input patterns
+  produced by another task are annotated with the producer, an
+  `artifacts:` line counts the files hashed in from dependencies, and
+  derived edges are listed with the input pattern, the output pattern,
+  and a concrete path matching both.
+
+### Changed
+
+- **The action key covers consumed artifacts, invalidating every
+  existing entry.** `consumedArtifacts` is a new field of the action
+  descriptor, so the IR version moves to `pkfire-action-v2` and no key
+  computed by 0.15.0 can match. Run `pkf cache clear` after upgrading.
+
+- **A cycle among tasks is reported by the analysis phase, with its
+  reasons.** A cycle needing a derived edge would previously have been
+  invisible, and reporting only "cycle" would send the reader looking
+  for a `deps` line that does not exist. Each edge in the reported
+  cycle now says whether it came from `deps` or from one task reading
+  what another declares as output, with a path that matches both
+  patterns.
+
+### Fixed
+
+- **`moon check --deny-warn` did not cover `conformance/`.** Both the
+  root and dogfood check tasks passed only `src/cmd/pkf src/loader`, so
+  deprecations in the conformance member went unnoticed until the
+  toolchain turned them into errors. Both now check `conformance/src`
+  as well.
+
 ## [0.15.0] - 2026-08-29
 
 The local cache was not hitting at all before this release, and fixing
