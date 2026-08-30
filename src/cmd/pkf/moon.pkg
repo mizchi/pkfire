@@ -30,6 +30,8 @@ options(
     "artifact_wbtest.mbt": [ "native" ],
     "cache_wbtest.mbt": [ "native" ],
     "fspy.mbt": [ "native" ],
+    "graph_render.mbt": [ "native" ],
+    "graph_render_wbtest.mbt": [ "native" ],
     "fspy_source.mbt": [ "native" ],
     "main.mbt": [ "native" ],
     "sandbox.mbt": [ "native" ],

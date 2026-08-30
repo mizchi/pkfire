@@ -1,0 +1,7 @@
+digraph pkfire {
+  rankdir=LR;
+  node [shape=box, fontname="monospace"];
+  t0_consume [label="consume"];
+  t1_gen [label="gen"];
+  t1_gen -> t0_consume [style=dashed, label="out.txt"];
+}

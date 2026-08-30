@@ -3016,7 +3016,11 @@ fn levenshtein(a : String, b : String) -> Int {
 /// matches (Levenshtein distance ≤ max(2, len/3)). Output goes to
 /// stderr-equivalent (println) so it shows alongside the failure
 /// summary.
-fn suggest_task_name(target : String, plan : Plan) -> Unit {
+fn suggest_task_name(
+  target : String,
+  plan : Plan,
+  command~ : String = "run",
+) -> Unit {
   let threshold = if target.length() / 3 > 2 { target.length() / 3 } else { 2 }
   let pairs : Array[(Int, String)] = []
   for name in plan.task_order {
@@ -3025,7 +3029,7 @@ fn suggest_task_name(target : String, plan : Plan) -> Unit {
       pairs.push((d, name))
     }
   }
-  println("pkf run: unknown task `\{target}`")
+  println("pkf \{command}: unknown task `\{target}`")
   if pairs.length() == 0 {
     return
   }
@@ -3435,6 +3439,10 @@ fn render_graph_node(
   prefix : String,
   is_last : Bool,
   seen : Map[String, Bool],
+  // Nodes the caller decided to show. `--depth` narrows this, and
+  // without consulting it the tree would keep descending past the
+  // limit — printing hops the flag was asked to hide.
+  in_set~ : Map[String, Bool]? = None,
 ) -> Unit {
   let task = match plan.tasks.get(name) {
     Some(t) => t
@@ -3446,10 +3454,17 @@ fn render_graph_node(
     return
   }
   seen[name] = true
+  let deps : Array[String] = []
+  for dep in task.deps {
+    match in_set {
+      Some(set) => if set.contains(dep) { deps.push(dep) }
+      None => deps.push(dep)
+    }
+  }
   let next_prefix = prefix + (if is_last { "   " } else { "│  " })
-  for i, dep in task.deps {
-    let last = i == task.deps.length() - 1
-    render_graph_node(plan, dep, next_prefix, last, seen)
+  for i, dep in deps {
+    let last = i == deps.length() - 1
+    render_graph_node(plan, dep, next_prefix, last, seen, in_set~)
   }
 }
 
@@ -3459,21 +3474,120 @@ async fn graph_cmd(
   args : ArrayView[String],
 ) -> Int {
   let mut show_all = false
-  let mut json_flag = false
-  for arg in args {
-    match arg {
-      "--all" => show_all = true
-      "--json" => json_flag = true
-      _ => {
-        die("pkf graph: unknown flag `\{arg}`")
-        return 2
+  let mut format = GraphTree
+  let mut target : String? = None
+  let mut depth : Int? = None
+  let mut i = 0
+  while i < args.length() {
+    let arg = args[i]
+    // A flag's value may be attached (`--format=dot`) or separate
+    // (`--format dot`); both spellings appear in the wild and rejecting
+    // one is a papercut with no upside.
+    fn value(name : String) -> String? {
+      if arg.has_prefix(name + "=") {
+        Some(arg[name.length() + 1:arg.length()].to_owned())
+      } else if arg == name && i + 1 < args.length() {
+        i = i + 1
+        Some(args[i])
+      } else if arg == name {
+        die("pkf graph: `" + name + "` requires a value")
+        None
+      } else {
+        None
       }
     }
+
+    if arg == "--all" {
+      show_all = true
+      i = i + 1
+      continue
+    }
+    if arg == "--json" {
+      // The older spelling, and the one the JSON contract is written
+      // against. Kept as an alias rather than deprecated: nothing is
+      // gained by breaking it.
+      format = GraphJson
+      i = i + 1
+      continue
+    }
+    if arg == "--format" || arg.has_prefix("--format=") {
+      let raw = match value("--format") {
+        Some(v) => v
+        None => return 2
+      }
+      format = match parse_graph_format(raw) {
+        Some(f) => f
+        None => {
+          die(
+            "pkf graph: unknown format `" +
+            raw +
+            "` (expected tree, dot, mermaid or json)",
+          )
+          return 2
+        }
+      }
+      i = i + 1
+      continue
+    }
+    if arg == "--target" || arg.has_prefix("--target=") {
+      target = match value("--target") {
+        Some(v) => Some(v)
+        None => return 2
+      }
+      i = i + 1
+      continue
+    }
+    if arg == "--depth" || arg.has_prefix("--depth=") {
+      let raw = match value("--depth") {
+        Some(v) => v
+        None => return 2
+      }
+      depth = try {
+        let n = @string.parse_int(raw)
+        if n < 0 {
+          die("pkf graph: `--depth " + raw + "` must not be negative")
+          return 2
+        }
+        Some(n)
+      } catch {
+        _ => {
+          die("pkf graph: `--depth " + raw + "` is not a number")
+          return 2
+        }
+      }
+      i = i + 1
+      continue
+    }
+    if arg == "-h" || arg == "--help" {
+      println("pkf graph — show the task dependency graph")
+      println("")
+      println("usage:")
+      println("  pkf graph [-f FILE] [--format tree|dot|mermaid|json]")
+      println("            [--target TASK] [--depth N] [--all]")
+      println("")
+      println("flags:")
+      println("      --format FMT   tree (default), dot, mermaid, json")
+      println("      --json         alias for --format json")
+      println("      --target TASK  only TASK and what it depends on")
+      println("      --depth N      follow at most N dependency hops")
+      println("      --all          include internal tasks")
+      return 0
+    }
+    die("pkf graph: unknown flag `\{arg}`")
+    return 2
   }
   let taskfile = locate_taskfile(explicit_taskfile)
   let raw_json = eval_taskfile(taskfile)
   let plan = parse_plan(raw_json, taskfile~)
-  if json_flag {
+  match target {
+    Some(name) =>
+      if plan.tasks.get(name) is None {
+        suggest_task_name(name, plan, command="graph")
+        return 2
+      }
+    None => ()
+  }
+  if format == GraphJson {
     let visible = sorted_visible_tasks(plan, show_all)
     // Build the visible-name set for filtering deps/edges (mirrors Go's
     // `keep` map passed to filterGraphRefs / writeGraphJSON).
@@ -3502,20 +3616,55 @@ async fn graph_cmd(
     println(Json::object(root).stringify())
     return 0
   }
-  for name in plan.task_order {
+  let nodes = graph_node_set(plan, show_all, target, depth)
+  match format {
+    GraphDot | GraphMermaid => {
+      let edges = graph_edges(plan, taskfile_dir(taskfile), nodes)
+      if format == GraphDot {
+        render_graph_dot(plan, nodes, edges)
+      } else {
+        render_graph_mermaid(nodes, edges)
+      }
+      return 0
+    }
+    _ => ()
+  }
+  // Tree. Each root prints its own subtree; `--target` makes that one
+  // root, which is the whole point of the flag.
+  let in_set : Map[String, Bool] = Map([], capacity=nodes.length())
+  for name in nodes {
+    in_set[name] = true
+  }
+  let roots : Array[String] = match target {
+    Some(name) => [name]
+    None => {
+      let out : Array[String] = []
+      for name in nodes {
+        match plan.tasks.get(name) {
+          Some(t) => if show_all || t.visibility != "internal" { out.push(name) }
+          None => ()
+        }
+      }
+      out
+    }
+  }
+  for name in roots {
     let task = match plan.tasks.get(name) {
       Some(t) => t
       None => continue
     }
-    if !show_all && task.visibility == "internal" {
-      continue
-    }
     println(name)
     let seen : Map[String, Bool] = Map([], capacity=8)
     seen[name] = true
-    for i, dep in task.deps {
-      let last = i == task.deps.length() - 1
-      render_graph_node(plan, dep, "", last, seen)
+    let deps : Array[String] = []
+    for dep in task.deps {
+      if in_set.contains(dep) {
+        deps.push(dep)
+      }
+    }
+    for i, dep in deps {
+      let last = i == deps.length() - 1
+      render_graph_node(plan, dep, "", last, seen, in_set=Some(in_set))
     }
   }
   0
@@ -4679,8 +4828,12 @@ fn completion_bash() -> String {
     #|      fi
     #|      ;;
     #|    graph)
-    #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --json --all" -- "$cur"))
+    #|      if [[ "$prev" == "--format" ]]; then
+    #|        COMPREPLY=($(compgen -W "tree dot mermaid json" -- "$cur"))
+    #|      elif [[ "$prev" == "--target" ]]; then
+    #|        COMPREPLY=($(compgen -W "$(pkf list 2>/dev/null | awk '{print $1}')" -- "$cur"))
+    #|      elif [[ "$cur" == -* ]]; then
+    #|        COMPREPLY=($(compgen -W "-f --file --json --all --format --target --depth" -- "$cur"))
     #|      fi
     #|      ;;
     #|    explain)
@@ -4868,12 +5021,17 @@ fn completion_zsh() -> String {
     #|      fi
     #|      ;;
     #|    graph)
-    #|      if [[ "${words[$CURRENT]}" == -* ]]; then
+    #|      if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
+    #|        _values 'format' tree dot mermaid json
+    #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'graph option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
     #|          '--json[emit machine-readable output]' \
-    #|          '--all[include internal tasks]'
+    #|          '--all[include internal tasks]' \
+    #|          '--format[output format: tree, dot, mermaid, json]' \
+    #|          '--target[only this task and what it depends on]' \
+    #|          '--depth[follow at most N dependency hops]'
     #|      fi
     #|      ;;
     #|    explain)
@@ -4978,6 +5136,9 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from clean' -l dry-run -d 'list what would be removed, remove nothing'
     #|
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l json -d 'emit machine-readable output'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'tree dot mermaid json' -d 'output format'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l target -a '(__pkf_tasks)' -d 'only this task and what it depends on'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l depth -d 'follow at most N dependency hops'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l all -d 'include internal tasks'
     #|
     #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -s f -l file -d 'path to Taskfile.pkl'

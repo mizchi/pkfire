@@ -269,7 +269,11 @@ pkf run --no-cache test        # bypass cache lookup AND store for this run
 pkf run --refresh test         # bypass cache lookup but DO re-store (re-baseline)
 pkf up dev                     # start every service:true task in dev's subgraph
 pkf graph                      # dependency tree, one root per line
+pkf graph --format dot         # Graphviz DOT (pipe to `dot -Tsvg`)
+pkf graph --format mermaid     # Mermaid flowchart (renders on GitHub)
 pkf graph --json               # machine-readable graph (tasks + edges)
+pkf graph --target test        # only `test` and what it depends on
+pkf graph --target test --depth=1  # one hop: direct dependencies only
 pkf doctor                     # diagnose pkf PATH, pkl/cache/remote/taskfile setup
 pkf doctor --json              # emit structured setup checks
 pkf format                     # pkl format -w on the Taskfile's directory
@@ -335,13 +339,38 @@ action key, cache decision, declared outputs, matched input file count,
 and input patterns that matched no files. Use `pkf explain <task>` when
 you need the full component-by-component action-key dump.
 
-`pkf graph` prints a dependency tree, and `pkf graph --json` emits the
-same graph as `{tasks, edges}` for anything that wants to draw it:
+`pkf graph` prints a dependency tree; `--format dot` and
+`--format mermaid` draw it, and `--json` emits `{tasks, edges}` for
+tooling:
 
 ```sh
-pkf graph
+pkf graph                                  # tree (default)
+pkf graph --format dot | dot -Tsvg -o tasks.svg
+pkf graph --format mermaid > tasks.mmd     # paste into a PR
 pkf graph --json | jq '.edges'
 ```
+
+`--target TASK` narrows the drawing to one task and what it depends on,
+and `--depth N` stops after N hops — `--depth=1` is "what does this
+directly need?".
+
+The drawn formats show **both** kinds of edge the runner honours:
+declared `deps` as a solid arrow, and the ones
+[derived from artifacts](#artifacts-the-files-are-the-edges) as a
+dashed one labelled with the output pattern that links them. A picture
+of half the ordering constraints would be worse than none — you would
+use it to reason about a build whose real shape is different.
+
+```mermaid
+flowchart LR
+  gen["gen"]
+  consume["consume"]
+  gen -. "dist/out.txt" .-> consume
+```
+
+`--json` deliberately stays as it was: it is a machine contract, and
+adding a field to it to serve a human-readable concern would break
+every consumer.
 
 ### Machine-readable introspection
 
@@ -875,7 +904,7 @@ Open a PR to add yours.
 | 12 | Env inheritance default + variadic tail args (`acceptsArgs`) + typed named params (`params` w/ string/enum/int/bool) + `/` in task names | ✅ |
 | 13 | Input auditing via libc interposition (`pkf trace`) — see [docs/auto-inputs.md](./docs/auto-inputs.md) | ✅ Linux only |
 | 14 | Sandboxed execution (`pkf run --sandbox`, or `hermetic = true` per task): declared inputs only, declared outputs collected back, ambient env sealed | ✅ symlink forest; absolute paths (the toolchain) still resolve |
-| — | Presentation flags the Go implementation had and the MoonBit port has not reimplemented: `list --long` / `--unsorted` / `--color`, `graph --format` (DOT, Mermaid) / `--target` / `--depth`, `doctor --fix`, `explain --diff`, `lint --fix` | ⛔ they exit with "unknown flag"; `graph --json` and `list --json` cover the tooling cases |
+| — | Presentation flags the Go implementation had and the MoonBit port has not reimplemented: `list --long` / `--unsorted` / `--color`, `doctor --fix`, `explain --diff`, `lint --fix` | ⛔ they exit with "unknown flag"; `list --json` covers the tooling cases |
 
 The [Bazel-style build engine roadmap][roadmap] tracks what separates
 this from a real action-graph engine: hermetic execution, a parallel

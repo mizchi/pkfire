@@ -1,0 +1,4 @@
+flowchart LR
+  t0_consume["consume"]
+  t1_gen["gen"]
+  t1_gen -. "out.txt" .-> t0_consume

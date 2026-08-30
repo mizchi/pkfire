@@ -12,6 +12,21 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf graph --format dot|mermaid` is back, with `--target` and
+  `--depth`.** The Go implementation had them, the MoonBit port dropped
+  them, and the README kept advertising them — so the documented
+  `pkf graph | dot -Tsvg` pipeline could not have worked against a
+  command that printed a tree. `--target TASK` narrows the drawing to
+  one task and what it depends on; `--depth N` stops after N hops.
+
+  The drawn formats show **both** kinds of edge the runner honours:
+  declared `deps` as a solid arrow, and the ones derived from artifacts
+  as a dashed one labelled with the output pattern that links them. A
+  picture of half the ordering constraints would be worse than none.
+  `--json` is deliberately unchanged: it is a machine contract, and
+  adding a field to it to serve a human-readable concern would break
+  every consumer.
+
 - **Every run ends with a summary of how much of it was skipped.**
 
   ```
@@ -190,6 +205,9 @@ Action version all move together — there is one tag per release
   `removed: …` and removed them — the one invocation a person reaches
   for precisely because they are not sure what will be deleted. It now
   prints `would remove: …` and touches nothing.
+
+- **`pkf graph --target nosuch` reported itself as `pkf run`.** The
+  unknown-task suggestion helper hardcoded the command name.
 
 - **The README documented flags that do not exist.** Every `pkf …`
   form in it was run against the binary; nine exited with "unknown
