@@ -28,7 +28,13 @@
 /// Bump when the canonical serialization changes shape. Every existing
 /// cache entry is invalidated by a bump, which is the intent: a stale
 /// entry written under a different set of hashed fields is not a hit.
-const ACTION_IR_VERSION : String = "pkfire-action-v2"
+///
+/// v3 also covers a change on the *entry* side rather than the key: an
+/// entry may now carry the run's stdout and stderr under a reserved
+/// `.pkf-meta/` prefix, and a restore drops members with that prefix
+/// instead of writing them. A v2 entry could hold a task's real output
+/// there, so the bump is what keeps the new restore from deleting it.
+const ACTION_IR_VERSION : String = "pkfire-action-v3"
 
 ///|
 /// One spawned process, fully described.

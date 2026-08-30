@@ -527,8 +527,10 @@ pkf: $ test
 pkf: 3 task(s) · 1 cached · 2 ran · 4.1s
 
 $ pkf run ci                       # nothing changed
-pkf: # build (cache hit 5a1b2c3d)
-pkf: # test (cache hit 9e0f1a2b)
+pkf: # build (cache hit 5a1b2c3d, replaying logs)
+bundle: 412 kB
+pkf: # test (cache hit 9e0f1a2b, replaying logs)
+ok  47 passed
 pkf: 3 task(s) · 3 cached · 0 ran · 12ms  (nothing to rebuild)
 ```
 
@@ -543,6 +545,38 @@ Deps-only umbrella tasks are not counted: they spawn nothing, and
 calling them "ran" would overstate the build. `--quiet` suppresses the
 line along with the per-task ones, and `--dry-run` / `--print-hash`
 omit it because nothing was executed to summarise.
+
+### Replayed logs
+
+A cache hit prints what the run that filled the entry printed. The
+stdout and stderr of a cached task are stored inside the entry
+alongside its outputs, so a hit reproduces the transcript instead of
+swallowing it — a build's output should not depend on whether the cache
+happened to be warm, or a green CI log becomes unreadable the moment
+caching starts working.
+
+Remote hits replay too: the entry carries the logs, so a task first run
+on someone else's machine still prints its test summary on yours.
+
+Three details:
+
+- A task that printed nothing says nothing extra — the hit line stays
+  `# name (cache hit 5a1b2c3d)` rather than claiming a replay of an
+  empty log.
+- Each stream is capped at 1 MiB in the entry, with a line saying how
+  much was dropped. Entries are downloaded whole on a remote hit, and
+  an uncapped `-v` build would make that expensive for output nobody
+  reads.
+- Capturing means the command writes to a pipe rather than to the
+  terminal, so tools that colour conditionally will turn colour off.
+  This applies only to tasks that are actually cached; anything
+  uncacheable — `cache = false`, no declared `inputs`, `--no-cache` —
+  still gets the terminal directly. Output is not delayed either way:
+  sequentially it is forwarded as it arrives.
+
+`.pkf-meta/` is reserved inside a cache entry for this. A task that
+declares an output under that prefix is rejected rather than silently
+mis-cached.
 
 ### Running actions in parallel
 

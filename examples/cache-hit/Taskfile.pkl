@@ -15,4 +15,16 @@ local count = new Task {
   outputs { "out.log" }
 }
 
-tasks { count }
+/// Second half of the same fixture: a task that *says* something.
+///
+/// A hit must reproduce the transcript of the run that filled the
+/// entry, not just report that it hit — otherwise the output of a build
+/// depends on whether the cache happened to be warm.
+local say = new Task {
+  name = "say"
+  cmd = "echo built the thing && echo a warning 1>&2 && cp seed.txt said.txt"
+  inputs { "seed.txt" }
+  outputs { "said.txt" }
+}
+
+tasks { count; say }

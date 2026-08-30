@@ -400,6 +400,48 @@ scenarios {
     }
   }
   new {
+    id = "cache-hit-replays-logs"
+    fixture = "examples/cache-hit"
+    // `setup` runs `say` once, so the scenario's run is the hit. The
+    // command is not re-executed, so every line of output here came out
+    // of the cache entry — which is the whole assertion: a build's
+    // transcript must not depend on whether the cache was warm.
+    setup { "\"$PKF_MBT_BIN\" run say" }
+    argv { "run"; "say" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "replaying logs"; "built the thing" }
+      mustContainStderr { "a warning" }
+    }
+  }
+  new {
+    id = "cache-hit-of-a-silent-task-says-nothing-about-logs"
+    fixture = "examples/cache-hit"
+    // `count` prints nothing, so there is nothing to replay and the hit
+    // line must not claim otherwise — a `replaying logs` on every
+    // silent task in a fifty-task build is noise, not information.
+    setup { "\"$PKF_MBT_BIN\" run count" }
+    argv { "run"; "count" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "cache hit" } }
+  }
+  new {
+    id = "reserved-output-prefix-is-refused"
+    fixture = "examples/reserved-output"
+    // `.pkf-meta/` is where an entry keeps the captured logs. A task
+    // declaring an output there would have it stored and then dropped
+    // on restore, so the file would exist after the run that made it
+    // and vanish on every hit — a bug that only appears once the cache
+    // is warm. The Taskfile is refused instead.
+    argv { "run"; "bad" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "reserved for pkfire" }
+    }
+  }
+  new {
     id = "clean-dry-run"
     fixture = "examples/cat-io"
     // `--dry-run` used to be accepted and ignored, so this exact

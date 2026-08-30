@@ -1,0 +1,17 @@
+/// Fixture for the reserved cache-metadata prefix.
+///
+/// A cache entry keeps the captured stdout/stderr under `.pkf-meta/`,
+/// and a restore drops members with that prefix rather than writing
+/// them into the workspace. A task that declared an output there would
+/// therefore have it stored and then silently discarded on every hit —
+/// so the Taskfile is refused rather than accepted and mis-cached.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local bad = new Task {
+  name = "bad"
+  cmd = "echo unreachable"
+  inputs { "seed.txt" }
+  outputs { ".pkf-meta/stdout" }
+}
+
+tasks { bad }

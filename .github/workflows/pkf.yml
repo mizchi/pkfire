@@ -89,3 +89,21 @@ jobs:
           grep -q 'cache hit' second.log || { echo "second run did not hit"; exit 1; }
           actual=$(wc -c < runs.log | tr -d ' ')
           [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }
+
+      # A hit that skips the command must still show what the command
+      # said, or a build's transcript depends on whether the cache
+      # happened to be warm. `say` is not re-executed here, so every
+      # line below came out of the cache entry.
+      - name: Smoke - a cache hit replays the stored logs
+        working-directory: examples/cache-hit
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-replay-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" said.txt
+          "$BIN" run say
+          "$BIN" run say > replay.out 2> replay.err
+          grep -q 'replaying logs' replay.out || { echo "hit did not announce a replay"; exit 1; }
+          grep -q 'built the thing' replay.out || { echo "stdout was not replayed"; exit 1; }
+          grep -q 'a warning' replay.err || { echo "stderr was not replayed"; exit 1; }

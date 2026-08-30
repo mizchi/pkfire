@@ -325,6 +325,16 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
         }
       _ => ()
     }
+    // `.pkf-meta/` is where a cache entry keeps this runner's own
+    // bookkeeping. A task that declared an output there would have it
+    // stored and then dropped on restore, so the file would exist after
+    // the run that made it and disappear on every hit afterwards —
+    // refuse the Taskfile rather than ship that.
+    if reserved_output_conflict(outputs) is Some(pattern) {
+      die(
+        "task `\{name}` declares the output `\{pattern}`, but `\{LOG_MEMBER_PREFIX}` is reserved for pkfire's cache metadata",
+      )
+    }
     tasks[name] = Task::{
       name,
       cmd,
@@ -1459,6 +1469,7 @@ async fn cache_store(
   key : String,
   root : String,
   outputs : Array[String],
+  logs~ : CapturedLogs? = None,
 ) -> Bool {
   let dir = entry_dir(key)
   mkdir_p(dir)
@@ -1495,6 +1506,21 @@ async fn cache_store(
         tar_write_entry(tb, rel, content, detect_file_mode(src))
       }
     }
+  }
+  // The captured streams ride along under the reserved prefix, so a
+  // hit — local or remote — can reproduce the transcript of the run
+  // that filled the entry. They are written last and read back by
+  // name, never into the workspace.
+  match logs {
+    Some(captured) => {
+      if captured.stdout.length() > 0 {
+        tar_write_entry(tb, LOG_STDOUT_MEMBER, captured.stdout, 0o644)
+      }
+      if captured.stderr.length() > 0 {
+        tar_write_entry(tb, LOG_STDERR_MEMBER, captured.stderr, 0o644)
+      }
+    }
+    None => ()
   }
   let archive = @zlib.gzip_compress(tar_finish(tb))
   cache_publish_archive(dir, archive)
@@ -1550,7 +1576,11 @@ async fn cache_publish_archive(dir : String, archive : Bytes) -> Bool {
 /// `root`. Callers must treat false as a cache miss and execute the
 /// action: silently returning "restored" on a corrupt entry is how a
 /// cache hands back an empty build tree and calls it success.
-async fn cache_restore(key : String, root : String) -> Bool {
+async fn cache_restore(
+  key : String,
+  root : String,
+  logs~ : CapturedLogs? = None,
+) -> Bool {
   let dir = entry_dir(key)
   let archive_path = join_path(dir, CACHE_ENTRY_FILE)
   let gz = @fs.read_file_to_bytes(archive_path) catch { _ => return false }
@@ -1588,6 +1618,20 @@ async fn cache_restore(key : String, root : String) -> Bool {
     }
   }
   for entry in entries {
+    // A reserved member is this runner's own bookkeeping, not part of
+    // the task's output tree: hand it to the caller and never write it.
+    if is_log_member(entry.name) {
+      match logs {
+        Some(sink) =>
+          if entry.name == LOG_STDOUT_MEMBER {
+            sink.stdout = entry.content
+          } else if entry.name == LOG_STDERR_MEMBER {
+            sink.stderr = entry.content
+          }
+        None => ()
+      }
+      continue
+    }
     let dst = if root.length() == 0 || root == "." {
       entry.name
     } else {
@@ -1709,7 +1753,11 @@ async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
 }
 
 ///|
-async fn cache_remote_fetch(key : String, root : String) -> Bool {
+async fn cache_remote_fetch(
+  key : String,
+  root : String,
+  logs~ : CapturedLogs? = None,
+) -> Bool {
   // Pull from the remote cache into the local CAS, then restore.
   // Single archive at <base>/cas/<key[0:2]>/<key[2:]>/entry.tar.gz —
   // one HTTP round-trip per entry.
@@ -1732,7 +1780,7 @@ async fn cache_remote_fetch(key : String, root : String) -> Bool {
   // A remote entry is untrusted input. `cache_restore` validates it and
   // returns false on anything it will not unpack; drop the local copy
   // in that case so the bad blob is not re-read as a local hit forever.
-  if !cache_restore(key, root) {
+  if !cache_restore(key, root, logs~) {
     rm_rf(dir)
     return false
   }
@@ -2266,15 +2314,32 @@ async fn[X] run_task(
       // execution, then re-stores: it re-baselines an entry rather than
       // trusting it.
       if !opts.refresh {
-        if !opts.remote_only && cache_hit(k) && cache_restore(k, repo_root) {
+        // The stored streams come back through this sink and are
+        // replayed below, so a hit prints what the run that filled the
+        // entry printed. Without it the output of a build depended on
+        // whether the cache happened to be warm.
+        let logs = CapturedLogs::empty()
+        if !opts.remote_only &&
+          cache_hit(k) &&
+          cache_restore(k, repo_root, logs=Some(logs)) {
           if !opts.quiet {
-            println("pkf: # \{task.name} (cache hit \{k[0:8].to_owned()})")
+            println(
+              "pkf: # \{task.name} (cache hit \{k[0:8].to_owned()}\{replay_note(logs)})",
+            )
+          }
+          if !task.quiet {
+            replay_logs(logs)
           }
           return LocalHit
         }
-        if cache_remote_fetch(k, repo_root) {
+        if cache_remote_fetch(k, repo_root, logs=Some(logs)) {
           if !opts.quiet {
-            println("pkf: # \{task.name} (remote cache hit \{k[0:8].to_owned()})")
+            println(
+              "pkf: # \{task.name} (remote cache hit \{k[0:8].to_owned()}\{replay_note(logs)})",
+            )
+          }
+          if !task.quiet {
+            replay_logs(logs)
           }
           return RemoteHit
         }
@@ -2397,17 +2462,58 @@ async fn[X] run_task(
   // `-j` several commands would be writing at once, so each action's
   // output is captured and printed as one block here, after it
   // finishes — delayed, but attributable to the task that produced it.
+  // Only an action whose result is about to be stored needs its output
+  // kept. Capturing everything would hand a pipe to every interactive
+  // and hook task for no gain — they have no entry to attach a log to.
+  let captured : CapturedLogs? = if key is Some(_) {
+    Some(CapturedLogs::empty())
+  } else {
+    None
+  }
   let code = if opts.stream_output {
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
     }
-    @process.run_inherit(
-      task.shell.view(),
-      argv[:],
-      extra_env~,
-      inherit_env=task.inherit_env && !task.hermetic,
-      cwd=run_cwd.view(),
-    )
+    // Streaming and capturing at once means teeing through pipes. That
+    // is worth it only when there is an entry to attach the log to;
+    // otherwise the child keeps our own descriptors, and with them the
+    // terminal it may be checking for.
+    match captured {
+      Some(sink) =>
+        match
+          tee_run(
+            task.shell,
+            argv,
+            extra_env,
+            task.inherit_env && !task.hermetic,
+            run_cwd,
+            LOG_CAPTURE_CAP,
+          ) {
+          Some((status, logs)) => {
+            sink.stdout = logs.stdout
+            sink.stderr = logs.stderr
+            status
+          }
+          // Pipes unavailable: run the task rather than fail it, and
+          // store an entry without a log rather than no entry at all.
+          None =>
+            @process.run_inherit(
+              task.shell.view(),
+              argv[:],
+              extra_env~,
+              inherit_env=task.inherit_env && !task.hermetic,
+              cwd=run_cwd.view(),
+            )
+        }
+      None =>
+        @process.run_inherit(
+          task.shell.view(),
+          argv[:],
+          extra_env~,
+          inherit_env=task.inherit_env && !task.hermetic,
+          cwd=run_cwd.view(),
+        )
+    }
   } else {
     let (status, out_data, err_data) = @process.collect_output(
       task.shell.view(),
@@ -2419,8 +2525,19 @@ async fn[X] run_task(
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
     }
-    let out = @utf8.decode_lossy(out_data.binary())
-    let err = @utf8.decode_lossy(err_data.binary())
+    let out_bytes = out_data.binary()
+    let err_bytes = err_data.binary()
+    // Under `-j` the streams are already buffered, so capturing is free
+    // — the copy is the same bytes that are about to be printed.
+    match captured {
+      Some(sink) => {
+        sink.stdout = cap_log(out_bytes, LOG_CAPTURE_CAP)
+        sink.stderr = cap_log(err_bytes, LOG_CAPTURE_CAP)
+      }
+      None => ()
+    }
+    let out = @utf8.decode_lossy(out_bytes)
+    let err = @utf8.decode_lossy(err_bytes)
     if out.length() > 0 {
       print_block(out)
     }
@@ -2497,7 +2614,7 @@ async fn[X] run_task(
         task_cwd,
         task.outputs,
       )
-      if cache_store(k, repo_root, resolved_outputs) {
+      if cache_store(k, repo_root, resolved_outputs, logs=captured) {
         cache_remote_push(k)
       }
     }
