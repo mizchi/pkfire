@@ -6,11 +6,7 @@
 /// it is the walk between the two directories — which is exactly the
 /// value a Taskfile author cannot write correctly by hand and the
 /// reason a provider is not just a string constant.
-/// Relative `amends` so this fixture tracks the in-tree schema.
-/// `provides` is unreleased, so the published package URI the other
-/// examples pin does not have it yet; this one moves to the URI form
-/// with the release that ships the field.
-amends "../../pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 local cli = new Task {
   name = "cli"

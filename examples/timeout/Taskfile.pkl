@@ -12,9 +12,7 @@
 /// `sleep` instead would match unrelated processes on a shared runner —
 /// including the very shell running the check, whose own command line
 /// contains the pattern.
-///
-/// Relative `amends`: both fields are unreleased.
-amends "../../pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 local hang = new Task {
   name = "hang"

@@ -1,0 +1,4 @@
+pkf: $ hang
+before the sleep
+pkf: task `hang` failed with exit code 143
+pkf: 1 task(s) · 1 ran · 2.0s
