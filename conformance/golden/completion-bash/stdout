@@ -11,34 +11,36 @@ _pkf() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  # First positional = subcommand.
+  # First positional = a subcommand, or a task name: `pkf build` is
+  # shorthand for `pkf run build` whenever `build` is not a subcommand.
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "init list describe info run up doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
+    local subs tasks
+    subs="init list describe info run up trace doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help"
+    tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+    COMPREPLY=($(compgen -W "$subs $tasks" -- "$cur"))
     return
   fi
 
   local sub="${COMP_WORDS[1]}"
   case "$sub" in
     list)
-      if [[ "$prev" == "--color" ]]; then
-        COMPREPLY=($(compgen -W "auto always never" -- "$cur"))
-      elif [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file -v --verbose --long --json --all --unsorted --source-order --color" -- "$cur"))
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file -v --verbose --json --all" -- "$cur"))
       fi
       ;;
     lint)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
       fi
       ;;
     doctor)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
       fi
       ;;
     affected)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --since --files --explain --check --dry-run --no-cache --refresh --timing --quiet --keep-going --profile --watch -j --jobs" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --check --changed=" -- "$cur"))
         return
       fi
       local tasks
@@ -47,7 +49,7 @@ _pkf() {
       ;;
     run)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --watch --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --on-fail --remote-only -j --jobs" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --remote-only -j --jobs" -- "$cur"))
         return
       fi
       local tasks
@@ -56,6 +58,15 @@ _pkf() {
       ;;
     clean|up)
       if [[ "$cur" == -* ]]; then return; fi
+      local tasks
+      tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+      COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
+      ;;
+    trace)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f --file --check --emit" -- "$cur"))
+        return
+      fi
       local tasks
       tasks=$(pkf list 2>/dev/null | awk '{print $1}')
       COMPREPLY=($(compgen -W "$tasks" -- "$cur"))
@@ -91,14 +102,16 @@ _pkf() {
       ;;
     graph)
       if [[ "$prev" == "--format" ]]; then
-        COMPREPLY=($(compgen -W "dot mermaid tree json" -- "$cur"))
+        COMPREPLY=($(compgen -W "tree dot mermaid json" -- "$cur"))
+      elif [[ "$prev" == "--target" ]]; then
+        COMPREPLY=($(compgen -W "$(pkf list 2>/dev/null | awk '{print $1}')" -- "$cur"))
       elif [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --format --json --target --all --unsorted --source-order --depth" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file --json --all --format --target --depth" -- "$cur"))
       fi
       ;;
     explain)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=($(compgen -W "-f --file --diff" -- "$cur"))
+        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
         return
       fi
       local tasks

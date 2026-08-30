@@ -261,6 +261,7 @@ pkf list                       # show public tasks
 pkf list --all                 # include internal tasks
 pkf list -v                    # add cmd preview and deps
 pkf list --json                # machine-readable (for editor / CI tooling)
+pkf test                       # shorthand: `run` is optional for a task name
 pkf run test                   # builds first, then tests; second run hits cache
 pkf run --dry-run test         # preview: per-task hit/will-run/uncached status + cmd
 pkf run --print-hash test      # print action keys, do not execute
@@ -538,6 +539,37 @@ than a guess, because a stale plan would run yesterday's commands and
 report success.
 
 `PKFIRE_MBT_NO_EVAL_CACHE=1` turns it off.
+
+### `run` is optional
+
+`pkf build` means `pkf run build`. Flags, params and positionals behave
+exactly as if you had spelled `run` out, because it is the same code
+path:
+
+```sh
+pkf build --mode=prod          # params
+pkf greet -- world             # positionals
+pkf 'test:*'                   # globs
+pkf build --no-cache           # runner flags
+```
+
+**A built-in subcommand always wins.** A Taskfile that declares a task
+called `list` does not change what `pkf list` does — a command whose
+meaning depends on the repository you happen to be in is a command
+nobody can learn. The shadowed task stays reachable as `pkf run list`,
+and `pkf lint` reports the collision as `shadowed-by-builtin` so it is
+not a surprise you find by typing it.
+
+The shorthand only fires when the name is a real task, so a typo still
+says so — and, since it cannot know which half you meant, it offers
+whichever near misses exist on either side:
+
+```
+$ pkf helo
+pkf: unknown subcommand or task `helo`
+  did you mean the subcommand: help
+  did you mean the task: hello
+```
 
 ### What a run tells you it skipped
 

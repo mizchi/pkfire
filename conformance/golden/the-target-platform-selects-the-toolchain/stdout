@@ -1,0 +1,25 @@
+task:        cross
+action key:  799efa41eb820c581cbf42fa04ec5d8789d79baf5ee710d633c24fd213da0cab
+cache:       true
+workdir:     /tmp/pkfconf-the-target-platform-selects-the-toolchain-.1697.655abda1/work  (Taskfile dir)
+deps:        (none)
+dependents:  (none)
+
+toolchains (1):
+  cc -> aarch64-linux-gnu-gcc  aarch64-linux-gnu-gcc 13.2
+    ./bin/aarch64-linux-gnu-gcc
+
+cmd:
+  mkdir -p dist && cc > dist/cross.txt
+
+shell:       bash
+shell flags: -c
+
+env (0):
+  (none)
+
+tools (0):
+  (none)
+
+input patterns (1):
+  src/**

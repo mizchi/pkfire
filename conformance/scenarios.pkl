@@ -442,6 +442,137 @@ scenarios {
     }
   }
   new {
+    id = "steps-rebuild-only-what-changed"
+    fixture = "examples/steps"
+    // The property that makes steps worth having, asserted by what is
+    // *not* re-run. A pipeline written as one `&&` chain would re-run
+    // all of it and still look fine, so the cache-hit line on `codegen`
+    // is the whole test.
+    setup {
+      "\"$PKF_MBT_BIN\" run bundle > /dev/null"
+      "printf 'src-v2\\n' > src/main.txt"
+    }
+    argv { "run"; "bundle" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "# bundle/codegen (cache hit"; "$ bundle/compile"; "$ bundle/link" }
+    }
+  }
+  new {
+    id = "a-step-is-runnable-by-its-composed-name"
+    fixture = "examples/steps"
+    // `<task>/<step>` is what every message calls a step, so it has to
+    // be a name you can type.
+    argv { "run"; "bundle/codegen" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "codegen ran" } }
+  }
+  new {
+    id = "a-provider-resolves-into-the-consumers-workdir"
+    fixture = "examples/providers"
+    // `cli` writes under `crates/cli`; `smoke` runs from `apps/web`.
+    // The path that works from there is the walk between the two, which
+    // is the value a Taskfile author cannot write correctly by hand.
+    argv { "explain"; "smoke" }
+    contract = new {
+      exit = true
+      mustContain {
+        "PKF_CLI_EXECUTABLE=../../crates/cli/target/cli"
+        "CLI_CHANNEL=stable"
+      }
+    }
+  }
+  new {
+    id = "the-target-platform-selects-the-toolchain"
+    fixture = "examples/cross"
+    // One `cc` declaration resolving to two compilers. `explain` names
+    // both halves because "the Taskfile says cc, so which compiler was
+    // that?" is the question a cross-compile makes you ask.
+    setup { "chmod +x bin/cc bin/aarch64-linux-gnu-gcc" }
+    argv { "explain"; "cross" }
+    env { ["PATH"] = "./bin:/usr/bin:/bin" }
+    contract = new {
+      exit = true
+      mustContain { "cc -> aarch64-linux-gnu-gcc" }
+    }
+  }
+  new {
+    id = "a-timeout-stops-the-script-it-killed"
+    fixture = "examples/timeout"
+    // Two assertions. The exit code says the deadline fired; the
+    // *absence* of "after the sleep" says the shell died with its child
+    // rather than carrying on to the next line — which is what a
+    // teardown that signals the child first actually does.
+    argv { "run"; "hang" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "before the sleep" }
+      mustContainStderr { "exceeded its 2s timeout" }
+    }
+  }
+  new {
+    id = "a-task-this-machine-cannot-run-says-so"
+    fixture = "examples/timeout"
+    // Refused before the command is spawned, so the message names the
+    // task and the requirement instead of surfacing as whatever the
+    // first platform-specific tool in the script happens to print.
+    argv { "run"; "elsewhere" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "requires execution platform plan9/vax" }
+    }
+  }
+  new {
+    id = "shorthand-runs-a-task-without-run"
+    fixture = "examples/basic"
+    // `pkf hello` is `pkf run hello`. Typing `run` for the thing this
+    // tool mostly does is ceremony every comparable runner drops.
+    argv { "hello" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "hello from pkfire" } }
+  }
+  new {
+    id = "shorthand-does-not-shadow-a-builtin"
+    fixture = "examples/shadowed"
+    // The fixture declares a task called `list`. `pkf list` must stay
+    // the subcommand: a command whose meaning depends on the repository
+    // it runs in is one nobody can learn. The task's own output must
+    // not appear.
+    argv { "list" }
+    contract = new {
+      exit = true
+      mustContain { "shadow-me" }
+    }
+  }
+  new {
+    id = "a-shadowed-task-is-reported-by-lint"
+    fixture = "examples/shadowed"
+    // Losing the shorthand is a real surprise, so it is said at lint
+    // time rather than the first time someone types `pkf list` and gets
+    // the wrong thing.
+    argv { "lint" }
+    contract = new {
+      exit = true
+      mustContain { "shadowed-by-builtin"; "pkf run list" }
+    }
+  }
+  new {
+    id = "an-unknown-name-names-both-possibilities"
+    fixture = "examples/basic"
+    // `pkf helo` could be a typo for either a subcommand or a task, and
+    // the message cannot know which — so it offers the near misses it
+    // has rather than guessing.
+    argv { "helo" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "unknown subcommand or task `helo`"; "hello" }
+    }
+  }
+  new {
     id = "eval-cache-sees-an-edited-taskfile"
     fixture = "examples/eval-cache"
     // `setup` warms the evaluation cache and then edits the Taskfile,

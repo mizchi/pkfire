@@ -8,10 +8,7 @@
 ///
 /// `bin/faketool` stands in for a compiler. The smoke test rewrites it
 /// and asserts the key moved.
-///
-/// Relative `amends` so this fixture tracks the in-tree schema:
-/// `toolchains` is unreleased.
-amends "../../pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 local build = new Task {
   name = "build"

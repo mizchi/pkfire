@@ -8,6 +8,63 @@ The Pkl schema version, the `pkf` binary version, and the GitHub
 Action version all move together — there is one tag per release
 (`pkfire@<version>`) and one row per release in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`run` is optional: `pkf build` means `pkf run build`.** Running a
+  task is the overwhelmingly common thing to do with this tool, and
+  every comparable runner — npm, make, just, task — lets the name stand
+  on its own. Flags, params, positionals and globs behave identically,
+  because the shorthand re-dispatches through the same code path rather
+  than reimplementing it.
+
+  ```sh
+  pkf build --mode=prod
+  pkf greet -- world
+  pkf 'test:*'
+  ```
+
+  **A built-in subcommand always wins.** A Taskfile declaring a task
+  called `list` does not get to change what `pkf list` means — a command
+  whose meaning depends on the repository it runs in is one nobody can
+  learn. The task stays reachable as `pkf run list`, and a new lint
+  rule, `shadowed-by-builtin`, reports the collision rather than leaving
+  it to be discovered by typing it.
+
+  The fallback only fires when the name resolves to a real task, so a
+  typo still reports itself — and because it cannot know whether you
+  meant a subcommand or a task, it offers the near misses from both:
+
+  ```
+  $ pkf helo
+  pkf: unknown subcommand or task `helo`
+    did you mean the subcommand: help
+    did you mean the task: hello
+  ```
+
+  A leading `-` is never treated as a task name, so `pkf --verison`
+  stays an unknown flag rather than becoming an unknown task.
+
+### Changed
+
+- **The examples pinned to a relative `amends` now use the published
+  `pkfire@0.16.0` package**, and the features they exercise gained
+  conformance scenarios. `hermetic`, `provides`, `steps`, `toolchains`,
+  `targetPlatform`, `forTarget`, `timeoutSeconds` and `requiresPlatform`
+  all shipped before a release carried them, so their fixtures had to
+  amend the in-tree schema — which the conformance harness cannot run,
+  because it copies a fixture into a temp directory where a relative
+  `amends` does not resolve. CI smoke steps stood in.
+
+  Conformance is 65 scenarios, up from 59: a pipeline rebuilding only
+  the steps whose inputs moved, a step runnable by its composed
+  `<task>/<step>` name, a provider resolving into the consumer's working
+  directory, a target platform selecting a different compiler, a timeout
+  stopping the script it killed, and a task refusing a platform it
+  cannot run on. The smoke steps stay for what needs a real clock and
+  process table.
+
 ## [0.16.0] - 2026-08-30
 
 ### Added

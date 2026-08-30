@@ -4,11 +4,7 @@
 /// `schema/`, so editing `src/` reuses it from cache and re-runs only
 /// `compile` and `link` — which is the whole reason to split a
 /// pipeline into steps rather than write it as one `&&` chain.
-///
-/// Relative `amends` so this fixture tracks the in-tree schema:
-/// `steps` is unreleased, so the published package URI the other
-/// examples pin does not have it yet.
-amends "../../pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 local bundle = new Task {
   name = "bundle"

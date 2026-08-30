@@ -7,9 +7,7 @@
 /// lookup.
 ///
 /// `bin/` holds stand-ins so the fixture needs no real cross toolchain.
-///
-/// Relative `amends`: `toolchains` and `targetPlatform` are unreleased.
-amends "../../pkl/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 local ccTool = new Toolchain {
   name = "cc"
