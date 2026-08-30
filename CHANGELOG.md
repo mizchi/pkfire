@@ -12,6 +12,30 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --execution-log=FILE` writes a machine-readable record of
+  the run.** `--timing` prints, and printing is where the record ends —
+  the numbers scroll past and nothing else can read them. The questions
+  that outlast one terminal (is CI's cache hitting, which action has
+  been getting slower, what did last night's build redo) are asked by
+  tooling, over many runs.
+
+  One JSON object per line: an `action` line per action in completion
+  order, then a `summary` line.
+
+  ```
+  {"kind":"action","task":"gen","status":"ran","exitCode":0,"startMs":0,"durationMs":5}
+  {"kind":"summary","version":1,"exitCode":0,"wallMs":10,"actions":2,"ran":2,"cached":0,"skipped":0,"criticalPathMs":10,"criticalPath":["gen","pack"]}
+  ```
+
+  `status` distinguishes `cached-local` from `cached-remote`, since the
+  two cost very different amounts of time. Only `ran` carries an
+  `exitCode` — a hit has none rather than a zero, so a consumer
+  filtering on "exited zero" cannot pick up work that never ran — and
+  only `skipped` carries `blockedBy`. The summary carries the critical
+  path because the log records no edges and it cannot be recomputed
+  from start times. The flag is not part of any action key, so using it
+  never invalidates a cache entry.
+
 - **`run` is optional: `pkf build` means `pkf run build`.** Running a
   task is the overwhelmingly common thing to do with this tool, and
   every comparable runner — npm, make, just, task — lets the name stand

@@ -3028,6 +3028,11 @@ struct ParsedRunArgs {
   /// stays the default: raising it changes when side effects happen
   /// relative to each other, which is the Taskfile author's call.
   jobs : Int
+  /// Where to write the machine-readable run record, or "" for none.
+  /// Like `keep_going`, this describes the run rather than any single
+  /// task, so it stays out of `RunOptions` — which is hashed into every
+  /// action key, and must not vary with where a log file went.
+  execution_log : String
 }
 
 ///|
@@ -3047,7 +3052,7 @@ fn runner_bool_flags() -> Array[String] {
 ///|
 /// Reserved runner flags that take a value.
 fn runner_value_flags() -> Array[String] {
-  ["profile", "jobs"]
+  ["profile", "jobs", "execution-log"]
 }
 
 ///|
@@ -3127,6 +3132,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
   let mut sandbox = false
   let mut profile = ""
   let mut jobs = 1
+  let mut execution_log = ""
   let mut i = 0
   let mut after_dash_dash = false
   while i < args.length() {
@@ -3196,6 +3202,8 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
         }
         if name == "profile" {
           profile = v
+        } else if name == "execution-log" {
+          execution_log = v
         } else if name == "jobs" {
           jobs = match parse_jobs(v) {
             Some(n) => n
@@ -3257,6 +3265,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
     positionals,
     keep_going,
     jobs,
+    execution_log,
     opts: RunOptions::{
       no_cache,
       refresh,
@@ -5186,7 +5195,7 @@ fn completion_bash() -> String {
     #|      ;;
     #|    run)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --remote-only -j --jobs" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --execution-log --remote-only -j --jobs" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -5364,6 +5373,7 @@ fn completion_zsh() -> String {
     #|          '--no-cache[disable cache for this run]' \
     #|          '--refresh[skip lookup but store outputs]' \
     #|          '--timing[print task durations]' \
+    #|          '--execution-log[write a JSON Lines record of the run]' \
     #|          '--quiet[suppress per-task log lines]' \
     #|          '--keep-going[do not stop on first failure]' \
     #|          '--profile[profile name for cache keys]' \
@@ -5538,6 +5548,7 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l no-cache -d 'disable cache for this run'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l refresh -d 'skip lookup but store outputs'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l timing -d 'print task durations'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l execution-log -d 'write a JSON Lines record of the run'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l quiet -d 'suppress per-task log lines'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'
@@ -5579,7 +5590,7 @@ fn usage_text() -> String {
     #|  run <task>... [-j N|auto] [--dry-run] [--print-hash] [--no-cache]
     #|              [--refresh] [--explain-cache] [--remote-only]
     #|              [--keep-going] [--profile=NAME] [--quiet] [--timing]
-    #|              [--name=value]... [-- positional...]
+    #|              [--execution-log=FILE] [--name=value]... [-- positional...]
     #|  list [-v] [--all]
     #|  graph [--all]
     #|  affected <path>... | --check
@@ -6493,6 +6504,9 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       }
       if parsed.opts.timing {
         report_timing(result, graph)
+      }
+      if parsed.execution_log != "" {
+        write_execution_log(parsed.execution_log, result, graph)
       }
       result.exit_code
     }

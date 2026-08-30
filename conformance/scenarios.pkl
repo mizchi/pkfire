@@ -427,6 +427,39 @@ scenarios {
     contract = new { exit = true; mustContain { "cache hit" } }
   }
   new {
+    id = "execution-log-records-what-ran"
+    fixture = "examples/execution-log"
+    // `setup` performs the run that writes the log; the scenario's own
+    // run reads it back and asserts every field a consumer parses.
+    // Checking from inside a task rather than from the harness is the
+    // point: the assertions read the file the way a dashboard would, so
+    // a renamed field fails here rather than downstream.
+    setup { "\"$PKF_MBT_BIN\" run pack --execution-log=run.jsonl" }
+    argv { "run"; "check-log" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "execution log ok" }
+    }
+  }
+  new {
+    id = "execution-log-records-a-cached-run-as-cached"
+    fixture = "examples/execution-log"
+    // The second run hits, so nothing executes. A log that reported it
+    // as work would be exactly wrong for the question it exists to
+    // answer, and an `exitCode` on a hit reads as "ran and succeeded".
+    setup {
+      "\"$PKF_MBT_BIN\" run pack"
+      "\"$PKF_MBT_BIN\" run pack --execution-log=cached.jsonl"
+    }
+    argv { "run"; "check-cached" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "cached log ok" }
+    }
+  }
+  new {
     id = "reserved-output-prefix-is-refused"
     fixture = "examples/reserved-output"
     // `.pkf-meta/` is where an entry keeps the captured logs. A task

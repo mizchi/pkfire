@@ -142,6 +142,29 @@ actions.
 critical path — the longest chain of actions the graph required to run
 in sequence.
 
+## Execution log
+
+`--execution-log=FILE` writes a JSON Lines record of the run: one
+`{"kind":"action"}` object per action in completion order, then one
+`{"kind":"summary"}` object.
+
+Action fields: `task`, `status`, `startMs`, `durationMs`. `status` is
+`ran`, `cached-local`, `cached-remote`, `umbrella`, `reported` (under
+`--dry-run` / `--print-hash`) or `skipped`. `exitCode` is present only
+for `ran`; `blockedBy` only for `skipped`, naming the action that
+stopped it.
+
+Summary fields: `version` (schema, currently `1`), `exitCode`,
+`wallMs`, `actions`, `ran`, `cached`, `skipped`, and — when the chain is
+longer than one action — `criticalPathMs` and `criticalPath`. The
+critical path lives here because the log records no edges, so it cannot
+be recomputed from the action lines.
+
+The flag is a run-level concern like `--keep-going` and `-j`: it is not
+part of any action key, so adding it never invalidates a cache entry.
+An unwritable path is reported on stderr and leaves the exit code
+alone.
+
 ## Sandboxing
 
 `pkf run --sandbox` materializes an action's declared inputs, and the

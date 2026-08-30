@@ -31,6 +31,8 @@ options(
     "cache_wbtest.mbt": [ "native" ],
     "evalcache.mbt": [ "native" ],
     "evalcache_wbtest.mbt": [ "native" ],
+    "execlog.mbt": [ "native" ],
+    "execlog_wbtest.mbt": [ "native" ],
     "fspy.mbt": [ "native" ],
     "globwalk.mbt": [ "native" ],
     "globwalk_wbtest.mbt": [ "native" ],

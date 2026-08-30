@@ -288,6 +288,7 @@ pkf run a b c                  # run multiple targets in one go (topological uni
 pkf run                        # no args = the `default` task (errors if absent)
 pkf run -- a b c               # forward args to the `default` task when it accepts args
 pkf run --timing build         # also print per-task wall time at the end
+pkf run --execution-log=run.jsonl build  # write a machine-readable record of the run
 pkf run 'test:*'               # glob over task names (also works on affected / clean)
 pkf clean                      # rm declared outputs of every task
 pkf clean --dry-run            # list what would be removed, remove nothing
@@ -684,6 +685,44 @@ Two caveats. A task that expects a terminal (progress bars, colour
 detection) sees a pipe under `-j`. And two tasks that each declare the
 same `services { … }` will each start it; services are not deduplicated
 across concurrent actions yet.
+
+### A record of the run, for something other than a human
+
+`--timing` prints, and printing is where the record ends: the numbers
+scroll past and nothing else can read them. The questions that outlast
+one terminal — is CI's cache actually hitting, which action has been
+getting slower, what did last night's build redo — are asked by tooling,
+over many runs.
+
+`--execution-log=FILE` writes one JSON object per line: an `action` line
+per action in completion order, then a `summary` line.
+
+```console
+$ pkf run --execution-log=run.jsonl pack
+$ cat run.jsonl
+{"kind":"action","task":"gen","status":"ran","exitCode":0,"startMs":0,"durationMs":5}
+{"kind":"action","task":"pack","status":"ran","exitCode":0,"startMs":5,"durationMs":5}
+{"kind":"summary","version":1,"exitCode":0,"wallMs":10,"actions":2,"ran":2,"cached":0,"skipped":0,"criticalPathMs":10,"criticalPath":["gen","pack"]}
+```
+
+`status` is one of `ran`, `cached-local`, `cached-remote`, `umbrella`,
+`reported` (under `--dry-run` / `--print-hash`) or `skipped`. A local
+hit and a remote fetch are separate values because they cost very
+different amounts of time. Only `ran` carries an `exitCode` — a cache
+hit has none rather than a zero, so a consumer filtering on "exited
+zero" does not pick up work that never happened — and only `skipped`
+carries `blockedBy`, naming the action that stopped it.
+
+The summary carries `criticalPath` because it cannot be recovered from
+the action lines: the log records no edges, and under `-j 1` everything
+runs back to back whether or not the graph required it.
+
+JSON Lines rather than one document, for two reasons: `jq`, `grep` and a
+spreadsheet import all take a line at a time without ceremony, and a run
+that dies partway still leaves every completed line valid — which is the
+run whose log you most want to read. An unwritable path is reported on
+stderr but never changes the exit code; a log that failed to write is
+not a reason to fail a build that succeeded.
 
 ### Running an action against only what it declared
 
