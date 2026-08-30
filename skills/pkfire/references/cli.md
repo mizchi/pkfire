@@ -18,15 +18,15 @@ pkf hooks -f path/Taskfile.pkl install
 | --- | --- | --- |
 | `version` | none | Print the pkf version. `--version` and top-level `-v` are aliases. |
 | `list` | `-v/--verbose`, `--all`, `--json` | List visible tasks; verbose adds params/deps/inputs/outputs. |
-| `graph` | `--all`, `--json` | Print dependency trees or JSON tasks and edges. |
+| `graph` | `--all`, `--json`, `--format tree\|dot\|mermaid\|json`, `--target TASK`, `--depth N` | Print the dependency graph as a tree (default), Graphviz DOT, a Mermaid flowchart, or JSON. `--target` narrows to one task's closure; `--depth` limits the hops. The drawn formats also show artifact-derived edges, dashed; `--json` carries declared `deps` only. |
 | `info` | `--all`, `--json` | Summarize Taskfile path, schema URI/version, defaults, tasks, and workflow tests. |
 | `describe` | `[--json] <task>` | Show one rendered task. Put `--json` before the task. |
 | `explain` | `<task>` | Show the configured action-key surface. It intentionally omits file hashing and CLI params, so its printed key is not necessarily a real run key. |
 | `doctor` | `--json` | Check pkf path, external Pkl CLI, cache, remote config, and Taskfile discovery. |
 | `lint` | `--json` | Always prints `{"findings":[...]}`; exits non-zero for error findings. |
 
-`list --long`, `list --unsorted`, list color selection, graph
-formats, and graph target selection are not implemented.
+`list --long`, `list --unsorted` and list color selection are not
+implemented.
 
 ## Execution
 

@@ -346,6 +346,43 @@ scenarios {
     }
   }
   new {
+    id = "graph-dot"
+    fixture = "examples/artifact-order"
+    // The README documented `pkf graph | dot -Tsvg` for a command that
+    // printed a tree, so the pipeline could not have worked. The
+    // dashed edge is the other half: `consume` reads what `gen`
+    // declares as output, and a diagram showing only `deps` would draw
+    // no arrow between them at all.
+    argv { "graph"; "--format"; "dot" }
+    contract = new {
+      exit = true
+      mustContain {
+        "digraph pkfire {"
+        "style=dashed"
+        "out.txt"
+      }
+    }
+  }
+  new {
+    id = "graph-mermaid"
+    fixture = "examples/artifact-order"
+    argv { "graph"; "--format=mermaid" }
+    contract = new {
+      exit = true
+      mustContain { "flowchart LR"; ".-> "; "out.txt" }
+    }
+  }
+  new {
+    id = "graph-unknown-format"
+    fixture = "examples/basic"
+    argv { "graph"; "--format"; "svg" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "unknown format" }
+    }
+  }
+  new {
     id = "cache-hit-skips-command"
     fixture = "examples/cache-hit"
     // `setup` performs the first run, so the scenario's own run is the

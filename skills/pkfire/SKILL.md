@@ -231,7 +231,9 @@ Do not claim or generate these interfaces; they do not exist:
 - `pkf affected` has no `--since`, `--files`, `--explain`,
   target execution, or dry-run mode; it prints the computed plan.
 - `pkf list` has no `--long`, `--unsorted`, or color flag.
-- `pkf graph` has no format, target, or depth selector.
+- `pkf graph --format dot|mermaid|tree|json`, `--target` and `--depth`
+  exist. The drawn formats include artifact-derived edges; `--json`
+  does not, and its shape is unchanged.
 - `pkf lint --fix` / `--dry-run` and `pkf explain --diff` are rejected
   with the reason. They used to be accepted and ignored, which meant
   `pkf lint --fix` reported findings and changed nothing.
