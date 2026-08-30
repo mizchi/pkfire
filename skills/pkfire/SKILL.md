@@ -43,7 +43,8 @@ Taskfile.pkl
   -> embedded Pkl evaluation
   -> output.value { defaults, taskOrder, tasks, workflowTests }
   -> dependency DAG
-  -> sequential task execution
+  -> action graph (declared deps + derived artifact edges)
+  -> scheduler (sequential by default, `-j N` for parallel)
   -> local CAS, then optional HTTP remote cache
 ```
 
@@ -113,9 +114,13 @@ task `workdir` values for ordinary commands resolve from the Taskfile
 directory.
 
 `pkf run <task>` topologically orders that task and its transitive
-`deps`, detects cycles, and runs dependencies before the target. The
-current MoonBit runner executes this plan sequentially and stops at the
-first non-zero exit. A task with no `cmd` is a deps-only umbrella.
+`deps`, detects cycles, and runs dependencies before the target. It
+also orders a task after whatever produces the files it reads, whether
+or not `deps` says so. The runner is sequential by default and stops at
+the first non-zero exit; `-j N` (or `-j auto`) runs up to N actions at
+once, and `--keep-going` continues past a failure while skipping
+anything downstream of it. A task with no `cmd` is a deps-only
+umbrella.
 
 Named `params` become uppercase environment variables. Positional
 arguments are forwarded as `$1...$@` only when `acceptsArgs = true`.
@@ -221,27 +226,26 @@ pkf init
 
 ### Version-sensitive limitations
 
-For `0.14.0`, do not claim or generate these older interfaces:
+Do not claim or generate these interfaces; they do not exist:
 
-- `pkf run` has no default target, multi-target mode, `--dry-run`,
-  `--print-hash`, `--no-cache`, `--refresh`, `--timing`,
-  `--remote-only`, or `-j/--jobs`.
 - `pkf affected` has no `--since`, `--files`, `--explain`,
   target execution, or dry-run mode; it prints the computed plan.
 - `pkf list` has no `--long`, `--unsorted`, or color flag.
-- `pkf graph` has no format or target selector.
-- `pkf lint --fix/--dry-run`, `pkf explain --diff`, and
-  `pkf clean --dry-run` are accepted compatibility no-ops.
-  In particular, `clean --dry-run` still removes outputs.
-- The local store writes `entry.tar.gz`, but the `0.14.0` hit check still
-  looks for the removed `manifest` marker. Newly stored entries therefore
-  appear in cache statistics but are not reused as local hits. Do not
-  promise working local reuse until that implementation gap is fixed.
-- Undeclared named flags passed to `pkf run` are currently ignored.
-  Validate the task's declared params instead of relying on unknown-flag
-  rejection.
+- `pkf graph` has no format, target, or depth selector.
+- `pkf lint --fix/--dry-run` and `pkf explain --diff` are accepted
+  compatibility no-ops.
+- `pkf run --watch` and `--on-fail` are rejected with a reason;
+  `pkf watch` is the watch entry point.
 - `specRef` is accepted and rendered by the Pkl schema, but the current
   MoonBit plan parser does not surface it through CLI output.
+
+Since `0.15.0` these *are* implemented and may be used: `pkf run`'s
+multi-target and glob forms, `--dry-run`, `--print-hash`,
+`--explain-cache`, `--no-cache`, `--refresh`, `--remote-only`,
+`--quiet`, `--timing`, `--keep-going`, `--profile=NAME`, and
+`-j N` / `-j auto`. An undeclared `--name` is an error rather than
+being ignored, and local cache hits work — the hit check reads
+`entry.tar.gz`, which is what the store writes.
 
 ## Agent workflow
 

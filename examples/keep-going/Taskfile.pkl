@@ -1,0 +1,33 @@
+/// Fixture for failure propagation under `--keep-going`.
+///
+/// `after` depends on a task that fails. Continuing past a failure must
+/// not mean running its dependents against inputs that were never
+/// produced, so `after` is reported as skipped while the independent
+/// `other` still runs.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local bad = new Task {
+  name = "bad"
+  cmd = "echo bad ran && exit 3"
+  cache = false
+}
+
+local after = new Task {
+  name = "after"
+  cmd = "echo after ran"
+  deps { bad }
+  cache = false
+}
+
+local other = new Task {
+  name = "other"
+  cmd = "echo other ran"
+  cache = false
+}
+
+local all = new Task {
+  name = "all"
+  deps { after; other }
+}
+
+tasks { bad; after; other; all }

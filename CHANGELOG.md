@@ -12,6 +12,37 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run -j N` runs actions in parallel.** With an action graph to
+  schedule against, `-j` is a ready queue over in-degrees: an action
+  starts once everything it depends on has finished, and up to `N` run
+  at a time. `-j auto` uses one per available CPU, capped at 16 —
+  the number is a limit on *processes*, each of which may be a parallel
+  build tool of its own. Sequential stays the default, because raising
+  it changes when a Taskfile's side effects happen relative to each
+  other and that is the author's call. See #60 (P1: parallel DAG
+  scheduler).
+
+  Among ready actions the one earliest in the topological order goes
+  first, so `-j 1` is identical to the previous sequential walk and any
+  `-j` schedules the same way twice running. With `N > 1` each action's
+  output is captured and printed as one block when it finishes, rather
+  than streamed and interleaved with three other commands'. A failure
+  stops scheduling but does not cancel what is already running:
+  cancelling a compiler mid-write leaves a half-written output a later
+  run would treat as real.
+
+- **`--timing` reports the critical path.** In parallel the sum of the
+  durations exceeds the wall clock and says nothing useful; what
+  decides how long the run takes is the longest chain of actions the
+  graph required to run in sequence. Durations are now milliseconds
+  rather than whole seconds, which a parallel run mostly rounded to
+  zero.
+
+  ```
+  pkf:   total  1.0s wall
+  pkf:   critical path  1.0s  compile -> link -> package
+  ```
+
 - **Artifacts are first-class, and the files are the edges.** A
   declared `outputs` pattern makes its task the producer of those
   paths; a task whose `inputs` reach into that region is a consumer,
@@ -65,6 +96,31 @@ Action version all move together — there is one tag per release
   patterns.
 
 ### Fixed
+
+- **`--keep-going` ran the dependents of a failed task.** It was
+  implemented as "carry on down the topological order", so a task whose
+  dependency had just failed ran anyway — against inputs that were
+  never produced, reporting a second failure that only echoed the
+  first, or worse, succeeding on stale files. Anything downstream of a
+  failure is now reported as skipped, and independent tasks still run,
+  which is what the flag was for:
+
+  ```
+  pkf: task `build` failed with exit code 1
+  pkf: - test (skipped: `build` failed)
+  ```
+
+- **`-f` was lost after a flag that takes a separate value.**
+  `pkf run --profile ci -f other/Taskfile.pkl build` read `ci` as the
+  first positional and stopped looking for `-f`, which then reached the
+  run parser as an unknown flag. Flags whose value is a separate token
+  now consume it.
+
+- **A task that exited 0 without its declared outputs exited the
+  process.** The diagnostic was right but the mechanism was `exit(1)`
+  from inside the task, which under `-j` would strand the other actions
+  mid-write. It now reports and returns non-zero, and the run fails the
+  same way.
 
 - **`moon check --deny-warn` did not cover `conformance/`.** Both the
   root and dogfood check tasks passed only `src/cmd/pkf src/loader`, so

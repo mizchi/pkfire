@@ -177,6 +177,36 @@ scenarios {
     contract = new { exit = true; mustContain { "consume read artifact" } }
   }
   new {
+    id = "parallel-order"
+    fixture = "examples/artifact-order"
+    // Same fixture as `artifact-order`, run with four jobs. The graph's
+    // edges have to survive being scheduled concurrently: lose them and
+    // `consume` starts before `out.txt` exists, so the substring below
+    // is `consume read` with nothing after it.
+    argv { "run"; "-j"; "4"; "consume"; "gen" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "consume read artifact" } }
+  }
+  new {
+    id = "keep-going-skips-dependents"
+    fixture = "examples/keep-going"
+    // Continuing past a failure must not mean running its dependents
+    // against inputs that were never produced. `other` is independent
+    // and still runs; `after` and the umbrella above it are skipped,
+    // and the run still exits non-zero.
+    argv { "run"; "--keep-going"; "all" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain {
+        "bad ran"
+        "other ran"
+        "after (skipped: `bad` failed)"
+        "all (skipped: `bad` failed)"
+      }
+    }
+  }
+  new {
     id = "lint-string-safe"
     fixture = "examples/lint-string-safe"
     argv { "lint"; "--json" }

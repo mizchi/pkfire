@@ -26,9 +26,10 @@ top of them (see "Action graph"):
 - a shared dependency executes once;
 - cycles fail before execution;
 - unknown tasks fail with nearby-name suggestions;
-- the plan is sequential;
-- the first non-zero command ends the run with that exit code, unless
-  `--keep-going`;
+- the plan is sequential unless `-j N` raises the limit;
+- the first non-zero command ends the run with that exit code; with
+  `--keep-going` independent actions keep running and the ones
+  downstream of the failure are reported as skipped;
 - a task with an empty rendered command succeeds without spawning.
 
 Only the explicit target receives named CLI values and tail arguments.
@@ -110,6 +111,25 @@ Consequences:
 - Copy output-affecting host variables into task `env`.
 - Set `cache = false` for nondeterministic or side-effect-only work.
 - Changing only a task description does not invalidate cache.
+
+## Scheduling
+
+`pkf run -j N` runs up to N actions concurrently, `-j auto` one per
+available CPU (capped at 16); the default is 1. An action starts only
+when every action it depends on has finished, so `-j` changes when work
+happens, never what depends on what. Among ready actions the one
+earliest in the topological order goes first, which makes `-j 1`
+identical to the sequential walk and any `-j` reproducible.
+
+A failure stops scheduling but does not cancel actions already
+running. With `N > 1` each action's output is captured and printed as
+a block on completion instead of streamed, so a task that expects a
+terminal sees a pipe. Services are not deduplicated across concurrent
+actions.
+
+`--timing` reports per-action durations, the wall clock, and the
+critical path — the longest chain of actions the graph required to run
+in sequence.
 
 ## Action graph
 

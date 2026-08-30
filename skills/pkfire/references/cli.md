@@ -32,17 +32,24 @@ formats, and graph target selection are not implemented.
 
 | Command | Implemented arguments | Result |
 | --- | --- | --- |
-| `run` | `<task> [--declared=value]... [-- positional...]` | Run exactly one target and its transitive deps. |
+| `run` | `<task>... [-j N\|auto] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
 | `affected` | `<path>...`, `--changed=<file>`, or `--check` | Print the affected plan or run authored workflow tests. |
 | `watch` | `[task...]` | Watch the Taskfile directory and run affected non-service tasks, optionally filtered to exact names. |
 | `up` | `[service...]` | Start all or selected service tasks in the foreground. |
 | `clean` | `[task-or-glob...]` | Recursively remove declared outputs; no args means all tasks with outputs. |
 
-`run` does not currently implement a default target, multiple target
-roots, parallelism, dry-run, hash printing, cache bypass/refresh,
-timings, profiles, failure hooks, or remote-only lookup. Tokens that
-look like `--dry-run` or `--no-cache` are parsed as named task values
-and ignored when undeclared.
+`run` has no default target and no failure hook: `pkf run` with no
+arguments looks for a task literally named `default`, and `--on-fail`
+is rejected. `--watch` is rejected too — `pkf watch` is the watch entry
+point. Every other reserved flag in the table above is implemented, and
+a `--name` the target does not declare as a param is an error rather
+than a silently ignored value.
+
+`-j N` runs up to N actions at once and `-j auto` uses one per
+available CPU (capped at 16); sequential is the default. Ordering still
+comes from the graph, so `-j` cannot reorder a build into
+incorrectness. With `N > 1` each action's output is captured and
+printed as one block when it finishes, rather than streamed.
 
 `affected` does not read Git history. It has no `--since`,
 `--files`, `--explain`, target filter/execution, or dry-run flag.
