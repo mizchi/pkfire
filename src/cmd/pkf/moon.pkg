@@ -29,6 +29,8 @@ options(
     "artifact.mbt": [ "native" ],
     "artifact_wbtest.mbt": [ "native" ],
     "cache_wbtest.mbt": [ "native" ],
+    "castore.mbt": [ "native" ],
+    "castore_wbtest.mbt": [ "native" ],
     "evalcache.mbt": [ "native" ],
     "evalcache_wbtest.mbt": [ "native" ],
     "execlog.mbt": [ "native" ],

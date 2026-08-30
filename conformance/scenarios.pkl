@@ -460,6 +460,52 @@ scenarios {
     }
   }
   new {
+    id = "cas-shares-unchanged-outputs-between-entries"
+    fixture = "examples/cas-share"
+    // Two runs, one edited input, so two action keys covering four
+    // declared outputs. Three blobs, not four: the output that did not
+    // change is stored once. The old single-archive layout stored both
+    // outputs twice, which is the whole reason the entry was split.
+    setup {
+      "\"$PKF_MBT_BIN\" run build"
+      "printf 'two\\n' > src/changing.txt"
+      "\"$PKF_MBT_BIN\" run build"
+    }
+    argv { "run"; "check-store" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "store shares blobs" }
+    }
+  }
+  new {
+    id = "a-pre-split-entry-is-still-a-hit"
+    fixture = "examples/cas-share"
+    // An upgrade that silently emptied a warm cache would cost every
+    // user a full rebuild, so the old single-archive layout is still
+    // read. The setup plants one by hand under the key the runner will
+    // ask for, with contents no run of this task could produce — so a
+    // hit proves the entry came from there and not from re-executing.
+    setup {
+      """
+      key=$("$PKF_MBT_BIN" run build --print-hash | awk '$2 == "build" { print $1 }')
+      mkdir -p stage/dist
+      echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/changing.txt
+      echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/stable.txt
+      mkdir -p ".pkf-cache/cas/${key:0:2}/${key:2}"
+      tar czf ".pkf-cache/cas/${key:0:2}/${key:2}/entry.tar.gz" -C stage dist
+      rm -rf stage
+      """
+    }
+    argv { "run"; "build" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "cache hit" }
+      fsDelta = true
+    }
+  }
+  new {
     id = "reserved-output-prefix-is-refused"
     fixture = "examples/reserved-output"
     // `.pkf-meta/` is where an entry keeps the captured logs. A task

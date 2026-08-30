@@ -292,7 +292,7 @@ pkf run --execution-log=run.jsonl build  # write a machine-readable record of th
 pkf run 'test:*'               # glob over task names (also works on affected / clean)
 pkf clean                      # rm declared outputs of every task
 pkf clean --dry-run            # list what would be removed, remove nothing
-pkf cache stats                # local CAS: entries, size, oldest/newest
+pkf cache stats                # entries, blobs, size, how much sharing saved
 pkf cache prune --older-than=7d  # drop stale entries (--dry-run to preview)
 pkf cache rm <action-key>      # remove a specific entry (≥2-char prefix accepted)
 pkf cache clear --yes          # nuke everything (scripting-safe with --yes)
@@ -1254,6 +1254,56 @@ The package is published as a GitHub release whose tag matches
 release zip — see `pkl/PklProject` for the metadata and
 `.github/workflows/pkl-publish.yml` for the publish flow.
 
+## How the cache is stored
+
+An entry used to be one gzipped tar per action key. That is correct, and
+it makes a hit a single file read — but it stores every output of every
+key in full, and outputs mostly do not change. Measured on a task with
+300 declared outputs: editing one input file stored a second 8 MB
+archive of which all but one file was a byte-identical copy of the
+first.
+
+So an entry is two things:
+
+```
+<cache>/ac/<key[0:2]>/<key[2:]>/result.json    what the action produced
+<cache>/blobs/<digest[0:2]>/<digest[2:]>       the bytes, named by content
+```
+
+The manifest lists each output's path, mode and content digest; the
+blobs are shared by every entry that produced the same bytes. Two keys
+whose outputs differ in one file now cost one file, not one tree. On the
+300-output task above, the second run costs one blob instead of 8 MB —
+`pkf cache stats` reports the difference:
+
+```console
+$ pkf cache stats
+entries:   2
+blobs:     301
+size:      7.7 MB
+shared:    7.6 MB saved (49% of 15.4 MB stored once)
+```
+
+Blobs are named by the SHA-256 of their *uncompressed* content and
+stored gzipped: the same bytes have to land on the same name whichever
+run wrote them, and gzip output is not required to be identical across
+versions. The manifest is written last, after every blob it names, so an
+entry that exists is one whose contents are already on disk.
+
+Because entries share blobs, removing an entry frees nothing by itself.
+`pkf cache prune` and `pkf cache rm` sweep afterwards and report what the
+sweep actually deleted, which for a shared blob is nothing:
+
+```console
+$ pkf cache rm 68e964b2
+removed 68e964b2...
+removed 1 entries and 1 blob(s) (26.4 KB freed)
+```
+
+Entries written before the split are still read, so upgrading does not
+cold-start a warm cache. Nothing writes there again, and they age out
+through `prune` like anything else.
+
 ## Remote cache
 
 Set `PKFIRE_REMOTE_CACHE` (and optionally `PKFIRE_REMOTE_TOKEN`) to point
@@ -1335,8 +1385,9 @@ Open a PR to add yours.
 | — | Presentation flags the Go implementation had and the MoonBit port has not reimplemented: `list --long` / `--unsorted` / `--color`, `doctor --fix`, `explain --diff`, `lint --fix` | ⛔ they exit with "unknown flag"; `list --json` covers the tooling cases |
 
 The [Bazel-style build engine roadmap][roadmap] tracks what separates
-this from a real action-graph engine: hermetic execution, a parallel
-scheduler, an ActionCache/CAS split, and remote execution.
+this from a real action-graph engine. Hermetic execution, the parallel
+scheduler and the ActionCache/CAS split have landed; remote execution
+has not.
 
 [roadmap]: https://github.com/mizchi/pkfire/issues/60
 

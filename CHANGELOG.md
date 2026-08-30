@@ -12,6 +12,40 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **The cache entry is split into an ActionCache manifest and
+  content-addressed blobs.** An entry used to be one gzipped tar per
+  action key, which stores every output of every key in full — and
+  outputs mostly do not change. Measured on a task with 300 declared
+  outputs, editing one input file stored a second 8 MB archive of which
+  all but one file was a byte-identical copy of the first.
+
+  ```
+  <cache>/ac/<key[0:2]>/<key[2:]>/result.json    what the action produced
+  <cache>/blobs/<digest[0:2]>/<digest[2:]>       the bytes, named by content
+  ```
+
+  On that task the second run now costs one blob instead of 8 MB, and
+  `pkf cache stats` reports the difference as a `shared:` line. Blobs are
+  named by the SHA-256 of their uncompressed content and stored gzipped,
+  so the same bytes land on the same name whichever run wrote them. The
+  manifest is written last, after every blob it names, so an entry that
+  exists is one whose contents are already on disk; a manifest is
+  validated in full — paths, symlink targets, blob presence, expansion
+  cap — before anything is written, so an unusable entry is a miss and
+  never a partial restore.
+
+  Entries written before the split are still read, so upgrading does not
+  cold-start a warm cache. The remote wire format is unchanged — still
+  one archive per key, rebuilt from the blobs on push and taken apart
+  into them on fetch — so a shared remote keeps working with older
+  clients.
+
+  Because entries share blobs, removing one frees nothing by itself:
+  `pkf cache prune` and `pkf cache rm` now sweep every blob no remaining
+  entry names and report what the sweep actually deleted. `pkf cache
+  clear` removes manifests, blobs and any pre-split archives, and still
+  leaves the Pkl evaluation cache alone.
+
 - **`retries` on a task: extra attempts after a failure.** For the test
   suite that fails one run in fifty on a race nobody has time to find
   this week. Without it the choice is a red build on a green tree or

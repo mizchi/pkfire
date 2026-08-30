@@ -130,6 +130,60 @@ jobs:
             || { echo "no platform diagnostic"; cat elsewhere.err; exit 1; }
           rm -f hang.out hang.err elsewhere.err
 
+      # The split store, end to end: sharing across two keys, a
+      # pre-split entry still hitting after an upgrade, and a prune that
+      # keeps a blob another entry still names.
+      - name: Smoke - the cache shares blobs and still reads pre-split entries
+        working-directory: examples/cas-share
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-cas-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          "$BIN" run build > /dev/null
+          printf 'two\n' > src/changing.txt
+          "$BIN" run build > /dev/null
+          # Two keys, four declared outputs, three distinct contents.
+          entries=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | wc -l | tr -d ' ')
+          blobs=$(find "$PKFIRE_MBT_CACHE_DIR/blobs" -type f | wc -l | tr -d ' ')
+          [ "$entries" = "2" ] || { echo "expected 2 entries, got $entries"; exit 1; }
+          [ "$blobs" = "3" ] || { echo "expected 3 blobs, got $blobs"; exit 1; }
+          "$BIN" cache stats | grep -q '^shared:' \
+            || { echo "stats did not report sharing"; "$BIN" cache stats; exit 1; }
+
+          # Dropping one of the two entries frees only what it alone
+          # named; the blob the other still names has to survive.
+          key=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | head -1 \
+            | sed "s|$PKFIRE_MBT_CACHE_DIR/ac/||; s|/result.json||; s|/||")
+          "$BIN" cache rm "$key" | grep -q 'blob' \
+            || { echo "rm did not report a sweep"; exit 1; }
+          left=$(find "$PKFIRE_MBT_CACHE_DIR/blobs" -type f | wc -l | tr -d ' ')
+          [ "$left" = "2" ] || { echo "expected 2 blobs after rm, got $left"; exit 1; }
+          # The surviving entry must still restore.
+          rm -rf dist
+          "$BIN" run build | grep -q 'cache hit' \
+            || { echo "the surviving entry stopped hitting after the sweep"; exit 1; }
+          cmp -s dist/changing.txt src/changing.txt \
+            || { echo "the restored output is wrong"; exit 1; }
+
+          # A pre-split entry, planted by hand under the key the runner
+          # asks for, with contents no run could produce.
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist stage
+          key=$("$BIN" run build --print-hash | awk '$2 == "build" { print $1 }')
+          mkdir -p stage/dist
+          echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/changing.txt
+          echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/stable.txt
+          mkdir -p "$PKFIRE_MBT_CACHE_DIR/cas/${key:0:2}/${key:2}"
+          tar czf "$PKFIRE_MBT_CACHE_DIR/cas/${key:0:2}/${key:2}/entry.tar.gz" -C stage dist
+          rm -rf stage
+          "$BIN" run build | grep -q 'cache hit' \
+            || { echo "a pre-split entry stopped hitting"; exit 1; }
+          grep -q FROM-A-PRE-SPLIT-ENTRY dist/changing.txt \
+            || { echo "the pre-split entry did not restore its contents"; exit 1; }
+          printf 'one\n' > src/changing.txt
+          rm -rf dist
+
       # Three things at once: a flaky task recovers, a broken one still
       # fails with its own exit code, and a task that did not ask for a
       # retry gets exactly one attempt. The last is the guard against a

@@ -1,0 +1,42 @@
+/// Fixture for the ActionCache + content-addressed store split.
+///
+/// `build` copies two source files to two outputs. Editing one input
+/// gives the task a new action key and therefore a second entry — but
+/// only one of the two outputs actually changed, and the other must
+/// cost nothing the second time. Under the old single-archive layout it
+/// cost a full second copy of both.
+///
+/// Two files is enough to prove sharing happens at all; the size of the
+/// win is a property of how many outputs a task has, not of this
+/// fixture.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
+
+local build = new Task {
+  name = "build"
+  cmd =
+    "mkdir -p dist && cp src/changing.txt dist/changing.txt && cp src/stable.txt dist/stable.txt"
+  inputs { "src/**" }
+  outputs { "dist/changing.txt"; "dist/stable.txt" }
+}
+
+/// Reads the store back the way an operator would, so the assertion is
+/// about the layout on disk and not about a log line that happens to
+/// mention it.
+local checkStore = new Task {
+  name = "check-store"
+  cmd =
+    """
+    test -d .pkf-cache/ac || { echo "no action cache"; exit 1; }
+    test -d .pkf-cache/blobs || { echo "no blob store"; exit 1; }
+    entries=$(find .pkf-cache/ac -name result.json | wc -l | tr -d ' ')
+    [ "$entries" = "2" ] || { echo "expected 2 entries, found $entries"; exit 1; }
+    # Two keys, four declared outputs between them, but only three
+    # distinct contents: the unchanged file is stored once.
+    blobs=$(find .pkf-cache/blobs -type f | wc -l | tr -d ' ')
+    [ "$blobs" = "3" ] || { echo "expected 3 blobs, found $blobs"; exit 1; }
+    echo store shares blobs
+    """
+  cache = false
+}
+
+tasks { build; checkStore }

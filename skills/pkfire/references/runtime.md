@@ -394,24 +394,56 @@ The cache root is selected in this order:
 3. `$HOME/.cache/pkfire-mbt`
 4. `.pkfire-mbt-cache`
 
-Entries live under:
+An entry is an ActionCache manifest plus content-named blobs:
 
 ```text
-<root>/cas/<first-two-key-chars>/<remaining-key>/entry.tar.gz
+<root>/ac/<first-two-key-chars>/<remaining-key>/result.json
+<root>/blobs/<first-two-digest-chars>/<remaining-digest>
 ```
 
-On hit, the gzip-compressed tar is restored into the Taskfile directory.
-After a successful miss, pkf expands existing `outputs`, archives
-regular files and recursive directory contents, preserves file modes
-best-effort, and writes the entry.
+`result.json` is `{version, outputs, stdout?, stderr?}`. Each output is
+`{path, kind, mode}` plus `{digest, size}` for a file or `{target}` for
+a symlink; `kind` is `file`, `dir` or `symlink`, and the list keeps the
+order outputs were collected in, so a directory is created before what
+is inside it. A manifest whose `version` this runner does not recognise
+is a miss, never a partial restore.
 
-The entry also carries the run's stdout and stderr under a reserved
-`.pkf-meta/` prefix, capped at 1 MiB per stream. A restore hands those
-members to the runner and never writes them into the workspace; the
-hit line becomes `# name (cache hit <key>, replaying logs)` and the
-stored streams are printed verbatim. A task that printed nothing keeps
-the plain hit line. Declaring an output under `.pkf-meta/` is rejected
-at load time — it would be stored and then dropped on every hit.
+Blobs are named by the SHA-256 of their **uncompressed** content and
+stored gzipped — the same bytes must land on the same name whichever
+run wrote them, and gzip output is not guaranteed identical across
+versions. Blobs are immutable and shared: two entries whose outputs
+differ in one file cost one blob, not two trees.
+
+After a successful miss, pkf expands existing `outputs`, walks declared
+directories (recording symlinks rather than following them), writes one
+blob per file, and publishes the manifest last — so an entry that exists
+is one whose contents are all already on disk. Every blob and the
+manifest go through a temp file and a rename.
+
+On hit the manifest is validated in full before anything is written:
+unsafe paths, escaping symlinks, a missing blob, or a claimed expansion
+past the 4 GiB cap all read as a miss with a reason on stderr.
+
+The entry also carries the run's stdout and stderr as blobs, capped at
+1 MiB per stream (they ride the archive under a reserved `.pkf-meta/`
+prefix on the wire). A restore hands those to the runner and never
+writes them into the workspace; the hit line becomes
+`# name (cache hit <key>, replaying logs)` and the stored streams are
+printed verbatim. A task that printed nothing keeps the plain hit line.
+Declaring an output under `.pkf-meta/` is rejected at load time — it
+would be stored and then dropped on every hit.
+
+Entries written before the split live at
+`<root>/cas/<first-two>/<remaining>/entry.tar.gz` and are still read, so
+an upgrade does not cold-start a warm cache. Nothing writes there again.
+
+Because entries share blobs, removing one frees nothing by itself.
+`pkf cache prune` and `pkf cache rm` delete manifests and then sweep
+every blob no remaining manifest names, reporting what the sweep
+actually deleted. `pkf cache clear` removes manifests, blobs and any
+pre-split archives; the Pkl evaluation cache under the same root is left
+alone. `pkf cache stats` reports entries, blob count, bytes on disk, and
+how much the sharing saved.
 
 Capture uses pipes, so a cached task's command does not see a terminal
 and colour-on-tty detection turns colour off. Uncacheable tasks
@@ -441,7 +473,13 @@ GET|PUT <base>/cas/<first-two>/<remaining>/entry.tar.gz
 Authorization: Bearer <token>
 ```
 
-A remote hit warms the local CAS and restores outputs. A successful
+The wire format is unchanged by the local split: still one archive per
+key. A push rebuilds it from the blobs; a fetch validates it and takes
+it apart into blobs and a manifest, so the fetched entry is a real local
+hit next run rather than another round-trip. A remote entry that fails
+validation never reaches the blob store.
+
+A remote hit warms the local store and restores outputs. A successful
 local execution stores locally, then uploads best-effort. Remote GET
 misses and network failures fall back to execution; PUT failure is
 logged and does not fail the task.
