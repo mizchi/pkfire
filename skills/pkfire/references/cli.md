@@ -60,8 +60,9 @@ git diff --name-only origin/main...HEAD > /tmp/changed.txt
 pkf affected --changed=/tmp/changed.txt
 ```
 
-`clean --dry-run` is a compatibility no-op: it still deletes outputs.
-Never use it as a safety preview.
+`clean --dry-run` lists what would be removed and removes nothing. It
+used to be accepted and ignored, so the flag printed "removed:" and
+removed them.
 
 ## Taskfile maintenance
 
@@ -74,12 +75,13 @@ Never use it as a safety preview.
 | `pkl-cache` | `[warm] [path...]` | Run external `pkl eval` to warm `~/.pkl/cache`. |
 | `completion` | `bash|zsh|fish` | Print a completion script. |
 
-The generated completion scripts still advertise some Go-era flags
-that the MoonBit dispatcher does not implement. Treat completion as a
-typing aid, not an interface specification.
+The generated completion scripts advertise only flags the dispatcher
+implements. They used to carry Go-era flags that error when used.
 
-`lint --fix` and `lint --dry-run` are accepted but do not modify or
-preview anything. `explain --diff` is also accepted and ignored.
+`lint --fix`, `lint --dry-run` and `explain --diff` are rejected with
+the reason. They used to be accepted and ignored, so `pkf lint --fix`
+reported findings and changed nothing.
+
 
 ## Cache maintenance
 

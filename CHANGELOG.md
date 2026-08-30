@@ -82,6 +82,13 @@ Action version all move together — there is one tag per release
 
 ### Changed
 
+- **`pkf lint --fix` / `--dry-run` and `pkf explain --diff` are
+  rejected with a reason.** They were accepted and ignored, so
+  `pkf lint --fix` printed findings, changed nothing, and exited as if
+  it had done the work. `explain --diff` was worse: the flag was
+  skipped but the Taskfile it named became a second positional, so the
+  error read "too many task names".
+
 - **The action key covers consumed artifacts, invalidating every
   existing entry.** `consumedArtifacts` is a new field of the action
   descriptor, so the IR version moves to `pkfire-action-v2` and no key
@@ -96,6 +103,34 @@ Action version all move together — there is one tag per release
   patterns.
 
 ### Fixed
+
+- **`pkf clean --dry-run` removed the outputs it claimed to preview.**
+  The flag was accepted and ignored, so the command printed
+  `removed: …` and removed them — the one invocation a person reaches
+  for precisely because they are not sure what will be deleted. It now
+  prints `would remove: …` and touches nothing.
+
+- **The README documented flags that do not exist.** Every `pkf …`
+  form in it was run against the binary; nine exited with "unknown
+  flag". `list --long` / `--unsorted` / `--color`, `graph --format`
+  (DOT, Mermaid) / `--target` / `--depth`, `doctor --fix`,
+  `explain --diff` and `lint --fix` were Go-era flags the MoonBit port
+  never reimplemented. The README also claimed `pkf graph` emits
+  Graphviz DOT (it prints a tree, so the documented
+  `pkf graph | dot -Tsvg` pipeline could not have worked) and that
+  `format --check` exits 11 (it exits 1). All corrected, with the
+  unported flags recorded in the status table rather than quietly
+  dropped.
+
+- **The generated shell completions offered flags that error.** All
+  three shells advertised the same Go-era set. They now offer only
+  what the dispatcher implements, plus `clean --dry-run`.
+
+- **`examples/diagnostics` could not run.** Two of its tasks invoked
+  `pkf list --long --all --color=never` and `pkf doctor --fix
+  --dry-run`, so `pkf run ci` in that example failed with "unknown
+  flag". They now use `pkf list --all --json` and `pkf clean
+  --dry-run`.
 
 - **`--keep-going` ran the dependents of a failed task.** It was
   implemented as "carry on down the topological order", so a task whose

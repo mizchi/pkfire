@@ -314,6 +314,16 @@ scenarios {
     contract = new { exit = true; fsDelta = true }
   }
   new {
+    id = "clean-dry-run"
+    fixture = "examples/cat-io"
+    // `--dry-run` used to be accepted and ignored, so this exact
+    // invocation printed "removed:" and removed them. The empty
+    // fsDeleted golden is the assertion that matters.
+    argv { "clean"; "--dry-run" }
+    setup { "printf hi > src.txt"; "printf out > out.txt" }
+    contract = new { exit = true; fsDelta = true; mustContain { "would remove" } }
+  }
+  new {
     id = "cache-stats-structural"
     fixture = "examples/basic"
     argv { "cache"; "stats" }

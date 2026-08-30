@@ -4186,7 +4186,22 @@ async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
     match arg {
       // lint always emits JSON; `--json` is accepted for symmetry but is a no-op.
       "--json" => ()
-      "--fix" | "--dry-run" => () // not implemented: silently ignore
+      // Accepted-and-ignored is the worst of the three options: a
+      // reader who asked for their Taskfile to be fixed gets silence
+      // and an unfixed Taskfile. Say so instead.
+      "--fix" =>
+        {
+          die(
+            "pkf lint: `--fix` is not supported yet — findings report the " +
+            "edit to make; apply it by hand",
+          )
+          return 2
+        }
+      "--dry-run" =>
+        {
+          die("pkf lint: `--dry-run` is not supported yet — `pkf lint` never writes")
+          return 2
+        }
       _ =>
         if arg.has_prefix("--") {
           die("pkf lint: unknown flag `\{arg}`")
@@ -4464,20 +4479,18 @@ fn completion_bash() -> String {
     #|  local sub="${COMP_WORDS[1]}"
     #|  case "$sub" in
     #|    list)
-    #|      if [[ "$prev" == "--color" ]]; then
-    #|        COMPREPLY=($(compgen -W "auto always never" -- "$cur"))
-    #|      elif [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file -v --verbose --long --json --all --unsorted --source-order --color" -- "$cur"))
+    #|      if [[ "$cur" == -* ]]; then
+    #|        COMPREPLY=($(compgen -W "-f --file -v --verbose --json --all" -- "$cur"))
     #|      fi
     #|      ;;
     #|    lint)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
     #|      fi
     #|      ;;
     #|    doctor)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
     #|      fi
     #|      ;;
     #|    affected)
@@ -4543,15 +4556,13 @@ fn completion_bash() -> String {
     #|      fi
     #|      ;;
     #|    graph)
-    #|      if [[ "$prev" == "--format" ]]; then
-    #|        COMPREPLY=($(compgen -W "dot mermaid tree json" -- "$cur"))
-    #|      elif [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --format --json --target --all --unsorted --source-order --depth" -- "$cur"))
+    #|      if [[ "$cur" == -* ]]; then
+    #|        COMPREPLY=($(compgen -W "-f --file --json --all" -- "$cur"))
     #|      fi
     #|      ;;
     #|    explain)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --diff" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -4617,20 +4628,14 @@ fn completion_zsh() -> String {
     #|
     #|  case "${words[2]}" in
     #|    list)
-    #|      if [[ "${words[$((CURRENT-1))]}" == "--color" ]]; then
-    #|        _values 'color' auto always never
-    #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+    #|      if [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'list option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
     #|          '-v[show cmd preview and deps]' \
     #|          '--verbose[show cmd preview and deps]' \
-    #|          '--long[show compact audit table]' \
     #|          '--json[emit machine-readable output]' \
-    #|          '--all[include internal tasks]' \
-    #|          '--unsorted[use declaration order]' \
-    #|          '--source-order[use declaration order]' \
-    #|          '--color[when to color output]'
+    #|          '--all[include internal tasks]'
     #|      fi
     #|      ;;
     #|    lint)
@@ -4638,9 +4643,7 @@ fn completion_zsh() -> String {
     #|        _values 'lint option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--json[emit machine-readable output]' \
-    #|          '--fix[apply safe fixes]' \
-    #|          '--dry-run[show fixes without writing files]'
+    #|          '--json[emit machine-readable output]'
     #|      fi
     #|      ;;
     #|    doctor)
@@ -4648,9 +4651,7 @@ fn completion_zsh() -> String {
     #|        _values 'doctor option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--json[emit machine-readable output]' \
-    #|          '--fix[apply safe fixes]' \
-    #|          '--dry-run[show fixes without writing files]'
+    #|          '--json[emit machine-readable output]'
     #|      fi
     #|      ;;
     #|    affected)
@@ -4744,27 +4745,19 @@ fn completion_zsh() -> String {
     #|      fi
     #|      ;;
     #|    graph)
-    #|      if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
-    #|        _values 'format' dot mermaid tree json
-    #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+    #|      if [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'graph option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--format[output format]' \
     #|          '--json[emit machine-readable output]' \
-    #|          '--target[render only one task subgraph]' \
-    #|          '--all[include internal tasks]' \
-    #|          '--unsorted[use declaration order]' \
-    #|          '--source-order[use declaration order]' \
-    #|          '--depth[limit dependency traversal]'
+    #|          '--all[include internal tasks]'
     #|      fi
     #|      ;;
     #|    explain)
     #|      if [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'explain option' \
     #|          '-f[path to Taskfile.pkl]' \
-    #|          '--file[path to Taskfile.pkl]' \
-    #|          '--diff[compare against another Taskfile.pkl]'
+    #|          '--file[path to Taskfile.pkl]'
     #|      else
     #|        local -a tasks
     #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -4837,19 +4830,11 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from cache' -a 'stats prune rm clear'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l color -a 'auto always never'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -s v -l verbose -d 'show cmd preview and deps'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l long -d 'show compact audit table'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l json -d 'emit machine-readable output'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l all -d 'include internal tasks'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l unsorted -d 'use declaration order'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l source-order -d 'use declaration order'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l json -d 'emit machine-readable output'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l fix -d 'apply safe fixes'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l dry-run -d 'show fixes without writing files'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l json -d 'emit machine-readable output'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l fix -d 'apply safe fixes'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l dry-run -d 'show fixes without writing files'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l check -d 'run workflowTests'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l changed -d 'read newline-separated changed paths from a file'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l dry-run -d 'preview plan without running'
@@ -4867,18 +4852,12 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -s f -l file -d 'path to Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l check -d 'fail when a file is read but not declared'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l emit -d 'print a matching inputs block'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from clean' -l dry-run -d 'list what would be removed, remove nothing'
     #|
-    #|# `pkf graph --format <TAB>`.
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree json'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l json -d 'emit machine-readable output'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l target -d 'render only one task subgraph'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l all -d 'include internal tasks'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l unsorted -d 'use declaration order'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l source-order -d 'use declaration order'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l depth -d 'limit dependency traversal'
     #|
     #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -s f -l file -d 'path to Taskfile.pkl'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -l diff -d 'compare against another Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from describe' -s f -l file -d 'path to Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from describe' -l json -d 'emit machine-readable output'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from info' -s f -l file -d 'path to Taskfile.pkl'
@@ -5172,8 +5151,14 @@ async fn explain_cmd(
   let positionals : Array[String] = []
   for a in args {
     if a == "--diff" {
-      // --diff is out of scope for pkf — silently skip.
-      ()
+      // Skipping the flag while erroring on the file it names is the
+      // most confusing of the possible behaviours: the reader is told
+      // they passed too many task names.
+      die(
+        "pkf explain: `--diff` is not supported yet — run `pkf explain` " +
+        "against each Taskfile and compare the output",
+      )
+      return 2
     } else if a.has_prefix("--") {
       die("pkf explain: unknown flag `\{a}`")
       return 2
@@ -5484,18 +5469,22 @@ async fn clean_cmd(
   explicit_taskfile : String?,
   args : ArrayView[String],
 ) -> Int {
-  // Parse args: collect task names (positional), ignore --dry-run silently
-  // to avoid breaking users who copy Go invocations.
+  // `--dry-run` used to be accepted and ignored, so `pkf clean
+  // --dry-run` printed "removed: …" and removed them. A flag whose
+  // whole purpose is "do not do the thing" must not do the thing.
   let requested : Array[String] = []
+  let mut dry_run = false
   for a in args {
     if a == "--dry-run" {
-      // dry-run not implemented: silently no-op (output still printed)
-      ()
+      dry_run = true
     } else if a == "-h" || a == "--help" {
       println("pkf clean — remove tasks' declared outputs")
       println("")
       println("usage:")
-      println("  pkf clean [-f FILE] [task...]")
+      println("  pkf clean [-f FILE] [--dry-run] [task...]")
+      println("")
+      println("flags:")
+      println("      --dry-run   list what would be removed, remove nothing")
       return 0
     } else if a.has_prefix("-") {
       die("pkf clean: unknown flag `\{a}`")
@@ -5571,8 +5560,12 @@ async fn clean_cmd(
       if !@fs.path_exists(path) {
         continue
       }
-      rm_rf(path)
-      println("removed: \{path}  (\{name})")
+      if dry_run {
+        println("would remove: \{path}  (\{name})")
+      } else {
+        rm_rf(path)
+        println("removed: \{path}  (\{name})")
+      }
       removed = removed + 1
     }
   }
