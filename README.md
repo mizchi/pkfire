@@ -757,6 +757,71 @@ rewrites `src/**` is a fixpoint, not a cycle. A genuine cycle — two
 tasks each reading what the other writes — is reported before anything
 runs, naming the patterns and a path that matches both.
 
+### Steps: one task, several cached actions
+
+A task is one command and therefore one cache key. A pipeline written
+as one `&&` chain re-runs all of it whenever any part has to. `steps`
+splits that:
+
+```pkl
+local bundle = new Task {
+  name = "bundle"
+  steps {
+    new Step {
+      name = "codegen"
+      cmd = "pnpm codegen"
+      inputs { "schema/**" }
+      outputs { "gen/**" }
+    }
+    new Step {
+      name = "compile"
+      cmd = "tsc -b"
+      inputs { "src/**"; "gen/**" }
+      outputs { "lib/**" }
+    }
+    new Step {
+      name = "link"
+      cmd = "esbuild lib/index.js --bundle --outfile=dist/app.js"
+      inputs { "lib/**" }
+      outputs { "dist/app.js" }
+    }
+  }
+}
+```
+
+Each step has its own `inputs` and `outputs`, so each has its own
+action key and its own cache entry. Edit `src/` and `codegen` is not
+re-run:
+
+```
+$ pkf run bundle
+pkf: # bundle/codegen (cache hit 3f2063a2, replaying logs)
+pkf: $ bundle/compile
+pkf: $ bundle/link
+pkf: 3 task(s) · 1 cached · 2 ran · 14ms
+```
+
+Everything except `cmd`, `inputs` and `outputs` comes from the task —
+`shell`, `env`, `workdir`, `tools`, `cache`, `hermetic`, `inheritEnv`,
+`params` — so a pipeline is configured once and a step says only what
+it runs and what it touches.
+
+Steps run under `<task>/<step>`, which is what the output calls them
+and what `pkf run bundle/link` accepts. They are `internal`, so
+`pkf list` still shows one task and `pkf list --all` shows the
+pipeline. Depending on `bundle` means depending on the whole of it.
+
+Ordering is **declaration order**, not inference. Artifact inference
+would order any two steps where one reads what the other writes, but a
+step with no outputs — a migration, a lint, a check — would float free
+of the sequence its author wrote down.
+
+`steps` cannot be combined with `cmd` (a task is one or the other) or
+with `services` (a service's lifetime spans one command, and which step
+of a pipeline it should wrap has no answer worth guessing at).
+Duplicate step names, and a step whose composed name collides with a
+real task, are refused when the Taskfile loads.
+
 ### Providers: what a dependency hands over
 
 `deps` has meant one thing: run that first. A `provides` block makes it

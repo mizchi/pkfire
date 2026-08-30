@@ -117,7 +117,7 @@ local testExamples: Task = new {
   cmd =
     #"""
     set -euo pipefail
-    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl examples/diagnostics/Taskfile.pkl examples/split-import/Taskfile.pkl; do
+    for f in examples/basic/Taskfile.pkl examples/node/Taskfile.pkl examples/rust/Taskfile.pkl examples/monorepo/Taskfile.pkl examples/diagnostics/Taskfile.pkl examples/split-import/Taskfile.pkl examples/steps/Taskfile.pkl; do
       echo "  eval $f"
       pkl eval "$f" >/dev/null
     done
@@ -131,6 +131,7 @@ local testExamples: Task = new {
     "examples/monorepo/Taskfile.pkl"
     "examples/diagnostics/Taskfile.pkl"
     "examples/split-import/**/*.pkl"
+    "examples/steps/Taskfile.pkl"
   }
 }
 
@@ -181,7 +182,7 @@ local fmt: Task = new {
   description = "Format all Pkl files in the repo"
   // examples/unformatted is intentionally non-canonical (conformance fixture).
   cmd =
-    "pkl format -w Taskfile.pkl pkl skills examples/artifact-order examples/basic examples/cache-hit examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/keep-going examples/lint-dead examples/lint-rules examples/lint-string-safe examples/lint-watch-cycle examples/monorepo examples/node examples/providers examples/remote-cache-worker examples/reserved-output examples/rust examples/sandbox examples/split-import examples/trace-inputs examples/with-pkspec"
+    "pkl format -w Taskfile.pkl pkl skills examples/artifact-order examples/basic examples/cache-hit examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/keep-going examples/lint-dead examples/lint-rules examples/lint-string-safe examples/lint-watch-cycle examples/monorepo examples/node examples/providers examples/remote-cache-worker examples/reserved-output examples/rust examples/sandbox examples/split-import examples/steps examples/trace-inputs examples/with-pkspec"
   cache = false
 }
 
@@ -190,7 +191,7 @@ local fmtCheck: Task = new {
   description = "Check Pkl formatting without writing changes"
   // examples/unformatted is intentionally non-canonical (conformance fixture).
   cmd =
-    "pkl format --diff-name-only Taskfile.pkl pkl skills examples/artifact-order examples/basic examples/cache-hit examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/keep-going examples/lint-dead examples/lint-rules examples/lint-string-safe examples/lint-watch-cycle examples/monorepo examples/node examples/providers examples/remote-cache-worker examples/reserved-output examples/rust examples/sandbox examples/split-import examples/trace-inputs examples/with-pkspec"
+    "pkl format --diff-name-only Taskfile.pkl pkl skills examples/artifact-order examples/basic examples/cache-hit examples/cat-io examples/describe-rich examples/diagnostics examples/dogfood examples/empty-dir examples/graph-kinds examples/keep-going examples/lint-dead examples/lint-rules examples/lint-string-safe examples/lint-watch-cycle examples/monorepo examples/node examples/providers examples/remote-cache-worker examples/reserved-output examples/rust examples/sandbox examples/split-import examples/steps examples/trace-inputs examples/with-pkspec"
   inputs {
     "Taskfile.pkl"
     "pkl/**/*.pkl"

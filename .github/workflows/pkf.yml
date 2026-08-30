@@ -90,6 +90,32 @@ jobs:
           actual=$(wc -c < runs.log | tr -d ' ')
           [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }
 
+      # The property that makes steps worth having: an edit that only
+      # reaches the later steps reuses the earlier ones. Asserted by
+      # what is *not* re-run, since a pipeline written as one `&&`
+      # chain would re-run all of it and still look fine.
+      - name: Smoke - a multi-step task rebuilds only the steps that changed
+        working-directory: examples/steps
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-steps-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" gen lib dist
+          "$BIN" run bundle
+          # Touch only what the *last two* steps read.
+          printf 'src-v2\n' > src/main.txt
+          "$BIN" run bundle > second.log
+          grep -q '# bundle/codegen (cache hit' second.log \
+            || { echo "codegen re-ran even though its inputs did not change"; exit 1; }
+          grep -q '\$ bundle/compile' second.log \
+            || { echo "compile did not re-run"; exit 1; }
+          grep -q '\$ bundle/link' second.log \
+            || { echo "link did not re-run"; exit 1; }
+          grep -q 'src-v2' dist/app.txt \
+            || { echo "the pipeline did not carry the change through"; exit 1; }
+          git checkout -- src/main.txt
+
       # `provides` is unreleased, so no URI-pinned example can exercise
       # it yet — this fixture amends the in-tree schema instead, which
       # makes this step the end-to-end check until the release moves

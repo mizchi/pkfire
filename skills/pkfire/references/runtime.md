@@ -186,6 +186,36 @@ A cycle over declared and derived edges is reported before any task
 runs, naming each edge's reason. A task does not consume its own
 outputs, so a formatter that rewrites what it reads is not a cycle.
 
+## Steps
+
+A task with `steps` is lowered into one action per step plus a
+deps-only umbrella, before anything downstream sees the plan:
+
+```pkl
+steps {
+  new Step { name = "codegen"; cmd = "..."; inputs { "schema/**" }; outputs { "gen/**" } }
+  new Step { name = "compile"; cmd = "..."; inputs { "src/**"; "gen/**" }; outputs { "lib/**" } }
+}
+```
+
+- Each step becomes a task named `<task>/<step>` with its own `inputs`,
+  `outputs`, action key and cache entry. `pkf run <task>/<step>` works.
+- Steps inherit `shell`, `shellFlags`, `env`, `tools`, `cache`,
+  `workdir`, `inheritEnv`, `hermetic`, `params` from the task.
+- Chained by `deps` in declaration order; the first step inherits the
+  task's own `deps`. Ordering is not left to artifact inference — a
+  step with no outputs would float free.
+- Steps are `visibility = "internal"`; `--all` reveals them.
+- The umbrella keeps `provides`, and carries the union of the steps'
+  `inputs` and `outputs` for `clean` and `affected`. It is not a
+  producer or consumer in the action graph: it spawns nothing.
+- Artifact collection follows *through* a producer that writes nothing,
+  so a consumer of the pipeline keys on what the steps wrote.
+
+Rejected at load time: `cmd` together with `steps`, `services` or
+`service = true` together with `steps`, duplicate step names within a
+task, and a composed `<task>/<step>` that collides with a real task.
+
 ## Providers
 
 A task's `provides` block is data its **direct** dependents receive:

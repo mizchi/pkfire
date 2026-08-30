@@ -43,6 +43,9 @@ struct Task {
   /// ambient environment. `--sandbox` turns the first half on for a
   /// whole run; this is the per-task, checked-in form.
   hermetic : Bool
+  /// Commands this task runs, each cached on its own. Empty for an
+  /// ordinary single-command task. See `steps.mbt`.
+  steps : Array[Step]
   /// What this task hands to its direct dependents. See `providers.mbt`.
   provides : Providers
   params : Array[Param]
@@ -255,6 +258,42 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(v) => parse_bool(v, default=false)
       None => false
     }
+    let steps : Array[Step] = []
+    match task_entries.get("steps") {
+      Some(Array(raw_steps)) =>
+        for raw in raw_steps {
+          match raw {
+            Object(e) => {
+              let sname = match e.get("name") {
+                Some(v) => parse_string(v)
+                None => continue
+              }
+              let scmd = match e.get("cmd") {
+                Some(v) => parse_string(v)
+                None => continue
+              }
+              steps.push(Step::{
+                name: sname,
+                cmd: scmd,
+                inputs: match e.get("inputs") {
+                  Some(v) => parse_string_array(v)
+                  None => []
+                },
+                outputs: match e.get("outputs") {
+                  Some(v) => parse_string_array(v)
+                  None => []
+                },
+                description: match e.get("description") {
+                  Some(String(d)) => Some(d)
+                  _ => None
+                },
+              })
+            }
+            _ => ()
+          }
+        }
+      _ => ()
+    }
     let provides = match task_entries.get("provides") {
       Some(Object(p)) => {
         let executable = match p.get("executable") {
@@ -365,6 +404,7 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       workdir,
       inherit_env,
       hermetic,
+      steps,
       provides,
       params,
       accepts_args,
@@ -380,8 +420,28 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
     }
     // Checked against the finished Task, so the message can name the
     // outputs it compared against.
-    if provider_declaration_error(tasks[name]) is Some(problem) {
+    if step_declaration_error(tasks[name]) is Some(problem) {
       die(problem)
+    }
+  }
+  // Multi-step tasks become several ordinary ones before anything
+  // downstream sees the plan, so the graph, the scheduler and the
+  // cache need no second notion of what a unit of work is.
+  if expand_step_tasks(tasks, task_order) is Some(collision) {
+    die(
+      "task `\{collision}` collides with a step of the same name; rename one of them",
+    )
+  }
+  // After expansion, so a pipeline's `provides.executable` is checked
+  // against the union of what its steps write rather than against the
+  // authored task's empty `outputs`.
+  for name in task_order {
+    match tasks.get(name) {
+      Some(task) =>
+        if provider_declaration_error(task) is Some(problem) {
+          die(problem)
+        }
+      None => ()
     }
   }
   let workflow_tests : Array[WorkflowTest] = []

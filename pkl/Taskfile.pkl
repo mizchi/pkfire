@@ -55,6 +55,44 @@ class Param {
 }
 
 /// A unit of work authored by the user.
+/// One command inside a task, cached on its own.
+///
+/// A task with `steps` is not one action but several, chained in
+/// declaration order. Each step has its own `inputs` and `outputs` and
+/// therefore its own action key and its own cache entry, so a change
+/// that only reaches the third step reuses the first two instead of
+/// rebuilding the whole pipeline — which is the difference between a
+/// task runner and a build engine.
+///
+/// Everything else — `shell`, `env`, `workdir`, `tools`, `cache`,
+/// `hermetic`, `inheritEnv`, `params` — comes from the task. A step
+/// says what to run and what it reads and writes, and nothing about
+/// how the task is configured.
+class Step {
+  /// Identifier, unique within the task. The step runs under the name
+  /// `<task>/<step>`, which is what `pkf run`, `pkf graph` and the
+  /// cache-hit lines call it.
+  name: String(matches(Regex(#"^[a-zA-Z][a-zA-Z0-9_.-]*$"#)))
+
+  /// Shell command for this step.
+  cmd: String(length > 0)
+
+  /// Glob patterns this step reads, relative to the task's root.
+  ///
+  /// A step declaring none is never cached, exactly like a task
+  /// declaring none: its key would be constant and every run after the
+  /// first would be a permanent hit.
+  inputs: Listing<String> = new {}
+
+  /// Files this step produces. A later step that reads them is ordered
+  /// after this one and has their contents in its key, so a pipeline
+  /// does not need to restate the chain in `deps`.
+  outputs: Listing<String> = new {}
+
+  /// Free-form description shown by `pkf list --long`.
+  description: String? = null
+}
+
 /// What a task exposes to the tasks that depend on it.
 ///
 /// `deps` has always meant "run this first". A provider makes it carry
@@ -260,6 +298,15 @@ class Task {
   /// key when `cache = true`.
   params: Listing<Param> = new {}
 
+  /// Commands this task runs, each cached separately. See `Step`.
+  ///
+  /// Mutually exclusive with `cmd`: a task is either one command or a
+  /// pipeline of them. A task with `steps` behaves like a deps-only
+  /// umbrella over them — depending on the task means depending on the
+  /// whole pipeline, and `pkf run <task>` runs every step that is not
+  /// already cached.
+  steps: Listing<Step> = new {}
+
   /// What this task exposes to its dependents. See `Providers`.
   ///
   /// Declaring nothing here — the default — leaves `deps` exactly as it
@@ -326,6 +373,15 @@ class RenderedWorkflowTest {
   direct: Listing<String>
 }
 
+/// Wire format mirror of `Step` consumed by the runner.
+class RenderedStep {
+  name: String
+  cmd: String
+  inputs: Listing<String>
+  outputs: Listing<String>
+  description: String?
+}
+
 /// Wire format mirror of `Providers` consumed by the runner.
 class RenderedProviders {
   executable: String?
@@ -359,6 +415,7 @@ class RenderedTask {
   hermetic: Boolean
   acceptsArgs: Boolean
   params: Listing<RenderedParam>
+  steps: Listing<RenderedStep>
   provides: RenderedProviders
   specRef: String?
 }
@@ -431,6 +488,17 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
             choices = p.choices
             default = p.default
             description = p.description
+          }
+        }
+      }
+      steps = new Listing {
+        for (st in t.steps) {
+          new RenderedStep {
+            name = st.name
+            cmd = st.cmd
+            inputs = st.inputs
+            outputs = st.outputs
+            description = st.description
           }
         }
       }

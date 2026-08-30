@@ -203,7 +203,17 @@ fn build_action_graph(
   )
   for name in members {
     match plan.tasks.get(name) {
-      Some(task) => produced[name] = task_artifact_output_patterns(repo_root, task)
+      // A deps-only umbrella spawns no process, so it writes nothing —
+      // whatever `outputs` it carries belongs to the tasks underneath
+      // it. Crediting it as a producer would draw an edge into every
+      // consumer twice: once from the task that actually writes the
+      // file and once from the umbrella that merely covers it.
+      Some(task) =>
+        produced[name] = if task.cmd.length() == 0 {
+          []
+        } else {
+          task_artifact_output_patterns(repo_root, task)
+        }
       None => ()
     }
   }
@@ -230,7 +240,18 @@ fn build_action_graph(
     // supplies the witness, since one concrete path is enough to show
     // the overlap is real.
     let inputs : Array[Artifact] = []
-    for pattern in task_watch_input_patterns(repo_root, task) {
+    // The same reason an umbrella produces nothing: it spawns no
+    // process, so it reads nothing either. Whatever `inputs` it
+    // carries — a multi-step task's are the union of its steps' —
+    // belongs to the tasks underneath it, and crediting the umbrella
+    // with reading them would draw an edge from every step into the
+    // task those steps make up.
+    let consumed_patterns = if task.cmd.length() == 0 {
+      []
+    } else {
+      task_watch_input_patterns(repo_root, task)
+    }
+    for pattern in consumed_patterns {
       let mut generated = false
       for other in members {
         if other == name {
@@ -499,16 +520,41 @@ fn producer_output_files(
   let root = if repo_root.length() == 0 { "." } else { repo_root }
   let seen : Map[String, Bool] = Map([], capacity=16)
   let out : Array[String] = []
+  // A producer that writes nothing is a pass-through — a deps-only
+  // umbrella, or the task a pipeline's steps were expanded out of —
+  // and the files really do come from whatever *it* depends on. Not
+  // following through one leaves the consumer's key blind to the bytes
+  // it consumes, which is the exact unsoundness declaring the
+  // dependency was supposed to close.
+  let visited : Map[String, Bool] = Map([], capacity=16)
+  visited[task] = true
+  let frontier : Array[String] = []
   for edge in node.edges {
-    match graph.nodes.get(edge.producer) {
-      Some(producer) =>
-        for rel in expand_inputs(root, producer.outputs) {
-          if !seen.contains(rel) {
-            seen[rel] = true
-            out.push(rel)
-          }
-        }
-      None => ()
+    frontier.push(edge.producer)
+  }
+  let mut i = 0
+  while i < frontier.length() {
+    let name = frontier[i]
+    i = i + 1
+    if visited.contains(name) {
+      continue
+    }
+    visited[name] = true
+    let producer = match graph.nodes.get(name) {
+      Some(p) => p
+      None => continue
+    }
+    if producer.outputs.length() == 0 {
+      for edge in producer.edges {
+        frontier.push(edge.producer)
+      }
+      continue
+    }
+    for rel in expand_inputs(root, producer.outputs) {
+      if !seen.contains(rel) {
+        seen[rel] = true
+        out.push(rel)
+      }
     }
   }
   out.sort()

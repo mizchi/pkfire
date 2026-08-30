@@ -138,6 +138,46 @@ facts {
     sealed.inheritEnv == true
   }
 
+  ["steps is empty by default, so a task is one command"] {
+    build.steps.isEmpty
+  }
+
+  ["a step round-trips its command and its own inputs and outputs"] {
+    local st = new Schema.Step {
+      name = "codegen"
+      cmd = "pnpm codegen"
+      inputs { "schema/**" }
+      outputs { "gen/**" }
+    }
+    st.name == "codegen"
+      && st.inputs.toList().first == "schema/**"
+      && st.outputs.toList().first == "gen/**"
+  }
+
+  ["a step name that would not survive `<task>/<step>` is rejected"] {
+    // `/` would make the composed name ambiguous, and `:` is not in
+    // the step grammar either.
+    module.catch(() -> (new Schema.Step { name = "a/b"; cmd = "x" }).name) != null
+      && module.catch(() -> (new Schema.Step { name = "a:b"; cmd = "x" }).name) != null
+  }
+
+  ["a step needs a command"] {
+    module.catch(() -> (new Schema.Step { name = "a"; cmd = "" }).cmd) != null
+  }
+
+  ["a task carries its steps through the rendered form"] {
+    local pipeline = new Schema.Task {
+      name = "bundle"
+      steps {
+        new Schema.Step { name = "compile"; cmd = "tsc -b" }
+        new Schema.Step { name = "link"; cmd = "esbuild" }
+      }
+    }
+    pipeline.steps.toList().length == 2
+      && pipeline.steps.toList().last.name == "link"
+      && pipeline.cmd == null
+  }
+
   ["provides is empty by default, so deps stay an ordering constraint"] {
     build.provides.executable == null && build.provides.env.isEmpty
   }

@@ -12,6 +12,64 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`steps`: one task, several cached actions.** Until now a task was
+  one command and therefore one cache key, so a `build` that generated
+  code, compiled it and linked it re-ran all three whenever any of them
+  had to.
+
+  ```pkl
+  local bundle = new Task {
+    name = "bundle"
+    steps {
+      new Step {
+        name = "codegen"
+        cmd = "pnpm codegen"
+        inputs { "schema/**" }
+        outputs { "gen/**" }
+      }
+      new Step {
+        name = "compile"
+        cmd = "tsc -b"
+        inputs { "src/**"; "gen/**" }
+        outputs { "lib/**" }
+      }
+      new Step {
+        name = "link"
+        cmd = "esbuild lib/index.js --bundle --outfile=dist/app.js"
+        inputs { "lib/**" }
+        outputs { "dist/app.js" }
+      }
+    }
+  }
+  ```
+
+  Editing `src/` now reuses `codegen` and re-runs only the last two:
+
+  ```
+  pkf: # bundle/codegen (cache hit 3f2063a2, replaying logs)
+  pkf: $ bundle/compile
+  pkf: $ bundle/link
+  pkf: 3 task(s) · 1 cached · 2 ran · 14ms
+  ```
+
+  Each step declares its own `inputs` and `outputs` and so has its own
+  action key and its own cache entry. Everything else — `shell`, `env`,
+  `workdir`, `tools`, `cache`, `hermetic`, `inheritEnv`, `params` — is
+  the task's, so a pipeline is configured once.
+
+  Steps run under `<task>/<step>`, which is what every message calls
+  them and what `pkf run bundle/link` accepts. They are `internal`, so
+  `pkf list` still shows one task; `--all` shows the pipeline. Ordering
+  is declaration order, not inference: a step with no outputs — a
+  migration, a check — would otherwise float free of the sequence its
+  author wrote.
+
+  `steps` is mutually exclusive with `cmd`, and with `services` (a
+  service's lifetime spans one command, and which step of a pipeline it
+  should wrap has no answer worth guessing at). Duplicate step names,
+  and a step name that collides with a real task, are refused at load
+  time.
+
 - **`provides`: typed values a task hands to its dependents.** `deps`
   has meant one thing — run that first. It can now carry data as well.
 
@@ -232,6 +290,24 @@ Action version all move together — there is one tag per release
   `artifacts:` line counts the files hashed in from dependencies, and
   derived edges are listed with the input pattern, the output pattern,
   and a concrete path matching both.
+
+### Fixed
+
+- **A consumer's action key was blind to what it consumed through a
+  deps-only umbrella.** `deps { all }`, where `all` is an aggregate
+  that spawns nothing, hashed the umbrella's own outputs — there are
+  none — and stopped, so the consumer stayed a cache hit while the
+  files it read changed underneath it. Artifact collection now follows
+  through a producer that writes nothing to the tasks it covers. The
+  same bug would have applied to every multi-step task, since its
+  umbrella is exactly that shape.
+
+- **A deps-only umbrella was credited as producing and consuming its
+  declared patterns.** It spawns no process, so it writes and reads
+  nothing; the patterns belong to the tasks underneath it. Crediting
+  the umbrella drew a duplicate edge into every consumer, once from the
+  task that actually writes the file and once from the umbrella that
+  merely covers it.
 
 ### Changed
 

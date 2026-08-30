@@ -30,6 +30,7 @@ examples {
       hermetic = false
       acceptsArgs = false
       params {}
+      steps {}
       provides {
         executable = null
         env {}
