@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "cc (host) 1.0"

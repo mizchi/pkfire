@@ -90,6 +90,26 @@ jobs:
           actual=$(wc -c < runs.log | tr -d ' ')
           [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }
 
+      # One `cc` declaration, two targets, two compilers, two keys.
+      # This is what makes a toolchain a resolver rather than a lookup.
+      - name: Smoke - the target platform selects the toolchain
+        working-directory: examples/cross
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-cross-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          export PATH="$PWD/bin:$PATH"
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          "$BIN" explain native | grep -q 'cc  cc (host)' \
+            || { echo "the native build did not resolve to the host compiler"; exit 1; }
+          "$BIN" explain cross | grep -q 'cc -> aarch64-linux-gnu-gcc' \
+            || { echo "the target platform did not select the cross compiler"; exit 1; }
+          n=$("$BIN" run native --print-hash | awk '{print $1}')
+          c=$("$BIN" run cross --print-hash | awk '{print $1}')
+          [ "$n" != "$c" ] \
+            || { echo "two targets shared one action key"; exit 1; }
+
       # `tools` is a string the author must remember to bump; a
       # `Toolchain` is resolved. The assertion is that upgrading the
       # tool moves the key with nothing edited in the Taskfile.

@@ -36,37 +36,84 @@ test "a tool name reaches the shell as one word, whatever it contains" {
 }
 
 ///|
-test "the default version command is the tool's own --version" {
-  let bare = Toolchain::{
-    name: "go",
+fn bare_toolchain(name : String) -> Toolchain {
+  Toolchain::{
+    name,
     version_cmd: "",
     hash_binary: false,
     optional: false,
+    for_target: Map([], capacity=0),
   }
-  assert_eq(toolchain_version_command(bare), "go --version")
+}
+
+///|
+test "the default version command follows the selection" {
+  let bare = bare_toolchain("go")
+  assert_eq(toolchain_version_command(bare, "go"), "go --version")
+  // A `cc` that resolved to a cross compiler must be asked *its*
+  // version, not the host compiler's.
   assert_eq(
-    toolchain_version_command({ ..bare, version_cmd: "go env GOVERSION" }),
+    toolchain_version_command(bare_toolchain("cc"), "aarch64-linux-gnu-gcc"),
+    "aarch64-linux-gnu-gcc --version",
+  )
+  // An explicit command is taken literally: the author said what to run.
+  assert_eq(
+    toolchain_version_command({ ..bare, version_cmd: "go env GOVERSION" }, "go"),
     "go env GOVERSION",
   )
+}
+
+///|
+test "the target platform selects which executable is resolved" {
+  let cc = {
+    ..bare_toolchain("cc"),
+    for_target: Map([
+      ("linux/arm64", "aarch64-linux-gnu-gcc"),
+      ("linux/amd64", "x86_64-linux-gnu-gcc"),
+    ]),
+  }
+  assert_eq(toolchain_executable(cc, "linux/arm64"), "aarch64-linux-gnu-gcc")
+  assert_eq(toolchain_executable(cc, "linux/amd64"), "x86_64-linux-gnu-gcc")
+  // No target, or one with no entry, falls back to the declared name —
+  // a native build needs no special case, and an unrecognised target
+  // degrades to the host compiler rather than to an error.
+  assert_eq(toolchain_executable(cc, ""), "cc")
+  assert_eq(toolchain_executable(cc, "windows/arm64"), "cc")
+  assert_eq(toolchain_executable(bare_toolchain("go"), "linux/arm64"), "go")
 }
 
 ///|
 test "memoization distinguishes declarations that resolve differently" {
   // Two tasks naming `go` share one resolution; one that also asks for
   // a binary digest must not reuse the answer that has none.
-  let plain = Toolchain::{
-    name: "go",
-    version_cmd: "",
-    hash_binary: false,
-    optional: false,
-  }
-  assert_eq(toolchain_memo_key(plain), toolchain_memo_key({ ..plain, optional: true }))
-  assert_true(toolchain_memo_key(plain) != toolchain_memo_key({ ..plain, hash_binary: true }))
-  assert_true(
-    toolchain_memo_key(plain) !=
-    toolchain_memo_key({ ..plain, version_cmd: "go env GOVERSION" }),
+  let plain = bare_toolchain("go")
+  assert_eq(
+    toolchain_memo_key(plain, ""),
+    toolchain_memo_key({ ..plain, optional: true }, ""),
   )
-  assert_true(toolchain_memo_key(plain) != toolchain_memo_key({ ..plain, name: "rustc" }))
+  assert_true(
+    toolchain_memo_key(plain, "") !=
+    toolchain_memo_key({ ..plain, hash_binary: true }, ""),
+  )
+  assert_true(
+    toolchain_memo_key(plain, "") !=
+    toolchain_memo_key({ ..plain, version_cmd: "go env GOVERSION" }, ""),
+  )
+  assert_true(
+    toolchain_memo_key(plain, "") != toolchain_memo_key(bare_toolchain("rustc"), ""),
+  )
+  // One `cc` declaration resolving to two compilers must not share a
+  // memo slot, or the second target is handed the first's version.
+  let cc = {
+    ..bare_toolchain("cc"),
+    for_target: Map([("linux/arm64", "aarch64-linux-gnu-gcc")]),
+  }
+  assert_true(
+    toolchain_memo_key(cc, "linux/arm64") != toolchain_memo_key(cc, ""),
+  )
+  // A target the declaration says nothing about resolves to the same
+  // executable as no target at all, so it may share the slot.
+  assert_eq(toolchain_memo_key(cc, "windows/amd64"), toolchain_memo_key(cc, ""))
 }
 
 ///|

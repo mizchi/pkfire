@@ -819,8 +819,36 @@ targetPlatform = "linux/arm64"
 
 Two cross-compiles that issue the same command on the same machine and
 differ only in where the result is meant to run are different actions,
-and now key differently. Null, the default, means the task builds for
-the machine it runs on.
+and key differently. Null, the default, means the task builds for the
+machine it runs on.
+
+It also *selects the toolchain*, which is what makes `toolchains` a
+resolver rather than a lookup. One declaration:
+
+```pkl
+local ccTool = new Toolchain {
+  name = "cc"
+  forTarget {
+    ["linux/arm64"] = "aarch64-linux-gnu-gcc"
+    ["linux/amd64"] = "x86_64-linux-gnu-gcc"
+  }
+}
+```
+
+A task building for `linux/arm64` resolves `cc` to the cross compiler
+and asks *that* binary its version. `pkf explain` names both halves,
+because "the Taskfile says `cc`, so which compiler was that?" is the
+question a cross-compile makes you ask:
+
+```
+toolchains (1):
+  cc -> aarch64-linux-gnu-gcc  aarch64-linux-gnu-gcc 13.2
+    /usr/bin/aarch64-linux-gnu-gcc
+```
+
+A target with no entry falls back to the declared name, so a native
+build needs no special case and its key is unchanged by adding a
+`forTarget` line for some other platform.
 
 ### Steps: one task, several cached actions
 

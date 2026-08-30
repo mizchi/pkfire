@@ -160,6 +160,21 @@ facts {
     tc.versionCmd == "go env GOVERSION" && tc.hashBinary && tc.optional
   }
 
+  ["forTarget selects a different executable per target platform"] {
+    local cc = new Schema.Toolchain {
+      name = "cc"
+      forTarget {
+        ["linux/arm64"] = "aarch64-linux-gnu-gcc"
+      }
+    }
+    cc.forTarget["linux/arm64"] == "aarch64-linux-gnu-gcc"
+      && cc.forTarget.getOrNull("linux/amd64") == null
+  }
+
+  ["forTarget is empty by default, so a toolchain is a plain lookup"] {
+    (new Schema.Toolchain { name = "go" }).forTarget.isEmpty
+  }
+
   ["a toolchain needs a name"] {
     module.catch(() -> (new Schema.Toolchain { name = "" }).name) != null
   }
