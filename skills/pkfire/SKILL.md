@@ -75,7 +75,7 @@ top-level properties.
 Start from:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.15.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "src/**/*.mbt"

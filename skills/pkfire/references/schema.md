@@ -1,6 +1,6 @@
 # Taskfile schema contract
 
-This reference describes the `pkfire@0.15.0` Pkl contract. The
+This reference describes the `pkfire@0.16.0` Pkl contract. The
 normative source in the repository is `pkl/Taskfile.pkl`.
 
 ## Module shape
@@ -8,7 +8,7 @@ normative source in the repository is `pkl/Taskfile.pkl`.
 A consumer module amends the schema and populates two listings:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.15.0#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
 
 defaults {
   env {

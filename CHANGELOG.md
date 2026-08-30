@@ -8,7 +8,7 @@ The Pkl schema version, the `pkf` binary version, and the GitHub
 Action version all move together — there is one tag per release
 (`pkfire@<version>`) and one row per release in this file.
 
-## [Unreleased]
+## [0.16.0] - 2026-08-30
 
 ### Added
 
@@ -605,8 +605,6 @@ Action version all move together — there is one tag per release
   deprecations in the conformance member went unnoticed until the
   toolchain turned them into errors. Both now check `conformance/src`
   as well.
-
-## [0.15.0] - 2026-08-29
 
 The local cache was not hitting at all before this release, and fixing
 that exposed everything downstream of it: the action key was blind to
@@ -1534,8 +1532,8 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.15.0...HEAD
-[0.15.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.15.0
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.16.0...HEAD
+[0.16.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.16.0
 [0.14.2]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.14.2
 [0.14.1]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.14.1
 [0.13.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.13.0
