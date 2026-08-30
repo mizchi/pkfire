@@ -1,0 +1,37 @@
+/// Fixture for multi-step tasks.
+///
+/// `bundle` is one task and three cached actions. `codegen` reads only
+/// `schema/`, so editing `src/` reuses it from cache and re-runs only
+/// `compile` and `link` — which is the whole reason to split a
+/// pipeline into steps rather than write it as one `&&` chain.
+///
+/// Relative `amends` so this fixture tracks the in-tree schema:
+/// `steps` is unreleased, so the published package URI the other
+/// examples pin does not have it yet.
+amends "../../pkl/Taskfile.pkl"
+
+local bundle = new Task {
+  name = "bundle"
+  steps {
+    new Step {
+      name = "codegen"
+      cmd = "mkdir -p gen && cat schema/*.txt > gen/model.txt && echo codegen ran"
+      inputs { "schema/**" }
+      outputs { "gen/model.txt" }
+    }
+    new Step {
+      name = "compile"
+      cmd = "mkdir -p lib && cat gen/model.txt src/*.txt > lib/all.txt && echo compile ran"
+      inputs { "src/**"; "gen/model.txt" }
+      outputs { "lib/all.txt" }
+    }
+    new Step {
+      name = "link"
+      cmd = "mkdir -p dist && cp lib/all.txt dist/app.txt && echo link ran"
+      inputs { "lib/all.txt" }
+      outputs { "dist/app.txt" }
+    }
+  }
+}
+
+tasks { bundle }

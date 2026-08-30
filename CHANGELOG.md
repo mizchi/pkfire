@@ -12,6 +12,120 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`toolchains`: tools the runner resolves instead of taking your word
+  for.** `tools { ["go"] = "1.26.2" }` is a string the author types and
+  then has to remember to change. Nothing checks it, so upgrading Go
+  leaves the action key where it was and every entry the old compiler
+  built stays a hit — a cache salt wearing a toolchain's name.
+
+  ```pkl
+  local build = new Task {
+    name = "build"
+    cmd = "go build ./..."
+    inputs { "**/*.go"; "go.mod" }
+    outputs { "bin/app" }
+    toolchains {
+      new Toolchain { name = "go" }
+      new Toolchain { name = "protoc"; versionCmd = "protoc --version" }
+    }
+  }
+  ```
+
+  pkfire finds the executable on `PATH`, asks it its version, and keys
+  on what it observed. Upgrade the compiler and the key moves with
+  nothing edited.
+
+  `hashBinary = true` hashes the executable's bytes as well, which is
+  the sound option — a version string can lie, and two builds of
+  `go1.26.2` are not necessarily the same compiler. It costs a read of
+  the whole executable per run, which is why it is opt-in.
+
+  The **resolved path stays out of the key**. `/opt/homebrew/bin/go`
+  and `/usr/bin/go` are the same toolchain as far as a build is
+  concerned, and hashing the path would split the cache between two
+  machines that should share it — which is the whole reason a remote
+  cache exists. `pkf explain` reports it, where someone debugging a
+  miss wants it.
+
+  A declared toolchain that is missing is fatal at key time rather than
+  a `command not found` from inside the shell, so the message names the
+  task and the tool. `optional = true` records its absence in the key
+  instead, so a run that went ahead without it cannot share an entry
+  with one that had it.
+
+  Resolution is memoized per process: thirty tasks naming one compiler
+  interrogate it once.
+
+- **`targetPlatform`: what a task builds *for*.** The execution
+  platform — the machine running the action — has been in the key since
+  0.15.0. This is the other half of the distinction: two cross-compiles
+  that issue the same command on the same machine and differ only in
+  where the result is meant to run were previously indistinguishable.
+
+  ```pkl
+  targetPlatform = "linux/arm64"
+  ```
+
+  Null, the default, means the task builds for the machine it runs on.
+
+- **`steps`: one task, several cached actions.** Until now a task was
+  one command and therefore one cache key, so a `build` that generated
+  code, compiled it and linked it re-ran all three whenever any of them
+  had to.
+
+  ```pkl
+  local bundle = new Task {
+    name = "bundle"
+    steps {
+      new Step {
+        name = "codegen"
+        cmd = "pnpm codegen"
+        inputs { "schema/**" }
+        outputs { "gen/**" }
+      }
+      new Step {
+        name = "compile"
+        cmd = "tsc -b"
+        inputs { "src/**"; "gen/**" }
+        outputs { "lib/**" }
+      }
+      new Step {
+        name = "link"
+        cmd = "esbuild lib/index.js --bundle --outfile=dist/app.js"
+        inputs { "lib/**" }
+        outputs { "dist/app.js" }
+      }
+    }
+  }
+  ```
+
+  Editing `src/` now reuses `codegen` and re-runs only the last two:
+
+  ```
+  pkf: # bundle/codegen (cache hit 3f2063a2, replaying logs)
+  pkf: $ bundle/compile
+  pkf: $ bundle/link
+  pkf: 3 task(s) · 1 cached · 2 ran · 14ms
+  ```
+
+  Each step declares its own `inputs` and `outputs` and so has its own
+  action key and its own cache entry. Everything else — `shell`, `env`,
+  `workdir`, `tools`, `cache`, `hermetic`, `inheritEnv`, `params` — is
+  the task's, so a pipeline is configured once.
+
+  Steps run under `<task>/<step>`, which is what every message calls
+  them and what `pkf run bundle/link` accepts. They are `internal`, so
+  `pkf list` still shows one task; `--all` shows the pipeline. Ordering
+  is declaration order, not inference: a step with no outputs — a
+  migration, a check — would otherwise float free of the sequence its
+  author wrote.
+
+  `steps` is mutually exclusive with `cmd`, and with `services` (a
+  service's lifetime spans one command, and which step of a pipeline it
+  should wrap has no answer worth guessing at). Duplicate step names,
+  and a step name that collides with a real task, are refused at load
+  time.
+
 - **`provides`: typed values a task hands to its dependents.** `deps`
   has meant one thing — run that first. It can now carry data as well.
 
@@ -233,12 +347,34 @@ Action version all move together — there is one tag per release
   derived edges are listed with the input pattern, the output pattern,
   and a concrete path matching both.
 
+### Fixed
+
+- **A consumer's action key was blind to what it consumed through a
+  deps-only umbrella.** `deps { all }`, where `all` is an aggregate
+  that spawns nothing, hashed the umbrella's own outputs — there are
+  none — and stopped, so the consumer stayed a cache hit while the
+  files it read changed underneath it. Artifact collection now follows
+  through a producer that writes nothing to the tasks it covers. The
+  same bug would have applied to every multi-step task, since its
+  umbrella is exactly that shape.
+
+- **A deps-only umbrella was credited as producing and consuming its
+  declared patterns.** It spawns no process, so it writes and reads
+  nothing; the patterns belong to the tasks underneath it. Crediting
+  the umbrella drew a duplicate edge into every consumer, once from the
+  task that actually writes the file and once from the umbrella that
+  merely covers it.
+
 ### Changed
 
-- **The action IR version is now `pkfire-action-v3`**, which invalidates
-  every existing cache entry. A v2 entry could hold a task's real output
-  under `.pkf-meta/`, which a v3 restore would drop; the bump is what
-  keeps the new restore from deleting it.
+- **The action IR version is now `pkfire-action-v4`**, which invalidates
+  every cache entry written by 0.15.0. Two things moved it. `.pkf-meta/`
+  became reserved inside an entry, and a pre-v3 entry could hold a
+  task's real output under that prefix which the new restore would drop
+  — the bump is what stops that. And `targetPlatform` is a new
+  descriptor field rather than another entry in the execution-property
+  bag, because the execution platform and the target platform answer
+  different questions and a cross-compile makes them disagree.
 
 - **`pkf lint --fix` / `--dry-run` and `pkf explain --diff` are
   rejected with a reason.** They were accepted and ignored, so

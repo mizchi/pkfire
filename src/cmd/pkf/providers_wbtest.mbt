@@ -139,8 +139,13 @@ test "a provider value reaches the action key" {
   )
   let smoke = provider_task("smoke", [], ["build"], None, Providers::empty())
   let plan = graph_test_plan([build, smoke])
+  // No toolchains declared, so nothing to resolve. The parameter is
+  // required rather than defaulted: a caller that silently passed
+  // nothing would compute a key the runner does not.
   let described = describe_action(
-    action_for_task(plan, smoke, ".", Map([]), [], RunOptions::default()),
+    action_for_task(
+      plan, smoke, ".", Map([]), [], RunOptions::default(), toolchains=[],
+    ),
   )
   assert_true(described.contains("PKF_BUILD_EXECUTABLE=dist/cli"))
   assert_true(described.contains("API=v1"))
@@ -160,8 +165,13 @@ test "a task's own env beats a provider it merely depends on" {
     env: Map([("API", "from-task")]),
   }
   let plan = graph_test_plan([build, smoke])
+  // No toolchains declared, so nothing to resolve. The parameter is
+  // required rather than defaulted: a caller that silently passed
+  // nothing would compute a key the runner does not.
   let described = describe_action(
-    action_for_task(plan, smoke, ".", Map([]), [], RunOptions::default()),
+    action_for_task(
+      plan, smoke, ".", Map([]), [], RunOptions::default(), toolchains=[],
+    ),
   )
   assert_true(described.contains("API=from-task"))
   assert_false(described.contains("API=from-provider"))

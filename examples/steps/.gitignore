@@ -1,0 +1,4 @@
+# Produced by running the fixture.
+gen/
+lib/
+dist/

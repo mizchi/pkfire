@@ -186,6 +186,70 @@ A cycle over declared and derived edges is reported before any task
 runs, naming each edge's reason. A task does not consume its own
 outputs, so a formatter that rewrites what it reads is not a cycle.
 
+## Toolchains
+
+`toolchains` is resolved at key time; `tools` is a self-reported string
+and only as accurate as the last edit.
+
+```pkl
+toolchains {
+  new Toolchain { name = "go" }                        // `go --version`
+  new Toolchain { name = "protoc"; versionCmd = "..." }
+  new Toolchain { name = "cc"; hashBinary = true }
+  new Toolchain { name = "shellcheck"; optional = true }
+}
+```
+
+Resolution runs `command -v <name>` in the task's shell, then the
+version command (default `<name> --version`), taking the first
+non-empty line of stdout, or of stderr when stdout is empty.
+
+Execution properties produced:
+
+- `toolchain.<name>.version` — the version line, or `unknown` when the
+  tool is present but the version command failed.
+- `toolchain.<name>.digest` — only with `hashBinary = true`.
+- `toolchain.<name>` = `absent` — only for a missing `optional` tool.
+
+The resolved **path is never hashed** — two prefixes for the same
+compiler must still share remote cache entries — and is reported by
+`pkf explain`. A missing non-optional toolchain is fatal at key time.
+Resolutions are memoized per process by (name, versionCmd, hashBinary).
+
+`targetPlatform` is a descriptor field of its own, distinct from the
+observed `executionPlatform`; null means "builds for the machine it
+runs on".
+
+## Steps
+
+A task with `steps` is lowered into one action per step plus a
+deps-only umbrella, before anything downstream sees the plan:
+
+```pkl
+steps {
+  new Step { name = "codegen"; cmd = "..."; inputs { "schema/**" }; outputs { "gen/**" } }
+  new Step { name = "compile"; cmd = "..."; inputs { "src/**"; "gen/**" }; outputs { "lib/**" } }
+}
+```
+
+- Each step becomes a task named `<task>/<step>` with its own `inputs`,
+  `outputs`, action key and cache entry. `pkf run <task>/<step>` works.
+- Steps inherit `shell`, `shellFlags`, `env`, `tools`, `cache`,
+  `workdir`, `inheritEnv`, `hermetic`, `params` from the task.
+- Chained by `deps` in declaration order; the first step inherits the
+  task's own `deps`. Ordering is not left to artifact inference — a
+  step with no outputs would float free.
+- Steps are `visibility = "internal"`; `--all` reveals them.
+- The umbrella keeps `provides`, and carries the union of the steps'
+  `inputs` and `outputs` for `clean` and `affected`. It is not a
+  producer or consumer in the action graph: it spawns nothing.
+- Artifact collection follows *through* a producer that writes nothing,
+  so a consumer of the pipeline keys on what the steps wrote.
+
+Rejected at load time: `cmd` together with `steps`, `services` or
+`service = true` together with `steps`, duplicate step names within a
+task, and a composed `<task>/<step>` that collides with a real task.
+
 ## Providers
 
 A task's `provides` block is data its **direct** dependents receive:

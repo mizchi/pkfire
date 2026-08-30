@@ -43,6 +43,15 @@ struct Task {
   /// ambient environment. `--sandbox` turns the first half on for a
   /// whole run; this is the per-task, checked-in form.
   hermetic : Bool
+  /// External tools resolved and keyed on, rather than self-reported
+  /// like `tools`. See `toolchain.mbt`.
+  toolchains : Array[Toolchain]
+  /// What this task builds *for*, when that differs from where it
+  /// runs. None means the execution platform.
+  target_platform : String?
+  /// Commands this task runs, each cached on its own. Empty for an
+  /// ordinary single-command task. See `steps.mbt`.
+  steps : Array[Step]
   /// What this task hands to its direct dependents. See `providers.mbt`.
   provides : Providers
   params : Array[Param]
@@ -255,6 +264,77 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(v) => parse_bool(v, default=false)
       None => false
     }
+    let toolchains : Array[Toolchain] = []
+    match task_entries.get("toolchains") {
+      Some(Array(raw_tcs)) =>
+        for raw in raw_tcs {
+          match raw {
+            Object(e) => {
+              let tc_name = match e.get("name") {
+                Some(v) => parse_string(v)
+                None => continue
+              }
+              toolchains.push(Toolchain::{
+                name: tc_name,
+                version_cmd: match e.get("versionCmd") {
+                  Some(String(v)) => v
+                  _ => ""
+                },
+                hash_binary: match e.get("hashBinary") {
+                  Some(v) => parse_bool(v, default=false)
+                  None => false
+                },
+                optional: match e.get("optional") {
+                  Some(v) => parse_bool(v, default=false)
+                  None => false
+                },
+              })
+            }
+            _ => ()
+          }
+        }
+      _ => ()
+    }
+    let target_platform = match task_entries.get("targetPlatform") {
+      Some(String(v)) => Some(v)
+      _ => None
+    }
+    let steps : Array[Step] = []
+    match task_entries.get("steps") {
+      Some(Array(raw_steps)) =>
+        for raw in raw_steps {
+          match raw {
+            Object(e) => {
+              let sname = match e.get("name") {
+                Some(v) => parse_string(v)
+                None => continue
+              }
+              let scmd = match e.get("cmd") {
+                Some(v) => parse_string(v)
+                None => continue
+              }
+              steps.push(Step::{
+                name: sname,
+                cmd: scmd,
+                inputs: match e.get("inputs") {
+                  Some(v) => parse_string_array(v)
+                  None => []
+                },
+                outputs: match e.get("outputs") {
+                  Some(v) => parse_string_array(v)
+                  None => []
+                },
+                description: match e.get("description") {
+                  Some(String(d)) => Some(d)
+                  _ => None
+                },
+              })
+            }
+            _ => ()
+          }
+        }
+      _ => ()
+    }
     let provides = match task_entries.get("provides") {
       Some(Object(p)) => {
         let executable = match p.get("executable") {
@@ -365,6 +445,9 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       workdir,
       inherit_env,
       hermetic,
+      toolchains,
+      target_platform,
+      steps,
       provides,
       params,
       accepts_args,
@@ -380,8 +463,28 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
     }
     // Checked against the finished Task, so the message can name the
     // outputs it compared against.
-    if provider_declaration_error(tasks[name]) is Some(problem) {
+    if step_declaration_error(tasks[name]) is Some(problem) {
       die(problem)
+    }
+  }
+  // Multi-step tasks become several ordinary ones before anything
+  // downstream sees the plan, so the graph, the scheduler and the
+  // cache need no second notion of what a unit of work is.
+  if expand_step_tasks(tasks, task_order) is Some(collision) {
+    die(
+      "task `\{collision}` collides with a step of the same name; rename one of them",
+    )
+  }
+  // After expansion, so a pipeline's `provides.executable` is checked
+  // against the union of what its steps write rather than against the
+  // authored task's empty `outputs`.
+  for name in task_order {
+    match tasks.get(name) {
+      Some(task) =>
+        if provider_declaration_error(task) is Some(problem) {
+          die(problem)
+        }
+      None => ()
     }
   }
   let workflow_tests : Array[WorkflowTest] = []
@@ -2217,6 +2320,11 @@ fn action_for_task(
   params : Map[String, String],
   positionals : Array[String],
   opts : RunOptions,
+  // Resolved toolchain facts, from `toolchain_key_fields`. Required
+  // rather than defaulted: resolving costs subprocesses, so it happens
+  // in the async caller — and a call site that quietly passed nothing
+  // would compute a key the runner never looks up.
+  toolchains~ : Array[(String, String)],
   graph~ : ActionGraph? = None,
   repo_root~ : String = ".",
 ) -> ActionDescriptor {
@@ -2244,6 +2352,7 @@ fn action_for_task(
     opts.profile,
     consumed_artifacts=consumed,
     providers~,
+    toolchains~,
   )
 }
 
@@ -2323,8 +2432,20 @@ async fn[X] run_task(
   let cacheable = uncacheable_reason is None
   let mut key : String? = None
   if cacheable || opts.print_hash || opts.explain_cache || opts.dry_run {
+    // Resolved rather than declared: what this machine's `go` actually
+    // reports, not what the Taskfile remembers it reporting. Memoized
+    // per process, so thirty tasks naming one compiler interrogate it
+    // once.
     let action = action_for_task(
-      plan, task, task_cwd, params, positionals, opts, graph~, repo_root~,
+      plan,
+      task,
+      task_cwd,
+      params,
+      positionals,
+      opts,
+      toolchains=toolchain_key_fields(task, task.shell),
+      graph~,
+      repo_root~,
     )
     let k = action_key_of(action)
     if opts.explain_cache {
@@ -5657,6 +5778,7 @@ async fn explain_cmd(
     Map([], capacity=0),
     [],
     RunOptions::default(),
+    toolchains=toolchain_key_fields(task, task.shell),
     graph=Some(graph),
     repo_root~,
   )
@@ -5743,6 +5865,32 @@ async fn explain_cmd(
       "artifacts:   \{action.consumed_artifacts.length()} file(s) from " +
       joined,
     )
+  }
+  // Toolchains: what was resolved, and from where. The path is the
+  // half deliberately kept out of the key — two machines with the same
+  // compiler at different prefixes should share cache entries — so
+  // this is the only place it is reported, and it is where someone
+  // debugging "why is my key different from CI's" will look.
+  if task.toolchains.length() > 0 {
+    println("")
+    println("toolchains (\{task.toolchains.length()}):")
+    for tc in task.toolchains {
+      let resolved = resolve_toolchain(tc, task.shell)
+      if resolved.found {
+        let version = if resolved.version.length() > 0 {
+          resolved.version
+        } else {
+          "unknown version"
+        }
+        println("  " + tc.name + "  " + version)
+        println("    " + resolved.path)
+        if tc.hash_binary {
+          println("    digest " + resolved.digest)
+        }
+      } else {
+        println("  " + tc.name + "  not found (optional)")
+      }
+    }
   }
   // What the dependencies handed over. These reach the command as
   // environment variables, so without this line the only way to find

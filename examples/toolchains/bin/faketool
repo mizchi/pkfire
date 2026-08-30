@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "faketool version 1.0.0"

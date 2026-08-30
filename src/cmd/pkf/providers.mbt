@@ -236,7 +236,10 @@ fn provider_declaration_error(task : Task) -> String? {
   if exe.length() == 0 {
     return None
   }
-  if task.cmd.length() == 0 {
+  // A pipeline is the exception to "no command, no outputs": its steps
+  // run the commands, and `outputs` is their union, so the umbrella
+  // does speak for something it produces.
+  if task.cmd.length() == 0 && task.steps.length() == 0 {
     return Some(
       "task `\{task.name}` declares `provides.executable` but has no `cmd`, so it produces nothing",
     )

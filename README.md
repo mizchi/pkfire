@@ -757,6 +757,136 @@ rewrites `src/**` is a fixpoint, not a cycle. A genuine cycle — two
 tasks each reading what the other writes — is reported before anything
 runs, naming the patterns and a path that matches both.
 
+### Toolchains: resolved, not declared
+
+`tools { ["go"] = "1.26.2" }` is a string you type and then have to
+remember to change. Nothing checks it, so upgrading Go leaves the
+action key where it was and every entry the old compiler built stays a
+hit. A `Toolchain` is the same declaration made checkable:
+
+```pkl
+local build = new Task {
+  name = "build"
+  cmd = "go build ./..."
+  inputs { "**/*.go"; "go.mod" }
+  outputs { "bin/app" }
+  toolchains {
+    new Toolchain { name = "go" }
+    new Toolchain { name = "protoc"; versionCmd = "protoc --version" }
+  }
+}
+```
+
+pkfire finds the executable on `PATH`, asks it its version, and keys on
+what it observed. Upgrade the compiler and the key moves with nothing
+edited.
+
+`hashBinary = true` hashes the executable's bytes too. That is the
+sound option — a version string can lie, and two builds of `go1.26.2`
+are not necessarily the same compiler — but it costs a read of the
+whole executable per run, so it is opt-in rather than the default.
+
+The **resolved path stays out of the key**. `/opt/homebrew/bin/go` and
+`/usr/bin/go` are the same toolchain as far as a build is concerned,
+and hashing the path would split the cache between two machines that
+should share it — which is the whole reason a remote cache exists.
+`pkf explain` reports it, because that is where someone asking "why is
+my key different from CI's" will look:
+
+```
+toolchains (1):
+  go  go version go1.26.2 darwin/arm64
+    /opt/homebrew/bin/go
+```
+
+A declared toolchain that is missing is fatal at key time, so the
+message names the task and the tool rather than surfacing as a shell's
+`command not found` on whichever line happened to use it.
+`optional = true` records the absence in the key instead, so a run that
+went ahead without the tool cannot share an entry with one that had it.
+
+Resolution is memoized per process: thirty tasks naming one compiler
+interrogate it once.
+
+### Cross-compiling: what a task builds *for*
+
+The execution platform — the machine running the action — is always in
+the key. `targetPlatform` is the other half:
+
+```pkl
+targetPlatform = "linux/arm64"
+```
+
+Two cross-compiles that issue the same command on the same machine and
+differ only in where the result is meant to run are different actions,
+and now key differently. Null, the default, means the task builds for
+the machine it runs on.
+
+### Steps: one task, several cached actions
+
+A task is one command and therefore one cache key. A pipeline written
+as one `&&` chain re-runs all of it whenever any part has to. `steps`
+splits that:
+
+```pkl
+local bundle = new Task {
+  name = "bundle"
+  steps {
+    new Step {
+      name = "codegen"
+      cmd = "pnpm codegen"
+      inputs { "schema/**" }
+      outputs { "gen/**" }
+    }
+    new Step {
+      name = "compile"
+      cmd = "tsc -b"
+      inputs { "src/**"; "gen/**" }
+      outputs { "lib/**" }
+    }
+    new Step {
+      name = "link"
+      cmd = "esbuild lib/index.js --bundle --outfile=dist/app.js"
+      inputs { "lib/**" }
+      outputs { "dist/app.js" }
+    }
+  }
+}
+```
+
+Each step has its own `inputs` and `outputs`, so each has its own
+action key and its own cache entry. Edit `src/` and `codegen` is not
+re-run:
+
+```
+$ pkf run bundle
+pkf: # bundle/codegen (cache hit 3f2063a2, replaying logs)
+pkf: $ bundle/compile
+pkf: $ bundle/link
+pkf: 3 task(s) · 1 cached · 2 ran · 14ms
+```
+
+Everything except `cmd`, `inputs` and `outputs` comes from the task —
+`shell`, `env`, `workdir`, `tools`, `cache`, `hermetic`, `inheritEnv`,
+`params` — so a pipeline is configured once and a step says only what
+it runs and what it touches.
+
+Steps run under `<task>/<step>`, which is what the output calls them
+and what `pkf run bundle/link` accepts. They are `internal`, so
+`pkf list` still shows one task and `pkf list --all` shows the
+pipeline. Depending on `bundle` means depending on the whole of it.
+
+Ordering is **declaration order**, not inference. Artifact inference
+would order any two steps where one reads what the other writes, but a
+step with no outputs — a migration, a lint, a check — would float free
+of the sequence its author wrote down.
+
+`steps` cannot be combined with `cmd` (a task is one or the other) or
+with `services` (a service's lifetime spans one command, and which step
+of a pipeline it should wrap has no answer worth guessing at).
+Duplicate step names, and a step whose composed name collides with a
+real task, are refused when the Taskfile loads.
+
 ### Providers: what a dependency hands over
 
 `deps` has meant one thing: run that first. A `provides` block makes it
