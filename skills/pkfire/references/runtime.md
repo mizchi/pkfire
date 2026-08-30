@@ -291,6 +291,35 @@ Rules:
 value's origin. The file equivalent needs no schema —
 `inputs { ...producer.outputs }` is ordinary Pkl.
 
+## Timeouts and platform requirements
+
+`timeoutSeconds > 0` runs the command under a deadline. On expiry the
+shell is signalled first, then the descendants enumerated before it was
+killed (a dead shell's children are reparented and can no longer be
+found through it); SIGTERM, five-second grace, then SIGKILL. The task
+fails with exit 143. Signalling children first would let the shell run
+the next line of the script, so the order is load-bearing. Not hashed.
+
+`requiresPlatform` is a list of `<os>/<arch>` strings checked before the
+command is spawned; empty means any. A mismatch is fatal and names the
+task, the requirement and the machine. Not hashed — the execution
+platform already is.
+
+## Evaluation cache
+
+The rendered Taskfile is memoized under `<cache_root>/eval/<slot>`.
+
+- The slot is keyed on the Taskfile's path and its own bytes.
+- The entry records `(module, digest)` for every module the loader read
+  and `(dir, listing digest)` for each directory containing one. Every
+  record is re-validated on lookup; any mismatch, unreadable module, or
+  older format version is a miss.
+- The directory listings are what catch a *new* file matching an
+  `import*` glob, which changes the module graph without changing any
+  recorded module's bytes.
+- `package://` modules are recorded by URI, which is version-pinned.
+- `PKFIRE_MBT_NO_EVAL_CACHE=1` disables it.
+
 ## Glob expansion
 
 A wildcard pattern walks only what it can match, bounded by the pattern

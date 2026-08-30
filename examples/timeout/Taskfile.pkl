@@ -1,0 +1,34 @@
+/// Fixture for `timeoutSeconds` and `requiresPlatform`.
+///
+/// `hang` sleeps far past its deadline and then echoes. Both halves
+/// matter: the run must end at the deadline, and `after the sleep` must
+/// never be printed — a shell whose child is killed first notices, and
+/// carries on with the next line of a script that was supposed to have
+/// been stopped.
+///
+/// Relative `amends`: both fields are unreleased.
+amends "../../pkl/Taskfile.pkl"
+
+local hang = new Task {
+  name = "hang"
+  cmd = "echo before the sleep && sleep 60 && echo after the sleep"
+  inputs { "src/**" }
+  outputs { "never.txt" }
+  timeoutSeconds = 2
+}
+
+local quick = new Task {
+  name = "quick"
+  cmd = "cat src/a.txt > done.txt && echo finished well inside the deadline"
+  inputs { "src/**" }
+  outputs { "done.txt" }
+  timeoutSeconds = 60
+}
+
+local elsewhere = new Task {
+  name = "elsewhere"
+  cmd = "echo unreachable"
+  requiresPlatform { "plan9/vax" }
+}
+
+tasks { hang; quick; elsewhere }

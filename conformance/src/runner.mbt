@@ -47,7 +47,17 @@ pub async fn run(bin : String, s : Scenario, repo_root : String) -> RunResult {
     }
   }
 
-  let before = snapshot_tree(work)
+  // pkfire's own cache is not workspace state. A scenario that points
+  // `PKFIRE_MBT_CACHE_DIR` at a path inside the fixture — several do, to
+  // keep the cache isolated per run — would otherwise have every cache
+  // entry show up in its filesystem delta, which turns "did this run
+  // touch the workspace?" into "does the cache still have exactly this
+  // internal layout?" and churns goldens on every cache-format change.
+  let cache_rel = match s.env.get("PKFIRE_MBT_CACHE_DIR") {
+    Some(dir) => if dir.has_prefix("/") { None } else { Some(dir) }
+    None => None
+  }
+  let before = snapshot_tree(work, exclude=cache_rel)
 
   // PKF_CONFORMANCE_SUBDIR runs pkf from a subdirectory of the fixture root.
   let run_dir = match s.env.get("PKF_CONFORMANCE_SUBDIR") {
@@ -62,7 +72,7 @@ pub async fn run(bin : String, s : Scenario, repo_root : String) -> RunResult {
   )
   let stdout = bytes_to_string(out_data.binary())
   let stderr = bytes_to_string(err_data.binary())
-  let after = snapshot_tree(work)
+  let after = snapshot_tree(work, exclude=cache_rel)
   let result = RunResult::{
     stdout,
     stderr,
@@ -106,9 +116,12 @@ async fn copy_tree(src : String, dst : String) -> Unit {
 ///|
 /// Map of relative path -> sha256 hex for every regular file under root.
 /// Mirrors Go's SnapshotTree.
-async fn snapshot_tree(root : String) -> Map[String, String] {
+async fn snapshot_tree(
+  root : String,
+  exclude~ : String? = None,
+) -> Map[String, String] {
   let out : Map[String, String] = Map([])
-  snapshot_into(root, "", out)
+  snapshot_into(root, "", out, exclude)
   out
 }
 
@@ -117,6 +130,7 @@ async fn snapshot_into(
   dir : String,
   rel_prefix : String,
   out : Map[String, String],
+  exclude : String?,
 ) -> Unit {
   if !@xfs.exists(dir) {
     return
@@ -125,8 +139,11 @@ async fn snapshot_into(
   for name in entries {
     let full = dir + "/" + name
     let rel = if rel_prefix == "" { name } else { rel_prefix + "/" + name }
+    if exclude is Some(skip) && rel == skip {
+      continue
+    }
     match @xfs.kind(full) {
-      Directory => snapshot_into(full, rel, out)
+      Directory => snapshot_into(full, rel, out, exclude)
       Regular => {
         let data = @xfs.read_file(full)
         out[rel] = sha256_hex(data.binary())

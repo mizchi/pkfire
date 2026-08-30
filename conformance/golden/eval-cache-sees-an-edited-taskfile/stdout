@@ -1,0 +1,4 @@
+task: build-original
+  visibility: public
+  cache: true
+  cmd: echo rebuilt

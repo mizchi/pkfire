@@ -12,6 +12,73 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`timeoutSeconds`: a task that hangs stops the task, not the build.**
+  Until now a command that wedged on a network read, or waited for input
+  nobody was going to type, blocked the run until something outside
+  killed it — and what that something reported was a job timeout rather
+  than the task responsible.
+
+  ```pkl
+  timeoutSeconds = 300
+  ```
+
+  The kill is the whole process tree, and the **order matters**: a shell
+  whose child is signalled first notices the death, concludes the
+  command finished, and runs the next line of a script that was supposed
+  to have been stopped. `sleep 60 && echo after` printed `after`.
+  The shell is signalled before the children it started — which means
+  enumerating them first, since a dead shell's children are reparented
+  and can no longer be found through it. SIGTERM, then SIGKILL after a
+  five-second grace, the same sequence a service teardown uses. The task
+  fails with exit 143 (128 + SIGTERM), so a log reading only the number
+  still says "terminated".
+
+  Not part of the action key: raising a timeout does not change what the
+  command produces, and invalidating every entry over it would punish
+  tuning the number.
+
+- **`requiresPlatform`: a task can say where it is able to run.**
+
+  ```pkl
+  requiresPlatform { "linux/amd64"; "linux/arm64" }
+  ```
+
+  Checked before the command is spawned, so a task that cannot run here
+  says so by name — with what it required and what this machine is —
+  instead of failing somewhere inside a script with whatever the first
+  platform-specific tool in it happens to print. Empty, the default,
+  means any platform. Not hashed: it constrains *whether* a task runs,
+  and the execution platform is already in the key.
+
+### Performance
+
+- **Pkl evaluation is memoized.** Every `pkf` invocation re-evaluated the
+  Taskfile from source — ~164 ms of a ~186 ms fully-cached run on this
+  repository, about 85% of the work of a command that by construction
+  had nothing to do. The action cache made the tasks free and then paid
+  that toll anyway, on every `run`, `list`, `graph`, `explain` and
+  `affected`.
+
+  | | before | after |
+  |---|---|---|
+  | `pkf list` | 182 ms | **4 ms** |
+  | `pkf run fmt:check` (cached) | 190 ms | **7 ms** |
+  | `pkf run ci` (dogfood, cached) | 196 ms | **83 ms** |
+
+  An evaluation is a pure function of the modules it read, and the
+  loader already walks `amends` / `extends` / `import` — glob imports
+  included — to seed the evaluator, so it knows that set exactly. The
+  entry records every module with its digest and re-validates all of
+  them on lookup; anything unexpected is a miss rather than a guess. A
+  stale plan would run yesterday's commands and report success, so the
+  only outcome a hit may produce is "the evaluation you were about to do
+  returns exactly this".
+
+  Glob imports get one extra guard: a *new* file matching
+  `import* "rules/*.pkl"` belongs in the graph even though no recorded
+  module's bytes changed, so the listing of each module's directory is
+  hashed too. `PKFIRE_MBT_NO_EVAL_CACHE=1` turns the whole thing off.
+
 - **A toolchain selects a different executable per target platform.**
   `forTarget` is what makes `toolchains` a resolver rather than a
   lookup: one declaration, and which compiler it resolves to depends on

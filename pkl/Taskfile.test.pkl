@@ -189,6 +189,28 @@ facts {
     ).targetPlatform == "linux/arm64"
   }
 
+  ["timeoutSeconds defaults to no limit, and rejects a negative"] {
+    build.timeoutSeconds == 0
+      && (new Schema.Task { name = "t"; cmd = "x"; timeoutSeconds = 30 }).timeoutSeconds == 30
+      && module.catch(() ->
+        (new Schema.Task { name = "t"; cmd = "x"; timeoutSeconds = -1 }).timeoutSeconds
+      ) != null
+  }
+
+  ["requiresPlatform is empty by default, meaning any platform"] {
+    build.requiresPlatform.isEmpty
+  }
+
+  ["requiresPlatform round-trips a list of platforms"] {
+    (
+      new Schema.Task {
+        name = "t"
+        cmd = "x"
+        requiresPlatform { "linux/amd64"; "linux/arm64" }
+      }
+    ).requiresPlatform.toList() == List("linux/amd64", "linux/arm64")
+  }
+
   ["steps is empty by default, so a task is one command"] {
     build.steps.isEmpty
   }

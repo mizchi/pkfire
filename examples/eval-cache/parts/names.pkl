@@ -1,0 +1,6 @@
+/// Imported by the fixture's Taskfile. The eval-cache scenarios edit
+/// this file after warming the cache: the Taskfile itself is untouched,
+/// so a cache keyed on the entry point alone would serve a stale plan.
+module names
+
+buildTask: String = "build-original"

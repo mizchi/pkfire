@@ -361,6 +361,32 @@ class Task {
   /// therefore only as accurate as the last time someone edited it.
   toolchains: Listing<Toolchain> = new {}
 
+  /// Seconds after which this task's command is killed and the task
+  /// fails. 0 (the default) means no limit.
+  ///
+  /// A build tool without this hangs CI: a command that wedges on a
+  /// network read or waits for input nobody will type blocks the run
+  /// until something outside kills it, and what that something reports
+  /// is a job timeout rather than the task responsible. The kill is the
+  /// same SIGTERM-then-SIGKILL sequence a service teardown uses, so a
+  /// shell and its children go together.
+  ///
+  /// Not part of the action key: raising a timeout does not change what
+  /// the command produces, and invalidating every entry over it would
+  /// punish tuning the number.
+  timeoutSeconds: Int(this >= 0) = 0
+
+  /// Execution platforms this task can run on, as `<os>/<arch>`
+  /// strings — `{ "linux/amd64"; "linux/arm64" }`. Empty means any.
+  ///
+  /// Checked before the command is spawned, so a task that cannot run
+  /// here says so by name instead of failing somewhere inside a script
+  /// with whatever the first Linux-only tool in it happens to print.
+  /// The execution platform is already part of the action key; this
+  /// constrains *whether* the task runs, not what it produces, so it is
+  /// not hashed.
+  requiresPlatform: Listing<String> = new {}
+
   /// The platform this task produces artifacts *for*, when it differs
   /// from the one running it — `"linux/arm64"`, `"wasm32-wasi"`.
   ///
@@ -498,6 +524,8 @@ class RenderedTask {
   acceptsArgs: Boolean
   params: Listing<RenderedParam>
   toolchains: Listing<RenderedToolchain>
+  timeoutSeconds: Int
+  requiresPlatform: Listing<String>
   targetPlatform: String?
   steps: Listing<RenderedStep>
   provides: RenderedProviders
@@ -586,6 +614,8 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
           }
         }
       }
+      timeoutSeconds = t.timeoutSeconds
+      requiresPlatform = t.requiresPlatform
       targetPlatform = t.targetPlatform
       steps = new Listing {
         for (st in t.steps) {
