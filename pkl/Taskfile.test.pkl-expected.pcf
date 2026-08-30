@@ -35,6 +35,7 @@ examples {
       retries = 0
       requiresPlatform {}
       targetPlatform = null
+      config {}
       steps {}
       provides {
         executable = null

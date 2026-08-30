@@ -78,7 +78,8 @@ Set per-task `shell` and `shellFlags` when they differ from
 | `timeoutSeconds` | non-negative `Int` | `0` | Deadline for the command; zero means none. Expiry kills the process tree and fails the task with 143. Not hashed. |
 | `retries` | non-negative `Int` | `0` | Extra attempts after a failure; zero means one attempt. Every attempt is announced, and the count reaches `--execution-log`. Each attempt gets a fresh sandbox. Not hashed. |
 | `requiresPlatform` | `Listing<String>` | empty | `<os>/<arch>` execution platforms this task can run on; empty means any. Checked before the command is spawned. Not hashed. |
-| `targetPlatform` | `String?` | `null` | What the task builds *for*, when that differs from where it runs. Selects `Toolchain.forTarget` entries. Part of the action key. |
+| `targetPlatform` | `String?` | `null` | What the task builds *for*, when that differs from where it runs. Selects `Toolchain.forTarget` entries. Propagates to dependencies. Part of the action key. |
+| `config` | `Mapping<String, String>` | empty | Build settings this task and everything under it are built with. Merged per key down the graph; reaches the command as `$PKF_CONFIG_<KEY>`. Part of the action key. |
 | `steps` | `Listing<Step>` | empty | Splits the task into separately cached actions named `<task>/<step>`, chained in declaration order. Mutually exclusive with `cmd`. |
 | `provides` | `Providers` | empty | Values handed to direct dependents as environment variables, with paths resolved into the dependent's own working directory. Part of the action key. |
 | `params` | `Listing<Param>` | empty | Typed named target flags. |

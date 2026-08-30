@@ -33,6 +33,40 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`config`: build settings that propagate down the graph.**
+  `targetPlatform` says *where* a subtree's output is meant to run and
+  now transitions to dependencies. `config` is the same mechanism for
+  everything else about how a subtree is built.
+
+  ```pkl
+  local app = new Task {
+    name = "app"
+    config { ["mode"] = "release" }
+    deps { lib }
+  }
+  ```
+
+  `lib` is built in release mode too — without saying so, and without
+  being duplicated once per mode. Each setting reaches the command as
+  `$PKF_CONFIG_<KEY>` uppercased, so a script can act on it, and is part
+  of the action key because the command sees it.
+
+  Settings **merge per key** rather than replacing wholesale, so a host
+  tool that must always build unoptimized pins the one setting it cares
+  about and inherits the rest. A declared `targetPlatform`, by contrast,
+  replaces the inherited one — a host tool inside a cross build is not
+  building for arm64 in any sense.
+
+  `pkf run --config KEY=VALUE` (repeatable) seeds the run; a task's own
+  declaration still wins for its subtree, so pinning cannot be
+  overridden from the outside. A bare key with no `=` is refused rather
+  than read as an empty value.
+
+  Two different values for one setting on one task in the same run are
+  refused exactly as two platforms are, and the message names the
+  setting that differs rather than making the reader diff two
+  configurations by eye.
+
 - **`targetPlatform` propagates down the graph.** It said what a task
   builds *for*, and it was read straight off the task — so it stopped at
   the task that declared it. A cross build's dependencies were resolved

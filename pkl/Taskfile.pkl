@@ -421,6 +421,42 @@ class Task {
   /// the task builds for the machine it runs on.
   targetPlatform: String? = null
 
+  /// Build settings this task and everything under it are built with.
+  ///
+  /// `targetPlatform` says *where* a subtree's output is meant to run
+  /// and propagates down the graph. This is the same mechanism for
+  /// everything else about how it is built:
+  ///
+  ///     local app = new Task {
+  ///       name = "app"
+  ///       config { ["mode"] = "release" }
+  ///       deps { lib }
+  ///     }
+  ///
+  /// `lib` is now built in release mode too, without saying so and
+  /// without being duplicated for each mode. Each setting reaches the
+  /// command as `$PKF_CONFIG_<KEY>` uppercased — `$PKF_CONFIG_MODE`
+  /// here — so a script can act on it.
+  ///
+  /// Merged per key, not replaced: a task inherits every setting from
+  /// whoever depends on it and overrides only the keys it names. A host
+  /// tool that must always build unoptimized can pin `mode` for itself
+  /// and its own subtree while inheriting everything else.
+  ///
+  /// `pkf run --config KEY=VALUE` seeds the targets named on the
+  /// command line. A task's own declaration still wins for its subtree,
+  /// so pinning cannot be overridden from the outside.
+  ///
+  /// Part of the action key, because the command sees it. Distinct from
+  /// `env`, which is this task's environment and reaches nothing else,
+  /// and from `params`, which are per-invocation flags rather than a
+  /// property of a subtree.
+  ///
+  /// A task reached with two different values for one setting in one
+  /// run is refused: it has one set of `outputs`, so both would write
+  /// the same paths.
+  config: Mapping<String, String> = new {}
+
   /// Commands this task runs, each cached separately. See `Step`.
   ///
   /// Mutually exclusive with `cmd`: a task is either one command or a
@@ -552,6 +588,7 @@ class RenderedTask {
   retries: Int
   requiresPlatform: Listing<String>
   targetPlatform: String?
+  config: Mapping<String, String>
   steps: Listing<RenderedStep>
   provides: RenderedProviders
   specRef: String?
@@ -643,6 +680,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       retries = t.retries
       requiresPlatform = t.requiresPlatform
       targetPlatform = t.targetPlatform
+      config = t.config
       steps = new Listing {
         for (st in t.steps) {
           new RenderedStep {

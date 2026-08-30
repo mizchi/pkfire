@@ -55,6 +55,9 @@ struct Task {
   /// What this task builds *for*, when that differs from where it
   /// runs. None means the execution platform.
   target_platform : String?
+  /// Build settings this task and everything under it are built with.
+  /// Propagates down the graph like `target_platform`, merged per key.
+  config : Map[String, String]
   /// Commands this task runs, each cached on its own. Empty for an
   /// ordinary single-command task. See `steps.mbt`.
   steps : Array[Step]
@@ -321,6 +324,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(String(v)) => Some(v)
       _ => None
     }
+    let config = match task_entries.get("config") {
+      Some(v) => parse_string_map(v)
+      None => Map([], capacity=0)
+    }
     let steps : Array[Step] = []
     match task_entries.get("steps") {
       Some(Array(raw_steps)) =>
@@ -472,6 +479,7 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       retries,
       requires_platform,
       target_platform,
+      config,
       steps,
       provides,
       params,
@@ -2619,6 +2627,15 @@ async fn[X] run_task(
   if opts.profile.length() > 0 {
     extra_env["PKF_PROFILE"] = opts.profile
   }
+  // Build settings from the resolved configuration, as
+  // `$PKF_CONFIG_<KEY>`. Prefixed rather than bare so a setting cannot
+  // shadow a param or an `env` entry, and set from the same
+  // configuration the key hashed — a command that saw a setting the key
+  // did not describe is exactly the drift the action IR exists to
+  // prevent.
+  for pair in config_or_declared(config, task).settings {
+    extra_env[config_env_name(pair.0)] = pair.1
+  }
   // Start declared services before running cmd. Cache hit above
   // short-circuits the spawn; reuse semantics apply per service.
   let running : Array[RunningService] = []
@@ -3094,6 +3111,11 @@ struct ParsedRunArgs {
   /// stays the default: raising it changes when side effects happen
   /// relative to each other, which is the Taskfile author's call.
   jobs : Int
+  /// Build settings given on the command line, seeding the run's
+  /// default configuration. Like `keep_going`, this describes the run
+  /// rather than one task — it is the configuration every target starts
+  /// in, and a task's own `config` still wins for its subtree.
+  config_settings : Map[String, String]
   /// Where to write the machine-readable run record, or "" for none.
   /// Like `keep_going`, this describes the run rather than any single
   /// task, so it stays out of `RunOptions` — which is hashed into every
@@ -3118,7 +3140,7 @@ fn runner_bool_flags() -> Array[String] {
 ///|
 /// Reserved runner flags that take a value.
 fn runner_value_flags() -> Array[String] {
-  ["profile", "jobs", "execution-log"]
+  ["profile", "jobs", "execution-log", "config"]
 }
 
 ///|
@@ -3199,6 +3221,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
   let mut profile = ""
   let mut jobs = 1
   let mut execution_log = ""
+  let config_settings : Map[String, String] = Map([], capacity=2)
   let mut i = 0
   let mut after_dash_dash = false
   while i < args.length() {
@@ -3266,7 +3289,25 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
               return None
             }
         }
-        if name == "profile" {
+        if name == "config" {
+          // `KEY=VALUE`, repeatable. A bare key is refused rather than
+          // read as an empty value: `--config release` looks like it
+          // turns something on and would silently set nothing.
+          match v.find("=") {
+            Some(eq) => {
+              let key = v[:eq].to_owned()
+              if key.length() == 0 {
+                die("pkf run: `--config` needs a KEY=VALUE (got `\{v}`)")
+                return None
+              }
+              config_settings[key] = v[eq + 1:].to_owned()
+            }
+            None => {
+              die("pkf run: `--config` needs a KEY=VALUE (got `\{v}`)")
+              return None
+            }
+          }
+        } else if name == "profile" {
           profile = v
         } else if name == "execution-log" {
           execution_log = v
@@ -3331,6 +3372,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
     positionals,
     keep_going,
     jobs,
+    config_settings,
     execution_log,
     opts: RunOptions::{
       no_cache,
@@ -5261,7 +5303,7 @@ fn completion_bash() -> String {
     #|      ;;
     #|    run)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --execution-log --remote-only -j --jobs" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --config --execution-log --remote-only -j --jobs" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -5440,6 +5482,7 @@ fn completion_zsh() -> String {
     #|          '--refresh[skip lookup but store outputs]' \
     #|          '--timing[print task durations]' \
     #|          '--execution-log[write a JSON Lines record of the run]' \
+    #|          '--config[build setting KEY=VALUE for this run]' \
     #|          '--quiet[suppress per-task log lines]' \
     #|          '--keep-going[do not stop on first failure]' \
     #|          '--profile[profile name for cache keys]' \
@@ -5615,6 +5658,7 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l refresh -d 'skip lookup but store outputs'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l timing -d 'print task durations'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l execution-log -d 'write a JSON Lines record of the run'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l config -d 'build setting KEY=VALUE for this run'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l quiet -d 'suppress per-task log lines'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'
@@ -5656,7 +5700,8 @@ fn usage_text() -> String {
     #|  run <task>... [-j N|auto] [--dry-run] [--print-hash] [--no-cache]
     #|              [--refresh] [--explain-cache] [--remote-only]
     #|              [--keep-going] [--profile=NAME] [--quiet] [--timing]
-    #|              [--execution-log=FILE] [--name=value]... [-- positional...]
+    #|              [--execution-log=FILE] [--config=KEY=VALUE]...
+    #|              [--name=value]... [-- positional...]
     #|  list [-v] [--all]
     #|  graph [--all]
     #|  affected <path>... | --check
@@ -6565,7 +6610,11 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       // wanted in two configurations at once: both would write the same
       // `outputs`, and picking either silently gives one consumer the
       // other's artifact.
-      let (configs, conflict) = resolve_configurations(plan, graph)
+      let (configs, conflict) = resolve_configurations(
+        plan,
+        graph,
+        seed=config_with_settings("", parsed.config_settings),
+      )
       match conflict {
         Some(c) => {
           die(config_conflict_message(c))

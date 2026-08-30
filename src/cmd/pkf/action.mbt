@@ -330,6 +330,10 @@ fn lower_task_to_action(
     env.push((k, merged.get(k).unwrap()))
   }
 
+  // The configuration this action is built in, which is not always the
+  // one the task declares: a dependency of a cross build, or of a task
+  // that set a build setting, inherits it. See `configuration.mbt`.
+  let resolved = config_or_declared(config, task)
   // Execution properties: declared tool versions (self-reported cache
   // salt), the run profile, and the raw param values. Params appear
   // here as well as in `env` because a param that is not referenced by
@@ -357,6 +361,14 @@ fn lower_task_to_action(
   if profile.length() > 0 {
     props["profile"] = profile
   }
+  // Build settings from the resolved configuration. The command sees
+  // them as `$PKF_CONFIG_<KEY>`, so an action built with `mode=release`
+  // and one built with `mode=debug` must not share an entry — and a
+  // task that inherited the setting from a consumer is as affected as
+  // the one that declared it.
+  for pair in resolved.settings {
+    props["config." + pair.0] = pair.1
+  }
   let execution_properties : Array[(String, String)] = []
   for k in sorted_keys(props) {
     execution_properties.push((k, props.get(k).unwrap()))
@@ -380,7 +392,7 @@ fn lower_task_to_action(
     outputs,
     working_directory: normalize_workdir(task.workdir),
     execution_platform: exec_platform(),
-    target_platform: config_or_declared(config, task).target_platform,
+    target_platform: resolved.target_platform,
     execution_properties,
   }
 }

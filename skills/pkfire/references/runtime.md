@@ -274,9 +274,22 @@ resolve for the target.
   and only one answer that satisfies both. On its own it is a host
   build, as before.
 
+`config` carries build settings through the same transition. They merge
+**per key**, so a task inherits every setting from whoever depends on it
+and overrides only the ones it names — a declared `targetPlatform`, by
+contrast, *replaces* the inherited one, since a host tool inside a cross
+build is not building for arm64 in any sense. Each setting reaches the
+command as `$PKF_CONFIG_<KEY>` uppercased, and is hashed as
+`config.<key>` in the action's execution properties because the command
+sees it.
+
+`pkf run --config KEY=VALUE` (repeatable) seeds the run's default
+configuration; a task's own `config` still wins for its subtree. A bare
+key with no `=` is refused rather than read as an empty value.
+
 A task reached in **two different declared configurations in one run**
-is refused before anything runs, naming both platforms and the task
-that originated each. Both would write the same `outputs`; building it
+is refused before anything runs, naming both configurations, the task
+that originated each, and — for settings — exactly which keys differ. Both would write the same `outputs`; building it
 twice needs per-configuration output roots, which do not exist yet. The
 two ways out are running the targets separately or giving the shared
 task its own `targetPlatform`.
@@ -287,8 +300,7 @@ so it reports the key `pkf run X` looks up; a task that a *different*
 run reaches in another configuration keys differently there, and
 `pkf run <that target> --print-hash` is what shows it.
 
-Not a schema change: `targetPlatform` is unchanged, only where it
-reaches. Action keys move for any task that is a dependency of one
+`targetPlatform` itself is unchanged, only where it reaches. Action keys move for any task that is a dependency of one
 declaring a `targetPlatform` — they were keyed wrong before.
 
 ## Steps

@@ -289,6 +289,7 @@ pkf run                        # no args = the `default` task (errors if absent)
 pkf run -- a b c               # forward args to the `default` task when it accepts args
 pkf run --timing build         # also print per-task wall time at the end
 pkf run --execution-log=run.jsonl build  # write a machine-readable record of the run
+pkf run --config mode=release build      # build setting for the run, propagates to deps
 pkf run 'test:*'               # glob over task names (also works on affected / clean)
 pkf clean                      # rm declared outputs of every task
 pkf clean --dry-run            # list what would be removed, remove nothing
@@ -1034,6 +1035,54 @@ pkf: task `lib` is needed for two target platforms in one run: linux/riscv64
 Building it twice needs per-configuration output roots — Bazel's
 `bazel-out/<config>/…` — which pkfire does not have. Until it does, the
 refusal is the honest answer.
+
+### Build settings: how a subtree is built
+
+`targetPlatform` says *where* a subtree's output is meant to run.
+`config` is the same mechanism for everything else:
+
+```pkl
+local app = new Task {
+  name = "app"
+  config { ["mode"] = "release" }
+  deps { lib }
+}
+```
+
+`lib` is now built in release mode too — without saying so, and without
+being duplicated once per mode. Each setting reaches the command as
+`$PKF_CONFIG_<KEY>` uppercased, so a script can act on it:
+
+```sh
+cc $([ "$PKF_CONFIG_MODE" = release ] && echo -O2) -o out src.c
+```
+
+Settings **merge per key** rather than replacing wholesale. A host tool
+that must always build unoptimized pins the one setting it cares about
+and inherits the rest:
+
+```pkl
+local codegen = new Task {
+  name = "codegen"
+  config { ["mode"] = "debug" }   // keeps app's `lto`, overrides `mode`
+}
+```
+
+`pkf run --config KEY=VALUE` seeds the run — repeatable, and a task's own
+declaration still wins for its subtree, so pinning cannot be overridden
+from the outside.
+
+Settings are part of the action key, because the command sees them. They
+are not `env`, which is one task's environment and reaches nothing else,
+and not `params`, which are per-invocation flags rather than a property
+of a subtree. Two different values for one setting on one task in the
+same run are refused exactly as two platforms are, and the message names
+the setting that differs rather than the whole configuration:
+
+```
+pkf: task `lib` is needed for two build configurations in one run: …
+  Differs on: mode: debug vs release
+```
 
 It also *selects the toolchain*, which is what makes `toolchains` a
 resolver rather than a lookup. One declaration:

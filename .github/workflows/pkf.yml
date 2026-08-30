@@ -286,6 +286,65 @@ jobs:
             || { echo "the replayed transcript is missing"; cat fetched.out; exit 1; }
           rm -f fetched.out runs.log out.log said.txt
 
+      # Build settings that transition. `config` is unreleased, so the
+      # fixture amends the schema by relative path and the conformance
+      # harness — which copies fixtures to a temp tree — cannot reach
+      # it; this covers it until the schema ships.
+      - name: Smoke - build settings reach dependencies and pinning holds
+        working-directory: examples/config-flags
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-config-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          "$BIN" run app > /dev/null
+          # `lib` declares nothing and is built in `app`'s configuration;
+          # `codegen` pins `mode` and still inherits `lto`.
+          grep -q 'lib mode=release lto=on' dist/lib.txt \
+            || { echo "lib did not inherit the settings"; cat dist/lib.txt; exit 1; }
+          grep -q 'gen mode=debug lto=on' dist/gen.txt \
+            || { echo "codegen did not pin mode while inheriting lto"; cat dist/gen.txt; exit 1; }
+
+          # The setting is in the key, so the same task in two
+          # configurations is two entries.
+          plain=$("$BIN" run lib --print-hash | awk '$2 == "lib" { print $1 }')
+          via=$("$BIN" run app --print-hash | awk '$2 == "lib" { print $1 }')
+          [ "$plain" != "$via" ] \
+            || { echo "lib keyed the same with and without the settings"; exit 1; }
+
+          # `--config` seeds the run; a task that pinned the setting
+          # still wins, or pinning would mean nothing from the outside.
+          rm -rf dist
+          "$BIN" run lib codegen --config mode=release > /dev/null
+          grep -q 'lib mode=release' dist/lib.txt \
+            || { echo "--config did not reach lib"; cat dist/lib.txt; exit 1; }
+          grep -q 'gen mode=debug' dist/gen.txt \
+            || { echo "--config overrode a pinned task"; cat dist/gen.txt; exit 1; }
+
+          # A bare key is refused rather than read as an empty value.
+          set +e
+          "$BIN" run lib --config release 2> bad.err
+          code=$?
+          set -e
+          [ "$code" != "0" ] || { echo "a bare --config was accepted"; exit 1; }
+          grep -q 'KEY=VALUE' bad.err \
+            || { echo "no diagnostic for a bare --config"; cat bad.err; exit 1; }
+
+          # Two configurations of one task in one run: refused, named for
+          # what actually differs.
+          set +e
+          "$BIN" run app debug-app 2> conflict.err
+          code=$?
+          set -e
+          [ "$code" != "0" ] || { echo "two configurations were not refused"; exit 1; }
+          grep -q 'two build configurations' conflict.err \
+            || { echo "wrong diagnostic"; cat conflict.err; exit 1; }
+          grep -q 'Differs on: mode: debug vs release' conflict.err \
+            || { echo "the differing setting was not named"; cat conflict.err; exit 1; }
+          rm -f bad.err conflict.err
+          rm -rf dist
+
       # A transition is only worth anything if it reaches toolchain
       # *resolution*. `lib` declares no platform, so before this it
       # resolved `cc` to the host compiler even inside an arm64 build —

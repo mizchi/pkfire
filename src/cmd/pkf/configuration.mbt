@@ -41,11 +41,77 @@ struct Configuration {
   /// `<os>/<arch>` this task builds for, or "" for the execution
   /// platform.
   target_platform : String
+  /// Build settings, sorted by key. An array rather than a map so two
+  /// configurations compare and hash the same however the Taskfile's
+  /// mapping happened to be ordered — the same reason provider env and
+  /// toolchain fields are sorted before they reach the key.
+  settings : Array[(String, String)]
 } derive(Eq)
 
 ///|
 fn Configuration::host() -> Configuration {
-  Configuration::{ target_platform: "" }
+  Configuration::{ target_platform: "", settings: [] }
+}
+
+///|
+/// `settings` as a lookup, for merging.
+fn Configuration::setting_map(self : Configuration) -> Map[String, String] {
+  let out : Map[String, String] = Map([], capacity=self.settings.length())
+  for pair in self.settings {
+    out[pair.0] = pair.1
+  }
+  out
+}
+
+///|
+/// A configuration from a settings lookup, canonically ordered.
+fn config_with_settings(
+  target_platform : String,
+  settings : Map[String, String],
+) -> Configuration {
+  let keys : Array[String] = []
+  for k, _ in settings {
+    keys.push(k)
+  }
+  keys.sort()
+  let sorted : Array[(String, String)] = []
+  for k in keys {
+    sorted.push((k, settings.get(k).unwrap()))
+  }
+  Configuration::{ target_platform, settings: sorted }
+}
+
+///|
+/// `parent` with `task`'s own declarations layered on top.
+///
+/// Merged per key rather than replaced: a task inherits every setting
+/// from whoever depends on it and overrides only the ones it names, so
+/// a host tool can pin the one setting it cares about without having to
+/// restate the rest.
+fn merge_settings(
+  parent : Configuration,
+  task : Task,
+) -> Map[String, String] {
+  let merged = parent.setting_map()
+  for k, v in task.config {
+    merged[k] = v
+  }
+  merged
+}
+
+///|
+/// What `task` is built with, given the configuration that reached it.
+///
+/// A declared `targetPlatform` *replaces* the inherited one — a host
+/// tool inside a cross build is not building for arm64 in any sense.
+/// Settings merge per key, so the same tool inherits every setting it
+/// does not name.
+fn effective_config(inherited : Configuration, task : Task) -> Configuration {
+  let platform = match task.target_platform {
+    Some(p) => p
+    None => inherited.target_platform
+  }
+  config_with_settings(platform, merge_settings(inherited, task))
 }
 
 ///|
@@ -55,7 +121,7 @@ fn Configuration::host() -> Configuration {
 /// `describe` has no consumers to inherit from, and reading the
 /// declaration is what it did before transitions existed.
 fn Configuration::declared(task : Task) -> Configuration {
-  Configuration::{ target_platform: task.target_platform.unwrap_or("") }
+  config_with_settings(task.target_platform.unwrap_or(""), task.config)
 }
 
 ///|
@@ -110,6 +176,11 @@ struct ConfigConflict {
 fn resolve_configurations(
   plan : Plan,
   graph : ActionGraph,
+  // The run's default configuration, from `--config`. Applies to every
+  // root and flows down from there, so a setting given on the command
+  // line reaches the whole run — while a task's own declaration still
+  // wins for its subtree, which is what makes pinning meaningful.
+  seed~ : Configuration = Configuration::host(),
 ) -> (Map[String, Configuration], ConfigConflict?) {
   let reached : Map[String, ConfigReach] = Map(
     [],
@@ -127,35 +198,41 @@ fn resolve_configurations(
       Some(t) => t
       None => continue
     }
-    // A task that declares its own platform is the origin of a
-    // transition: it overrides whatever reached it, and everything
-    // below inherits the new one. That is what lets a codegen tool
-    // inside a cross build pin itself to the host.
-    let own = match task.target_platform {
-      Some(p) => Some(ConfigReach::{
-        config: Configuration::{ target_platform: p },
-        origin: name,
-      })
-      None => None
+    // What reached this task, or nothing if it is a root.
+    let inherited = reached.get(name)
+    let base = match inherited {
+      Some(r) => r.config
+      None => seed
     }
-    let here = match own {
-      Some(r) => r
-      None =>
-        match reached.get(name) {
-          Some(r) => r
-          // A root nothing depends on, with nothing declared: the
-          // execution platform.
-          None => ConfigReach::{ config: Configuration::host(), origin: name }
-        }
+    // A task's own declarations layer on top of what reached it, and
+    // everything below inherits the result. A declared platform
+    // *replaces* the inherited one; settings merge per key, so a host
+    // tool can pin the one setting it cares about without restating the
+    // rest. That is what lets a codegen tool inside a cross build pin
+    // itself to the host.
+    let declares_platform = task.target_platform is Some(_)
+    let config = effective_config(base, task)
+    // The origin is the task an author would edit. A task that declared
+    // something is its own origin; otherwise the credit stays with
+    // whoever handed the configuration down.
+    let origin = if declares_platform || task.config.length() > 0 {
+      name
+    } else {
+      match inherited {
+        Some(r) => r.origin
+        None => name
+      }
     }
+    let here = ConfigReach::{ config, origin }
     reached[name] = here
-    // Only an explicit configuration transitions anything. A task that
-    // declares no `targetPlatform` has no opinion to pass down, and
-    // treating its default as one would make the feature unusable in
-    // the shape most Taskfiles have: a `ci` umbrella over everything
-    // would force the execution platform onto every dependency, and
-    // any cross-built task sharing one would conflict with it.
-    if here.config.target_platform.length() == 0 {
+    // Only a configuration someone actually asked for transitions
+    // anything. A task that declares nothing and inherited nothing has
+    // no opinion to pass down, and treating its default as one would
+    // make the feature unusable in the shape most Taskfiles have: a
+    // `ci` umbrella over everything would force the execution platform
+    // onto every dependency, and any cross-built task sharing one would
+    // conflict with it.
+    if config == Configuration::host() {
       continue
     }
     // Hand it to everything this task depends on.
@@ -163,20 +240,30 @@ fn resolve_configurations(
       Some(node) =>
         for edge in node.edges {
           let producer = edge.producer
-          // A producer that pins itself is not transitioned by anyone.
-          match plan.tasks.get(producer) {
-            Some(p) if p.target_platform is Some(_) => continue
-            _ => ()
-          }
           match reached.get(producer) {
-            Some(existing) =>
-              if existing.config != here.config && conflict is None {
+            // Reached twice. Whether that is a conflict depends on what
+            // the producer itself declares: two consumers disagreeing
+            // about a setting the producer pins is not a disagreement
+            // about anything, so the two are compared *after* its own
+            // declarations are applied — which is exactly what it will
+            // be built with either way.
+            Some(existing) => {
+              let settled = match plan.tasks.get(producer) {
+                Some(p) =>
+                  effective_config(existing.config, p) !=
+                  effective_config(here.config, p)
+                // Not in the plan, so nothing can override the
+                // difference.
+                None => existing.config != here.config
+              }
+              if settled && conflict is None {
                 conflict = Some(ConfigConflict::{
                   task: producer,
                   first: existing,
                   second: here,
                 })
               }
+            }
             None => reached[producer] = ConfigReach::{ ..here, }
           }
         }
@@ -191,13 +278,74 @@ fn resolve_configurations(
 }
 
 ///|
+/// The environment variable a build setting reaches the command as.
+///
+/// Prefixed so a setting cannot shadow a param (`$MODE`) or an `env`
+/// entry, and uppercased the way params already are.
+fn config_env_name(key : String) -> String {
+  "PKF_CONFIG_" + upcase(key)
+}
+
+///|
 /// How a configuration reads in a diagnostic.
+///
+/// Only the parts that carry information: a run with no build settings
+/// should not have an empty brace pair in its error message, and a run
+/// with several should not make the reader diff two long strings to
+/// find the one that differs.
 fn config_label(config : Configuration) -> String {
-  if config.target_platform.length() == 0 {
+  let platform = if config.target_platform.length() == 0 {
     "the execution platform (" + exec_platform() + ")"
   } else {
     config.target_platform
   }
+  if config.settings.length() == 0 {
+    return platform
+  }
+  let parts : Array[String] = []
+  for pair in config.settings {
+    parts.push(pair.0 + "=" + pair.1)
+  }
+  platform + " with " + join_with(parts, ", ")
+}
+
+///|
+/// The settings the two sides disagree about, `key: a vs b`.
+///
+/// Named individually because the interesting part of a conflict
+/// between two long configurations is the one key that differs, and
+/// asking the reader to diff two rendered configurations by eye is how
+/// a clear error becomes an unread one.
+fn config_differences(
+  first : Configuration,
+  second : Configuration,
+) -> Array[String] {
+  let a = first.setting_map()
+  let b = second.setting_map()
+  let keys : Array[String] = []
+  let seen : Map[String, Bool] = Map([], capacity=8)
+  for pair in first.settings {
+    if !seen.contains(pair.0) {
+      seen[pair.0] = true
+      keys.push(pair.0)
+    }
+  }
+  for pair in second.settings {
+    if !seen.contains(pair.0) {
+      seen[pair.0] = true
+      keys.push(pair.0)
+    }
+  }
+  keys.sort()
+  let out : Array[String] = []
+  for key in keys {
+    let left = a.get(key).unwrap_or("(unset)")
+    let right = b.get(key).unwrap_or("(unset)")
+    if left != right {
+      out.push(key + ": " + left + " vs " + right)
+    }
+  }
+  out
 }
 
 ///|
@@ -210,11 +358,27 @@ fn config_label(config : Configuration) -> String {
 fn config_conflict_message(conflict : ConfigConflict) -> String {
   let first = config_label(conflict.first.config)
   let second = config_label(conflict.second.config)
-  "task `\{conflict.task}` is needed for two target platforms in one run: " +
-  "\{first} (via `\{conflict.first.origin}`) and \{second} (via `\{conflict.second.origin}`).\n" +
-  "  Both would write the same `outputs`, so pkfire cannot build it twice yet.\n" +
-  "  Either run them separately, or give `\{conflict.task}` its own `targetPlatform`\n" +
-  "  so it pins one configuration regardless of who depends on it."
+  let platforms_differ = conflict.first.config.target_platform !=
+    conflict.second.config.target_platform
+  // Named by what actually differs, because "two configurations" sends
+  // the reader looking at the platform when the disagreement is over a
+  // build setting.
+  let what = if platforms_differ {
+    "two target platforms"
+  } else {
+    "two build configurations"
+  }
+  let mut message = "task `\{conflict.task}` is needed for \{what} in one run: " +
+    "\{first} (via `\{conflict.first.origin}`) and \{second} (via `\{conflict.second.origin}`)."
+  let diffs = config_differences(conflict.first.config, conflict.second.config)
+  if diffs.length() > 0 {
+    message = message + "\n  Differs on: " + join_with(diffs, "; ")
+  }
+  let pin = if platforms_differ { "targetPlatform" } else { "config" }
+  message +
+  "\n  Both would write the same `outputs`, so pkfire cannot build it twice yet." +
+  "\n  Either run them separately, or give `\{conflict.task}` its own `\{pin}`" +
+  "\n  so it pins one configuration regardless of who depends on it."
 }
 
 ///|

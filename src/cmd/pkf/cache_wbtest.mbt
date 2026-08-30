@@ -129,6 +129,7 @@ fn key_test_task(name : String) -> Task {
     retries: 0,
     requires_platform: [],
     target_platform: None,
+    config: Map([], capacity=0),
     steps: [],
     provides: Providers::empty(),
     params: [],

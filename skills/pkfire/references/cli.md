@@ -32,7 +32,7 @@ implemented.
 
 | Command | Implemented arguments | Result |
 | --- | --- | --- |
-| `run` | `<task>... [-j N\|auto] [--sandbox] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--execution-log=FILE] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
+| `run` | `<task>... [-j N\|auto] [--sandbox] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--execution-log=FILE] [--config=KEY=VALUE]... [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
 | `affected` | `<path>...`, `--changed=<file>`, or `--check` | Print the affected plan or run authored workflow tests. |
 | `watch` | `[task...]` | Watch the Taskfile directory and run affected non-service tasks, optionally filtered to exact names. |
 | `up` | `[service...]` | Start all or selected service tasks in the foreground. |

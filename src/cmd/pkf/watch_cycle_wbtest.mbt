@@ -68,6 +68,7 @@ fn watch_test_task(
     retries: 0,
     requires_platform: [],
     target_platform: None,
+    config: Map([], capacity=0),
     steps: [],
     provides: Providers::empty(),
     params: [],
