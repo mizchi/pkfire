@@ -297,6 +297,7 @@ pkf completion fish > ~/.config/fish/completions/pkf.fish
 pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
 pkf run -j 4 ci                # run up to 4 actions at once, respecting the graph
 pkf run -j auto ci             # one per available CPU (capped at 16)
+pkf run --sandbox test         # run against only the declared inputs
 pkf explain build              # dump every input to the action key (cache-miss debug)
 pkf run --profile=ci build     # tag the run; $PKF_PROFILE + cache splits per profile
 pkf run --remote-only build    # skip local cache, only consult remote (verify remote populated)
@@ -538,6 +539,57 @@ detection) sees a pipe under `-j`. And two tasks that each declare the
 same `services { … }` will each start it; services are not deduplicated
 across concurrent actions yet.
 
+### Running an action against only what it declared
+
+`inputs` has always been a promise about what a command reads, and
+nothing checked it. A task that reads a file it never declared runs
+fine and caches fine — and then serves a stale hit the day that file
+changes, so the failure shows up as a wrong build, far from the
+undeclared read that caused it.
+
+`pkf run --sandbox` makes the promise structural. Before the command
+runs, pkfire builds a tree containing exactly the declared inputs and
+the outputs of the actions this one depends on, and runs the command
+there:
+
+```
+$ pkf run sneaky              # reads a file it never declared
+pkf: $ sneaky
+$ pkf run --sandbox sneaky
+cat: undeclared/extra.txt: No such file or directory
+pkf: task `sneaky` failed with exit code 1
+```
+
+Declared outputs are collected back into the workspace afterwards.
+Anything else the command wrote stays in the sandbox and is reported,
+because an undeclared output is usually a missing `outputs` line:
+
+```
+pkf: task `messy` wrote `dist/scratch.log` without declaring it as an
+     output (discarded; add it to `outputs` to keep it)
+```
+
+A failed action produces nothing at all: a command that died half-way
+has written half an output, and the sandbox is what lets that stay out
+of the tree.
+
+This is Bazel's symlink forest and deliberately not its namespace
+sandbox. Inputs are symlinked, so materializing a large input set costs
+almost nothing — and **absolute paths still resolve**. `/usr/bin/cc`,
+`$HOME/.cargo`, the toolchain generally, are all still reachable. That
+is a real limit: hermetic *toolchains* are a separate problem, and a
+sandbox that hid `/usr/bin` would make every task fail for a reason
+that has nothing to do with its `inputs`. What this catches is the
+mistake people actually make, which is reading a workspace file you
+forgot to declare.
+
+Tasks with no declared `inputs` run unsandboxed — there is nothing to
+constrain — as does a task whose `workdir` resolves outside the repo,
+which cannot be mirrored; both say so rather than pretending.
+[`pkf trace`](./docs/auto-inputs.md) is the complement: the sandbox
+tells you that you forgot something, `trace --emit` tells you what to
+write down.
+
 ### Artifacts: the files are the edges
 
 A declared `outputs` pattern makes its task the *producer* of those
@@ -772,6 +824,7 @@ Open a PR to add yours.
 | 11 | Readiness probes (`readyPort` / `readyCmd`): reuse already-running services and gate dependents on real readiness | ✅ |
 | 12 | Env inheritance default + variadic tail args (`acceptsArgs`) + typed named params (`params` w/ string/enum/int/bool) + `/` in task names | ✅ |
 | 13 | Input auditing via libc interposition (`pkf trace`) — see [docs/auto-inputs.md](./docs/auto-inputs.md) | ✅ Linux only |
+| 14 | Sandboxed execution (`pkf run --sandbox`): declared inputs only, declared outputs collected back | ✅ symlink forest; absolute paths (the toolchain) still resolve |
 | — | Presentation flags the Go implementation had and the MoonBit port has not reimplemented: `list --long` / `--unsorted` / `--color`, `graph --format` (DOT, Mermaid) / `--target` / `--depth`, `doctor --fix`, `explain --diff`, `lint --fix` | ⛔ they exit with "unknown flag"; `graph --json` and `list --json` cover the tooling cases |
 
 The [Bazel-style build engine roadmap][roadmap] tracks what separates

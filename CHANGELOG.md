@@ -12,6 +12,36 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --sandbox` runs an action against only what it declared.**
+  `inputs` was a promise nothing checked: a task that reads a file it
+  never declared runs fine, caches fine, and then serves a stale hit
+  the day that file changes — so the failure surfaces as a wrong build,
+  far from the undeclared read that caused it. The sandbox materializes
+  exactly the declared inputs, plus the outputs of the actions this one
+  depends on, and runs the command there, so the read fails at the
+  mistake:
+
+  ```
+  $ pkf run --sandbox sneaky
+  cat: undeclared/extra.txt: No such file or directory
+  pkf: task `sneaky` failed with exit code 1
+  ```
+
+  Declared outputs come back into the workspace on success; anything
+  else the command wrote is reported and discarded, since an undeclared
+  output is usually a missing `outputs` line. A failed action produces
+  nothing at all — a command that died half-way has written half an
+  output, and containing that is what the sandbox is for.
+
+  This is Bazel's symlink forest, not its namespace sandbox: inputs are
+  symlinked, so a large input set costs nothing to materialize and
+  absolute paths still resolve. `/usr/bin/cc` and `$HOME/.cargo` are
+  still reachable — hermetic *toolchains* are a separate problem, and a
+  sandbox that hid `/usr/bin` would fail every task for a reason
+  unrelated to its `inputs`. Tasks with no `inputs`, and tasks whose
+  `workdir` leaves the repo, run unsandboxed and say so. See #60
+  (P1: hermetic sandbox executor).
+
 - **`pkf run -j N` runs actions in parallel.** With an action graph to
   schedule against, `-j` is a ready queue over in-degrees: an action
   starts once everything it depends on has finished, and up to `N` run

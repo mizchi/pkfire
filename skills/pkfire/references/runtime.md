@@ -131,6 +131,25 @@ actions.
 critical path — the longest chain of actions the graph required to run
 in sequence.
 
+## Sandboxing
+
+`pkf run --sandbox` materializes an action's declared inputs, and the
+outputs of the actions it depends on, into a tree mirroring the repo,
+and runs the command there. Inputs are symlinked, so absolute paths —
+the toolchain, `$HOME` — still resolve; what the sandbox removes is
+access to undeclared *workspace* files.
+
+- an undeclared read finds nothing, so the command fails;
+- declared outputs are moved back into the workspace on success;
+- a failed action produces nothing: partial outputs stay in the
+  sandbox;
+- an undeclared write is reported and discarded;
+- a task with no declared `inputs` runs unsandboxed (nothing to
+  constrain), as does one whose `workdir` resolves outside the repo.
+
+The sandbox is not part of the action key: it changes whether an
+action is correct, not what it computes.
+
 ## Action graph
 
 `pkf run` lowers the requested targets into an action graph before

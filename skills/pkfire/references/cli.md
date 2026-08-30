@@ -32,7 +32,7 @@ formats, and graph target selection are not implemented.
 
 | Command | Implemented arguments | Result |
 | --- | --- | --- |
-| `run` | `<task>... [-j N\|auto] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
+| `run` | `<task>... [-j N\|auto] [--sandbox] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
 | `affected` | `<path>...`, `--changed=<file>`, or `--check` | Print the affected plan or run authored workflow tests. |
 | `watch` | `[task...]` | Watch the Taskfile directory and run affected non-service tasks, optionally filtered to exact names. |
 | `up` | `[service...]` | Start all or selected service tasks in the foreground. |
@@ -44,6 +44,13 @@ is rejected. `--watch` is rejected too — `pkf watch` is the watch entry
 point. Every other reserved flag in the table above is implemented, and
 a `--name` the target does not declare as a param is an error rather
 than a silently ignored value.
+
+`--sandbox` runs each action in a tree holding only its declared
+inputs and the outputs of what it depends on, then collects the
+declared outputs back. An undeclared read fails; an undeclared write is
+reported and discarded; a failed action produces nothing. Absolute
+paths still resolve, so the toolchain works. Tasks with no `inputs`,
+and tasks whose `workdir` leaves the repo, run unsandboxed and say so.
 
 `-j N` runs up to N actions at once and `-j auto` uses one per
 available CPU (capped at 16); sequential is the default. Ordering still
