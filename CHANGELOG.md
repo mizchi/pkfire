@@ -10,6 +10,27 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Fixed
+
+- **The remote cache uploaded nothing to a backend that reads bodies by
+  `Content-Length`.** The PUT went out `Transfer-Encoding: chunked` with
+  no length — legal HTTP, and the reference Cloudflare Worker handles
+  it, but an object store or any handler that does not special-case
+  chunked read zero bytes, stored an empty object, and returned success.
+  Every later fetch then got a well-formed *empty* archive, so the
+  remote cache was silently doing nothing and nothing in the output said
+  so.
+
+  Uploads now declare `Content-Length`. That meant driving the HTTP
+  client directly: the convenience `put` wrapper hands headers to the
+  *connection*, and only a request's own headers are scanned for a
+  content length, so a `Content-Length` passed there was dropped and the
+  body still went out chunked.
+
+  `examples/remote-cache-worker/testing/` gains a deliberately strict
+  server that rejects a chunked body with 411; CI uploads to it and
+  fetches back, so a regression fails the build.
+
 ### Added
 
 - **`targetPlatform` propagates down the graph.** It said what a task

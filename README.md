@@ -1372,7 +1372,16 @@ GET  /v1/cas/<hex64>   → 200 + tar.zst | 404
 HEAD /v1/cas/<hex64>   → 200 | 404
 PUT  /v1/cas/<hex64>   → 201 (or 200 if already present)
 Authorization: Bearer <token>   (optional)
+Content-Length: <bytes>         (on PUT)
 ```
+
+Uploads declare `Content-Length` rather than using chunked transfer
+encoding, so a backend that reads bodies by length alone — most object
+stores, and any handler that does not special-case `Transfer-Encoding` —
+receives the whole archive. `examples/remote-cache-worker/testing/`
+holds a deliberately strict server that rejects a chunked body outright;
+CI uploads to it and fetches back, so a client that stops declaring the
+length fails the build rather than silently storing nothing.
 
 ## Skill
 

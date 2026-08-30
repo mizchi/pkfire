@@ -239,6 +239,53 @@ jobs:
           [ ! -f attempts.log ] || { echo "a failed attempt leaked into the workspace"; exit 1; }
           rm -f flaky.out flaky.err doomed.err once.err box.err once.log run.jsonl ok.txt
 
+      # The remote cache against a backend that reads bodies by
+      # `Content-Length` only, the way an object store does. Uploads
+      # used to go out chunked with no length, so such a backend stored
+      # a zero-byte object, returned 200, and every later fetch got a
+      # well-formed empty archive — a remote cache that was silently
+      # doing nothing.
+      - name: Smoke - the remote cache uploads a body a strict backend can read
+        working-directory: examples/cache-hit
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-remote-cache
+          PKFIRE_MBT_REMOTE_CACHE: http://127.0.0.1:8760
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          STORE="${{ runner.temp }}/pkfire-remote-store"
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" "$STORE" runs.log out.log said.txt
+          python3 ../remote-cache-worker/testing/strict_cache_server.py "$STORE" 8760 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -s -o /dev/null --noproxy '*' http://127.0.0.1:8760/probe && break
+            sleep 1
+          done
+
+          # Run once: stores locally, then uploads. The server rejects a
+          # chunked body with 411, so a regression shows up as an empty
+          # store rather than as a passing test.
+          "$BIN" run say > /dev/null
+          sleep 1
+          uploaded=$(find "$STORE" -name entry.tar.gz | head -1)
+          [ -n "$uploaded" ] || { echo "nothing reached the remote"; exit 1; }
+          size=$(wc -c < "$uploaded" | tr -d ' ')
+          [ "$size" -gt 0 ] || { echo "the remote stored a zero-byte entry"; exit 1; }
+          tar tzf "$uploaded" > /dev/null || { echo "the uploaded archive is not readable"; exit 1; }
+
+          # And it comes back: a cold local cache must be a remote hit
+          # that replays the transcript, not a re-run.
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" said.txt
+          "$BIN" run say > fetched.out
+          grep -q 'remote cache hit' fetched.out \
+            || { echo "the entry did not come back from the remote"; cat fetched.out; exit 1; }
+          grep -q 'built the thing' fetched.out \
+            || { echo "the replayed transcript is missing"; cat fetched.out; exit 1; }
+          rm -f fetched.out runs.log out.log said.txt
+
       # A transition is only worth anything if it reaches toolchain
       # *resolution*. `lib` declares no platform, so before this it
       # resolved `cc` to the host compiler even inside an arm64 build —

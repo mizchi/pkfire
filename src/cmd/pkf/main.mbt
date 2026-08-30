@@ -1869,10 +1869,54 @@ async fn remote_get_bytes(url : String) -> Bytes? {
 }
 
 ///|
+/// Split an absolute URL into `(origin, path)`.
+///
+/// `Client::new` wants an origin and `Client::put` wants a path, and
+/// the remote base may itself carry a prefix (`https://host/v1`), so
+/// the split has to happen after the authority rather than at the
+/// configured base. Returns `None` for anything that is not
+/// `scheme://authority/...`.
+fn split_url_origin(url : String) -> (String, String)? {
+  let marker = "://"
+  let scheme_end = match url.find(marker) {
+    Some(i) => i + marker.length()
+    None => return None
+  }
+  let rest = url[scheme_end:].to_owned()
+  match rest.find("/") {
+    Some(i) =>
+      Some((url[:scheme_end].to_owned() + rest[:i].to_owned(), rest[i:].to_owned()))
+    // No path at all: the whole URL is the origin.
+    None => Some((url, "/"))
+  }
+}
+
+///|
 async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
   let headers = remote_headers()
+  // Declare the length. Without it the body goes out
+  // `Transfer-Encoding: chunked`, which is legal HTTP and which the
+  // reference Worker handles — but a backend that reads only
+  // `Content-Length` sees zero and stores an empty object. The upload
+  // then "succeeds", every later fetch gets a valid-looking empty
+  // archive, and the remote cache is silently useless.
+  //
+  // Only on the write path: `remote_headers` is shared with the GET,
+  // which has no body.
+  headers["Content-Length"] = bytes.length().to_string()
+  // `@http.put` cannot carry it. That convenience wrapper hands headers
+  // to the *connection*, and only a request's `extra_headers` are
+  // scanned for a content length — so a `Content-Length` passed there
+  // is dropped and the body still goes out chunked. Driving the client
+  // directly is what puts the header on the request itself.
+  let (origin, path) = match split_url_origin(url) {
+    Some(pair) => pair
+    None => return false
+  }
   try {
-    let (resp, _) = @http.put(url, bytes, headers~)
+    let client = @http.Client::new(origin)
+    defer client.close()
+    let resp = client.put(path, bytes, extra_headers=headers)
     resp.code >= 200 && resp.code < 300
   } catch {
     _ => false

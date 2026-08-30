@@ -512,6 +512,11 @@ GET|PUT <base>/cas/<first-two>/<remaining>/entry.tar.gz
 Authorization: Bearer <token>
 ```
 
+Uploads declare `Content-Length`; the body is never chunked. A backend
+that reads by length alone would otherwise store a zero-byte object and
+return success, and every later fetch would get a well-formed empty
+archive.
+
 The wire format is unchanged by the local split: still one archive per
 key. A push rebuilds it from the blobs; a fetch validates it and takes
 it apart into blobs and a manifest, so the fetched entry is a real local
