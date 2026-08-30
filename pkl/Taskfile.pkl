@@ -190,6 +190,29 @@ class Task {
   /// values that materially affect outputs (those belong in `env`).
   inheritEnv: Boolean = true
 
+  /// When true, run `cmd` against a tree containing only this task's
+  /// declared `inputs` and the outputs of the tasks it depends on, and
+  /// collect the declared `outputs` back afterwards. A read of any
+  /// other workspace file finds nothing, so an `inputs` line you forgot
+  /// fails here instead of becoming a stale cache hit later.
+  ///
+  /// `hermetic = true` also seals the environment: the ambient host
+  /// variables are dropped whatever `inheritEnv` says, because a task
+  /// told to depend on nothing it did not declare should not be reading
+  /// `$SOME_VAR` the action key cannot see either. This is not silent —
+  /// `pkf run --explain-cache` prints the descriptor with
+  /// `inheritEnv: false`, which is what the key hashes.
+  ///
+  /// Absolute paths still resolve — `/usr/bin/cc`, `$HOME/.cargo`, the
+  /// toolchain generally — so this constrains what the task reads from
+  /// *your workspace*, not what toolchain it runs against. A task with
+  /// no declared `inputs` has nothing to constrain and runs normally.
+  ///
+  /// `pkf run --sandbox` turns this on for every task in a run, which
+  /// is the way to find out whether your `inputs` are honest before
+  /// committing to the field.
+  hermetic: Boolean = false
+
   /// When true, positional args after `--` on the pkf command line are
   /// forwarded to `cmd` as `$1` ... `$@`. When false (default), any
   /// extra positional after `pkf run <task>` is rejected — most tasks
@@ -290,6 +313,7 @@ class RenderedTask {
   readyCmd: String
   readyTimeoutSeconds: Int
   inheritEnv: Boolean
+  hermetic: Boolean
   acceptsArgs: Boolean
   params: Listing<RenderedParam>
   specRef: String?
@@ -353,6 +377,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
       readyCmd = t.readyCmd
       readyTimeoutSeconds = t.readyTimeoutSeconds
       inheritEnv = t.inheritEnv
+      hermetic = t.hermetic
       acceptsArgs = t.acceptsArgs
       params = new Listing {
         for (p in t.params) {

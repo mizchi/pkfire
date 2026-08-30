@@ -39,6 +39,10 @@ struct Task {
   cache : Bool
   workdir : String?
   inherit_env : Bool
+  /// Run against a tree holding only the declared inputs, and drop the
+  /// ambient environment. `--sandbox` turns the first half on for a
+  /// whole run; this is the per-task, checked-in form.
+  hermetic : Bool
   params : Array[Param]
   accepts_args : Bool
   service : Bool
@@ -245,6 +249,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(v) => parse_bool(v, default=true)
       None => true
     }
+    let hermetic = match task_entries.get("hermetic") {
+      Some(v) => parse_bool(v, default=false)
+      None => false
+    }
     let accepts_args = match task_entries.get("acceptsArgs") {
       Some(v) => parse_bool(v, default=false)
       None => false
@@ -330,6 +338,7 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       cache,
       workdir,
       inherit_env,
+    hermetic,
       params,
       accepts_args,
       service,
@@ -461,6 +470,9 @@ fn task_to_json(t : Task, with_kind : Bool, keep : Map[String, Bool]?) -> Json {
   }
   o["acceptsArgs"] = jbool(t.accepts_args)
   o["inheritEnv"] = jbool(t.inherit_env)
+  if t.hermetic {
+    o["hermetic"] = jbool(true)
+  }
   match t.workdir {
     Some(wd) => o["workdir"] = Json::string(wd)
     None => ()
@@ -2316,7 +2328,8 @@ async fn[X] run_task(
   // A task with no declared inputs has nothing to constrain, and one
   // whose `workdir` leaves the repo cannot be mirrored — both run
   // unsandboxed, and say so rather than pretending.
-  let box : Sandbox? = if opts.sandbox && task.inputs.length() > 0 {
+  let sandboxed = (opts.sandbox || task.hermetic) && task.inputs.length() > 0
+  let box : Sandbox? = if sandboxed {
     match sandbox_create(repo_root, task_cwd) {
       Some(b) => {
         let artifacts = match graph {
@@ -2366,7 +2379,7 @@ async fn[X] run_task(
       task.shell.view(),
       argv[:],
       extra_env~,
-      inherit_env=task.inherit_env,
+      inherit_env=task.inherit_env && !task.hermetic,
       cwd=run_cwd.view(),
     )
   } else {
@@ -2374,7 +2387,7 @@ async fn[X] run_task(
       task.shell.view(),
       argv[:],
       extra_env~,
-      inherit_env=task.inherit_env,
+      inherit_env=task.inherit_env && !task.hermetic,
       cwd=run_cwd.view(),
     )
     if !opts.quiet && !task.quiet {

@@ -28,6 +28,13 @@ local sources: Listing<String> = new {
   "src/**/moon.pkg"
   "moon.mod"
   "moon.work"
+  // The resolved dependency tree is an input: a transitive package
+  // moving from 0.1.7 to 0.1.9 changes what these commands compile
+  // against without any file above changing. Hashing the manifests
+  // rather than the 6330 files under `.mooncakes/` catches exactly
+  // that — a different resolved version has a different `version =`
+  // line and a different `import` block — for ~30ms instead of 2.5s.
+  ".mooncakes/*/*/moon.mod"
 }
 
 /// `moon check` runs over both workspace members, so it needs a wider
@@ -43,6 +50,13 @@ local checkSources: Listing<String> = new {
   "conformance/moon.mod"
   "moon.mod"
   "moon.work"
+  // The resolved dependency tree is an input: a transitive package
+  // moving from 0.1.7 to 0.1.9 changes what these commands compile
+  // against without any file above changing. Hashing the manifests
+  // rather than the 6330 files under `.mooncakes/` catches exactly
+  // that — a different resolved version has a different `version =`
+  // line and a different `import` block — for ~30ms instead of 2.5s.
+  ".mooncakes/*/*/moon.mod"
 }
 
 /// Path to the native release binary the MoonBit toolchain emits.

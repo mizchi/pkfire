@@ -583,8 +583,29 @@ that has nothing to do with its `inputs`. What this catches is the
 mistake people actually make, which is reading a workspace file you
 forgot to declare.
 
+A task can opt in permanently with `hermetic = true`, which is the
+checked-in form of the flag:
+
+```pkl
+local check = new Task {
+  name = "check"
+  cmd = "cargo clippy -- -D warnings"
+  inputs { "src/**"; "Cargo.toml"; "Cargo.lock" }
+  hermetic = true
+}
+```
+
+`hermetic = true` also seals the environment — the ambient host
+variables are dropped, whatever `inheritEnv` says — because a task told
+to depend on nothing it did not declare should not be reading a
+`$SOME_VAR` the action key cannot see either. That is not silent:
+`pkf run --explain-cache` prints the descriptor with `inheritEnv:
+false`, which is what the key hashes. `hermetic` is part of the key
+too, so a hermetic and a non-hermetic run of the same task never share
+a cache entry.
+
 Tasks with no declared `inputs` run unsandboxed — there is nothing to
-constrain — as does a task whose `workdir` resolves outside the repo,
+constrain — as does a task whose root shares no ancestor with the repo,
 which cannot be mirrored; both say so rather than pretending.
 [`pkf trace`](./docs/auto-inputs.md) is the complement: the sandbox
 tells you that you forgot something, `trace --emit` tells you what to
@@ -657,6 +678,7 @@ runs, naming the patterns and a path that matches both.
 | resolved `params` values (`$NAME`) | ✓ | ✓ (when `cache = true`) |
 | tail args from `-- a b c` (`$@`) | ✓ | ✓ (when `cache = true`) |
 | `task.Tools` | as env hints only | ✓ |
+| `hermetic` | ✓ (it decides what the command can read) | ✓ |
 | declared `outputs` | ✗ | ✓ |
 | outputs of the tasks this one depends on | ✓ (they are on disk) | ✓ |
 | `workdir` | ✓ (it is the cwd) | ✓ |
@@ -824,7 +846,7 @@ Open a PR to add yours.
 | 11 | Readiness probes (`readyPort` / `readyCmd`): reuse already-running services and gate dependents on real readiness | ✅ |
 | 12 | Env inheritance default + variadic tail args (`acceptsArgs`) + typed named params (`params` w/ string/enum/int/bool) + `/` in task names | ✅ |
 | 13 | Input auditing via libc interposition (`pkf trace`) — see [docs/auto-inputs.md](./docs/auto-inputs.md) | ✅ Linux only |
-| 14 | Sandboxed execution (`pkf run --sandbox`): declared inputs only, declared outputs collected back | ✅ symlink forest; absolute paths (the toolchain) still resolve |
+| 14 | Sandboxed execution (`pkf run --sandbox`, or `hermetic = true` per task): declared inputs only, declared outputs collected back, ambient env sealed | ✅ symlink forest; absolute paths (the toolchain) still resolve |
 | — | Presentation flags the Go implementation had and the MoonBit port has not reimplemented: `list --long` / `--unsorted` / `--color`, `graph --format` (DOT, Mermaid) / `--target` / `--depth`, `doctor --fix`, `explain --diff`, `lint --fix` | ⛔ they exit with "unknown flag"; `graph --json` and `list --json` cover the tooling cases |
 
 The [Bazel-style build engine roadmap][roadmap] tracks what separates

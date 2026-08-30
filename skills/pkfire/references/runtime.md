@@ -147,8 +147,16 @@ access to undeclared *workspace* files.
 - a task with no declared `inputs` runs unsandboxed (nothing to
   constrain), as does one whose `workdir` resolves outside the repo.
 
-The sandbox is not part of the action key: it changes whether an
-action is correct, not what it computes.
+`hermetic = true` on a Task is the per-task, checked-in form: it turns
+the sandbox on for that task without the flag, and additionally drops
+the ambient environment whatever `inheritEnv` says. The descriptor
+records the effective `inheritEnv` (false) and carries `hermetic` as an
+execution property, so a hermetic and a non-hermetic run of the same
+task never share a cache entry — the second may have been computed
+from a file the first cannot see.
+
+`--sandbox` alone does not change the key: it is how you find out
+whether a task's `inputs` are honest before committing to the field.
 
 ## Action graph
 

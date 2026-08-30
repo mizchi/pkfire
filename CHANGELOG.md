@@ -39,8 +39,22 @@ Action version all move together — there is one tag per release
   still reachable — hermetic *toolchains* are a separate problem, and a
   sandbox that hid `/usr/bin` would fail every task for a reason
   unrelated to its `inputs`. Tasks with no `inputs`, and tasks whose
-  `workdir` leaves the repo, run unsandboxed and say so. See #60
-  (P1: hermetic sandbox executor).
+  `workdir` shares no ancestor with the repo, run unsandboxed and say
+  so. See #60 (P1: hermetic sandbox executor).
+
+- **`Task.hermetic` — a new schema field.** `hermetic = true` is the
+  checked-in form of `--sandbox` for one task, and additionally seals
+  the environment: the ambient host variables are dropped whatever
+  `inheritEnv` says, because a task told to depend on nothing it did
+  not declare should not be reading a `$SOME_VAR` the key cannot see
+  either. The descriptor records the effective `inheritEnv` (false) and
+  carries `hermetic` as an execution property, so a hermetic and a
+  non-hermetic run of the same task never share a cache entry. This
+  closes the last open P0 item in #60.
+
+  **This adds a field to the public Pkl schema**, so the next release
+  is a minor bump and `examples/` follow it after the package
+  publishes.
 
 - **`pkf run -j N` runs actions in parallel.** With an action graph to
   schedule against, `-j` is a ready queue over in-degrees: an action
@@ -133,6 +147,16 @@ Action version all move together — there is one tag per release
   patterns.
 
 ### Fixed
+
+- **The repo's own `moon check` / `moon test` / `build` tasks did not
+  declare the resolved dependency tree.** A transitive package moving
+  from 0.1.7 to 0.1.9 — which happened during this cycle — changes what
+  those commands compile against without any declared input changing,
+  so the cache could serve a pass computed against the old tree. They
+  now hash `.mooncakes/*/*/moon.mod`: a different resolved version has
+  a different `version =` line and a different `import` block, which is
+  the signal, and it costs ~30ms rather than the ~2.5s of hashing all
+  6330 files under `.mooncakes/`.
 
 - **`pkf clean --dry-run` removed the outputs it claimed to preview.**
   The flag was accepted and ignored, so the command printed

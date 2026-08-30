@@ -62,6 +62,7 @@ fn watch_test_task(
     cache,
     workdir,
     inherit_env: true,
+    hermetic: false,
     params: [],
     accepts_args: false,
     service,
