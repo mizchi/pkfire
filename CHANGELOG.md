@@ -8,6 +8,27 @@ The Pkl schema version, the `pkf` binary version, and the GitHub
 Action version all move together — there is one tag per release
 (`pkfire@<version>`) and one row per release in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **The examples pinned to a relative `amends` now use the published
+  `pkfire@0.16.0` package**, and the features they exercise gained
+  conformance scenarios. `hermetic`, `provides`, `steps`, `toolchains`,
+  `targetPlatform`, `forTarget`, `timeoutSeconds` and `requiresPlatform`
+  all shipped before a release carried them, so their fixtures had to
+  amend the in-tree schema — which the conformance harness cannot run,
+  because it copies a fixture into a temp directory where a relative
+  `amends` does not resolve. CI smoke steps stood in.
+
+  Conformance is 65 scenarios, up from 59: a pipeline rebuilding only
+  the steps whose inputs moved, a step runnable by its composed
+  `<task>/<step>` name, a provider resolving into the consumer's working
+  directory, a target platform selecting a different compiler, a timeout
+  stopping the script it killed, and a task refusing a platform it
+  cannot run on. The smoke steps stay for what needs a real clock and
+  process table.
+
 ## [0.16.0] - 2026-08-30
 
 ### Added
