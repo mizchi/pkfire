@@ -77,6 +77,11 @@ struct ActionRun {
   /// With `-j 1` this is just the sum of everything before it; with
   /// `-j N` it is what makes a critical path computable.
   start_ms : Int64
+  /// How many times the command was spawned. 1 for anything that ran
+  /// once; 0 for a cache hit, an umbrella or a skip, which spawn
+  /// nothing. Above 1 means `retries` was used — the number that turns
+  /// "this suite is flaky" into something anyone can act on.
+  attempts : Int
 }
 
 ///|
@@ -184,7 +189,7 @@ async fn[X] run_action_graph(
     graph.order.length() + 1,
     initial_value=0,
   )
-  let inbox : Array[(String, TaskOutcome, Int64, Int64)] = []
+  let inbox : Array[(String, TaskOutcome, Int64, Int64, Int)] = []
   let mut running = 0
   let mut outstanding = 0
   let mut exit_code = 0
@@ -212,6 +217,8 @@ async fn[X] run_action_graph(
                   outcome: Skipped(why),
                   duration_ms: 0,
                   start_ms: now_ms() - started,
+                  // Never launched, so nothing was attempted.
+                  attempts: 0,
                 })
                 if !opts.quiet {
                   println("pkf: - \{dep} (skipped: `\{why}` failed)")
@@ -266,6 +273,7 @@ async fn[X] run_action_graph(
       outstanding = outstanding + 1
       let launched = now_ms()
       group.spawn_bg(() => {
+        let attempts = Ref(0)
         let outcome = run_task(
           group,
           plan,
@@ -275,8 +283,11 @@ async fn[X] run_action_graph(
           task_positionals,
           opts~,
           graph=Some(graph),
+          attempts~,
         )
-        inbox.push((name, outcome, now_ms() - launched, launched - started))
+        inbox.push(
+          (name, outcome, now_ms() - launched, launched - started, attempts.val),
+        )
         completions.release()
       })
     }
@@ -289,7 +300,7 @@ async fn[X] run_action_graph(
     if inbox.length() == 0 {
       continue
     }
-    let (name, outcome, duration_ms, start_ms) = inbox.remove(0)
+    let (name, outcome, duration_ms, start_ms, attempts) = inbox.remove(0)
     let code = outcome.code()
     running = running - 1
     outstanding = outstanding - 1
@@ -298,6 +309,7 @@ async fn[X] run_action_graph(
       outcome: Finished(outcome),
       duration_ms,
       start_ms,
+      attempts,
     })
     if code != 0 {
       println("pkf: task `\{name}` failed with exit code \{code}")

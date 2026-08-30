@@ -12,8 +12,9 @@ fn log_run(
   outcome : ActionOutcome,
   start_ms : Int64,
   duration_ms : Int64,
+  attempts~ : Int = 1,
 ) -> ActionRun {
-  ActionRun::{ task, outcome, duration_ms, start_ms }
+  ActionRun::{ task, outcome, duration_ms, start_ms, attempts }
 }
 
 ///|
@@ -178,4 +179,56 @@ test "an empty run still produces a readable summary" {
   let lines = log_lines([], 0L)
   assert_eq(lines.length(), 1)
   assert_true(lines[0].contains("\"actions\":0"))
+}
+
+///|
+test "a single attempt is not spelled out on the line" {
+  // `"attempts":1` on every line of a fifty-action log is noise. The
+  // field exists to make the exceptional case findable.
+  match execution_log_action(log_run("build", Finished(Ran(0)), 0L, 1L)) {
+    Object(o) => assert_eq(o.get("attempts"), None)
+    _ => fail("expected an object")
+  }
+}
+
+///|
+test "a retried action carries its attempt count" {
+  match
+    execution_log_action(
+      log_run("test", Finished(Ran(0)), 0L, 9L, attempts=3),
+    ) {
+    Object(o) => assert_eq(o.get("attempts"), Some(Json::number(3)))
+    _ => fail("expected an object")
+  }
+}
+
+///|
+test "the summary always reports how many actions were retried" {
+  // Always present, including as zero: a dashboard alerts on this
+  // drifting away from zero, and a field that disappears when empty
+  // reads as a parse failure rather than as good news.
+  let quiet = [log_run("a", Finished(Ran(0)), 0L, 1L)]
+  match
+    execution_log_summary(
+      ScheduleResult::{ exit_code: 0, runs: quiet, wall_ms: 1L },
+      0L,
+      [],
+    ) {
+    Object(o) => assert_eq(o.get("retried"), Some(Json::number(0)))
+    _ => fail("expected an object")
+  }
+  let flaky = [
+    log_run("a", Finished(Ran(0)), 0L, 1L, attempts=2),
+    log_run("b", Finished(Ran(0)), 1L, 1L),
+    log_run("c", Finished(Ran(1)), 2L, 1L, attempts=4),
+  ]
+  match
+    execution_log_summary(
+      ScheduleResult::{ exit_code: 1, runs: flaky, wall_ms: 3L },
+      0L,
+      [],
+    ) {
+    Object(o) => assert_eq(o.get("retried"), Some(Json::number(2)))
+    _ => fail("expected an object")
+  }
 }

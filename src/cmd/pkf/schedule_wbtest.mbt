@@ -54,7 +54,13 @@ test "dependents are the reverse edges, deduplicated" {
 ///|
 /// A finished-run record, for the reporting tests.
 fn finished_run(task : String, ms : Int64) -> ActionRun {
-  ActionRun::{ task, outcome: Finished(Ran(0)), duration_ms: ms, start_ms: 0L }
+  ActionRun::{
+    task,
+    outcome: Finished(Ran(0)),
+    duration_ms: ms,
+    start_ms: 0L,
+    attempts: 1,
+  }
 }
 
 ///|
@@ -118,7 +124,7 @@ test "a run with no dependencies has a one-action critical path" {
 
 ///|
 fn run_with(task : String, outcome : ActionOutcome) -> ActionRun {
-  ActionRun::{ task, outcome, duration_ms: 0L, start_ms: 0L }
+  ActionRun::{ task, outcome, duration_ms: 0L, start_ms: 0L, attempts: 1 }
 }
 
 ///|

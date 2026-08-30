@@ -32,6 +32,7 @@ fn graph_test_task(
     hermetic: false,
     toolchains: [],
     timeout_seconds: 0,
+    retries: 0,
     requires_platform: [],
     target_platform: None,
     steps: [],

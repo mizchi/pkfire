@@ -130,6 +130,61 @@ jobs:
             || { echo "no platform diagnostic"; cat elsewhere.err; exit 1; }
           rm -f hang.out hang.err elsewhere.err
 
+      # Three things at once: a flaky task recovers, a broken one still
+      # fails with its own exit code, and a task that did not ask for a
+      # retry gets exactly one attempt. The last is the guard against a
+      # loop that retries everything.
+      - name: Smoke - retries recover a flaky task without hiding a broken one
+        working-directory: examples/retries
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-retries-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" attempts.log ok.txt once.log run.jsonl
+          "$BIN" run flaky --execution-log=run.jsonl > flaky.out 2> flaky.err
+          [ -f ok.txt ] || { echo "the retry did not produce the output"; exit 1; }
+          grep -q 'retrying (attempt 2 of 3)' flaky.err \
+            || { echo "the retry was not reported"; cat flaky.err; exit 1; }
+          # Two spawns, not one: the counter the command appends to is
+          # undeclared, so the cache neither stores nor restores it and
+          # its size is a direct count of attempts.
+          n=$(wc -c < attempts.log | tr -d ' ')
+          [ "$n" = "2" ] || { echo "expected 2 attempts, counter says $n"; exit 1; }
+          grep -q '"attempts":2' run.jsonl || { echo "no attempt count in the log"; exit 1; }
+          grep -q '"retried":1' run.jsonl || { echo "summary did not count the retry"; exit 1; }
+
+          # A task that fails every time still fails, with the command's
+          # own exit code rather than something the retry invented.
+          set +e
+          "$BIN" run doomed 2> doomed.err
+          code=$?
+          set -e
+          [ "$code" = "9" ] || { echo "expected 9, got $code"; cat doomed.err; exit 1; }
+          [ "$(grep -c 'retrying' doomed.err)" = "1" ] \
+            || { echo "wrong number of retries"; cat doomed.err; exit 1; }
+
+          # No `retries`, so exactly one attempt.
+          set +e
+          "$BIN" run once 2> once.err
+          set -e
+          o=$(wc -c < once.log | tr -d ' ')
+          [ "$o" = "1" ] || { echo "a task without retries was retried $o times"; exit 1; }
+          grep -q 'retrying' once.err && { echo "a task without retries reported one"; exit 1; }
+
+          # Under --sandbox every attempt gets a fresh tree, so the
+          # counter never survives and nothing leaks into the workspace.
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" attempts.log ok.txt
+          set +e
+          "$BIN" run flaky --sandbox 2> box.err
+          code=$?
+          set -e
+          [ "$code" = "7" ] || { echo "expected 7 from a sandboxed flaky task, got $code"; exit 1; }
+          [ "$(grep -c 'retrying' box.err)" = "2" ] \
+            || { echo "expected 2 retries under sandbox"; cat box.err; exit 1; }
+          [ ! -f attempts.log ] || { echo "a failed attempt leaked into the workspace"; exit 1; }
+          rm -f flaky.out flaky.err doomed.err once.err box.err once.log run.jsonl ok.txt
+
       # One `cc` declaration, two targets, two compilers, two keys.
       # This is what makes a toolchain a resolver rather than a lookup.
       - name: Smoke - the target platform selects the toolchain

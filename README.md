@@ -873,6 +873,44 @@ fails with exit 143, so a log reading only the number still says
 Raising a timeout does not invalidate the cache: it changes nothing
 about what the command produces.
 
+### Retries
+
+For the test suite that fails one run in fifty on a race nobody has
+time to find this week:
+
+```pkl
+retries = 2
+```
+
+Without it the choice is a red build on a green tree or `|| true` in the
+`cmd`, and `|| true` never comes back out — it hides the day the test
+starts failing every time. A retry keeps the failure visible instead:
+
+```
+pkf: $ test
+pkf: task `test` failed with exit code 1; retrying (attempt 2 of 3)
+pkf: $ test
+```
+
+Every attempt is printed, and the count lands in `--execution-log` as
+`attempts` on the action and `retried` on the summary — so "this task
+retries constantly" is a number someone can act on rather than a feeling.
+
+Only a genuinely non-deterministic task should set this. A retry cannot
+fix a missing `inputs` line — the second attempt reads the same
+undeclared file — and it costs the run the time of every attempt. A task
+that fails every time still fails, with the command's own exit code.
+
+Under `--sandbox` each attempt gets a fresh sandbox, so a retry never
+reads what the attempt that failed left behind, and a half-written
+output from a failed attempt never reaches the workspace. Services
+started for the task stay up across attempts: a flaky test usually needs
+its database still running.
+
+Like `timeoutSeconds`, `retries` is not part of the action key. Only the
+attempt that succeeded is stored, and what it produced does not depend
+on how many came before it.
+
 ### Platform requirements
 
 ```pkl

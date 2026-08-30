@@ -1,0 +1,45 @@
+/// Fixture for `retries`.
+///
+/// `flaky` fails its first attempt and succeeds on its second, driven
+/// by a counter file it never declares — so the cache neither stores
+/// nor restores it, and the second attempt genuinely sees what the
+/// first left. `doomed` exhausts its budget and still fails, which is
+/// the half that matters: a retry must not be able to turn a task that
+/// is simply broken into a green one.
+/// Relative `amends`: `retries` is unreleased, so this fixture cannot
+/// point at a published package yet. It moves to `pkfire@<next>` once
+/// that ships, and the conformance harness — which copies fixtures to a
+/// temp tree and so cannot follow a relative path — picks it up then.
+amends "../../pkl/Taskfile.pkl"
+
+local flaky = new Task {
+  name = "flaky"
+  cmd =
+    """
+    printf x >> attempts.log
+    test "$(wc -c < attempts.log)" -ge 2 || exit 7
+    cp seed.txt ok.txt
+    """
+  inputs { "seed.txt" }
+  outputs { "ok.txt" }
+  retries = 2
+}
+
+/// Fails every time. Two attempts, then the run fails with the
+/// command's own exit code — not with something the retry invented.
+local doomed = new Task {
+  name = "doomed"
+  cmd = "echo trying 1>&2; exit 9"
+  retries = 1
+  cache = false
+}
+
+/// No `retries`, so exactly one attempt. Pins the default: a task that
+/// did not ask for a retry must not get one.
+local once = new Task {
+  name = "once"
+  cmd = "printf x >> once.log; exit 5"
+  cache = false
+}
+
+tasks { flaky; doomed; once }

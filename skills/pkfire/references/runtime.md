@@ -343,6 +343,15 @@ command is spawned; empty means any. A mismatch is fatal and names the
 task, the requirement and the machine. Not hashed — the execution
 platform already is.
 
+`retries > 0` re-spawns the command after a failure, up to that many
+extra attempts. Each attempt is announced on stderr; the count reaches
+`--execution-log` as `attempts` (omitted when 1) and the summary's
+`retried`. Services stay up across attempts, but a sandbox does not — a
+retry always gets a fresh tree, so it cannot inherit the debris of the
+attempt that failed, and a failed attempt's partial outputs are never
+collected. Exhausting the budget fails with the command's own exit
+code. Not hashed: only the successful attempt is stored.
+
 ## Evaluation cache
 
 The rendered Taskfile is memoized under `<cache_root>/eval/<slot>`.

@@ -64,6 +64,12 @@ fn execution_log_action(run : ActionRun) -> Json {
   }
   o["startMs"] = Json::number(run.start_ms.to_double())
   o["durationMs"] = Json::number(run.duration_ms.to_double())
+  // Only when it means something. A `"attempts":1` on every line of a
+  // fifty-action log is noise; a `"attempts":4` is the whole reason
+  // anyone greps this file for flakiness.
+  if run.attempts > 1 {
+    o["attempts"] = Json::number(run.attempts.to_double())
+  }
   Json::object(o)
 }
 
@@ -100,6 +106,16 @@ fn execution_log_summary(
   o["ran"] = Json::number(ran.to_double())
   o["cached"] = Json::number(cached.to_double())
   o["skipped"] = Json::number(skipped.to_double())
+  // Actions that needed more than one attempt. Zero is the number a
+  // dashboard wants to alert on drifting away from, so it is always
+  // present rather than omitted when empty.
+  let mut retried = 0
+  for run in result.runs {
+    if run.attempts > 1 {
+      retried = retried + 1
+    }
+  }
+  o["retried"] = Json::number(retried.to_double())
   // A single-action "chain" is not a chain; reporting one would invite
   // a reader to optimize an ordering the graph never imposed.
   if critical_chain.length() > 1 {

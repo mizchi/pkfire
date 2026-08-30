@@ -48,6 +48,8 @@ struct Task {
   toolchains : Array[Toolchain]
   /// Seconds after which the command is killed. 0 = no limit.
   timeout_seconds : Int
+  /// Extra attempts after a failure. 0 = one attempt, no retry.
+  retries : Int
   /// Execution platforms this task can run on. Empty = any.
   requires_platform : Array[String]
   /// What this task builds *for*, when that differs from where it
@@ -307,6 +309,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(Number(n, ..)) => n.to_int()
       _ => 0
     }
+    let retries = match task_entries.get("retries") {
+      Some(Number(n, ..)) => n.to_int()
+      _ => 0
+    }
     let requires_platform = match task_entries.get("requiresPlatform") {
       Some(v) => parse_string_array(v)
       None => []
@@ -463,6 +469,7 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       hermetic,
       toolchains,
       timeout_seconds,
+      retries,
       requires_platform,
       target_platform,
       steps,
@@ -2427,6 +2434,12 @@ async fn[X] run_task(
   positionals : Array[String],
   opts~ : RunOptions = RunOptions::default(),
   graph~ : ActionGraph? = None,
+  // How many attempts the command took, written back for the caller's
+  // run record. An out-parameter rather than a wider return type: every
+  // early exit above returns before a command is ever spawned, and
+  // spelling `0` at each of them would be a dozen chances to write the
+  // wrong number.
+  attempts~ : Ref[Int] = Ref(0),
 ) -> TaskOutcome {
   if task.cmd.length() == 0 {
     // deps-only umbrella task — nothing to spawn.
@@ -2631,7 +2644,20 @@ async fn[X] run_task(
   // whose `workdir` leaves the repo cannot be mirrored — both run
   // unsandboxed, and say so rather than pretending.
   let sandboxed = (opts.sandbox || task.hermetic) && task.inputs.length() > 0
-  let box : Sandbox? = if sandboxed {
+  // Retry loop. A task marked `retries` is one whose failure is not
+  // reliable information, and re-running it is cheaper than the human
+  // cost of a red build on a green tree. Everything per-attempt lives
+  // inside: a retry gets a fresh sandbox, a fresh log capture and a
+  // fresh deadline, so it can never inherit the debris of the attempt
+  // that failed. Services started above stay up across attempts — a
+  // flaky test usually needs its database still running.
+  let mut attempt = 0
+  let mut box : Sandbox? = None
+  let mut captured : CapturedLogs? = None
+  let mut code = 0
+  while true {
+  attempt = attempt + 1
+  box = if sandboxed {
     match sandbox_create(repo_root, task_cwd) {
       Some(b) => {
         let artifacts = match graph {
@@ -2676,7 +2702,7 @@ async fn[X] run_task(
   // Only an action whose result is about to be stored needs its output
   // kept. Capturing everything would hand a pipe to every interactive
   // and hook task for no gain — they have no entry to attach a log to.
-  let captured : CapturedLogs? = if key is Some(_) {
+  captured = if key is Some(_) {
     Some(CapturedLogs::empty())
   } else {
     None
@@ -2766,7 +2792,7 @@ async fn[X] run_task(
   }
   code
   }
-  let code = if task.timeout_seconds > 0 {
+  code = if task.timeout_seconds > 0 {
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
     }
@@ -2799,6 +2825,34 @@ async fn[X] run_task(
     }
   } else {
     spawn_code()
+  }
+  attempts.val = attempt
+  if code == 0 || attempt > task.retries {
+    break
+  }
+  // Said on every attempt, not summarised at the end. A retry that
+  // reports nothing turns a task that fails four runs in five into one
+  // that looks perfectly healthy, which is how a real regression hides
+  // behind a `retries` line somebody added a year ago.
+  //
+  // Flushed first: stdout is block-buffered when piped and stderr is
+  // not, so without this the notice about attempt N arrives above the
+  // output of attempt N-1 and reads as though it came first.
+  flush_stdout()
+  eprintln(
+    "pkf: task `\{task.name}` failed with exit code \{code}; " +
+    "retrying (attempt \{attempt + 1} of \{task.retries + 1})",
+  )
+  // The failed attempt's sandbox goes with it. Collecting from it
+  // would move a half-written output into the workspace, and reusing
+  // it would let the retry read what the failure left behind.
+  match box {
+    Some(b) => {
+      sandbox_destroy(b)
+      box = None
+    }
+    None => ()
+  }
   }
   stop_services(running)
   match box {

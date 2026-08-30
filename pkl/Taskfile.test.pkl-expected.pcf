@@ -32,6 +32,7 @@ examples {
       params {}
       toolchains {}
       timeoutSeconds = 0
+      retries = 0
       requiresPlatform {}
       targetPlatform = null
       steps {}

@@ -12,6 +12,29 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`retries` on a task: extra attempts after a failure.** For the test
+  suite that fails one run in fifty on a race nobody has time to find
+  this week. Without it the choice is a red build on a green tree or
+  `|| true` in the `cmd`, and `|| true` never comes back out — it hides
+  the day the test starts failing every time.
+
+  ```pkl
+  retries = 2
+  ```
+
+  A retry keeps the failure visible: every attempt is announced on
+  stderr, and the count reaches `--execution-log` as `attempts` on the
+  action and `retried` on the summary, so "this task retries constantly"
+  is a number rather than a feeling. A task that fails every time still
+  fails, with the command's own exit code.
+
+  Each attempt gets a fresh sandbox under `--sandbox`, so a retry cannot
+  read what the failed attempt left behind and a half-written output
+  never reaches the workspace. Services started for the task stay up
+  across attempts — a flaky test usually needs its database still
+  running. Not part of the action key, for the same reason as
+  `timeoutSeconds`: only the attempt that succeeded is stored.
+
 - **`pkf run --execution-log=FILE` writes a machine-readable record of
   the run.** `--timing` prints, and printing is where the record ends —
   the numbers scroll past and nothing else can read them. The questions
