@@ -810,9 +810,39 @@ extern "C" fn now_sec() -> Int64 = "mizchi_pkf_now_sec"
 extern "C" fn eprint_ffi(s : Bytes) -> Unit = "mizchi_pkf_eprint"
 
 ///|
+/// FFI: flush buffered stdout. See the C stub for why this is needed.
+extern "C" fn flush_stdout() -> Unit = "mizchi_pkf_flush_stdout"
+
+///|
 /// Write a line to stderr (mirrors `println`, but fd 2).
 fn eprintln(message : String) -> Unit {
   eprint_ffi(@utf8.encode(message + "\n"))
+}
+
+///|
+/// Write a captured block of command output verbatim, trailing newline
+/// and all.
+///
+/// `println` would append a newline the command did not produce, which
+/// turns a partial last line into a full one; a block that already ends
+/// in a newline would gain a blank line. Both matter here because the
+/// point of buffering is that the output still reads like the command
+/// wrote it.
+fn print_block(text : String) -> Unit {
+  if text.has_suffix("\n") {
+    println(text[0:text.length() - 1].to_owned())
+  } else {
+    println(text)
+  }
+}
+
+///|
+/// Same, on stderr.
+fn eprint_block(text : String) -> Unit {
+  eprint_ffi(@utf8.encode(text))
+  if !text.has_suffix("\n") {
+    eprint_ffi(@utf8.encode("\n"))
+  }
 }
 
 ///|
@@ -1463,15 +1493,31 @@ async fn cache_store(
 ///
 /// Shared by the local store and the remote fetch so both publish
 /// entries the same way: no reader ever observes a partial blob.
+/// Monotonic within one process, to name temp files uniquely.
+let store_seq : Ref[Int] = Ref(0)
+
+///|
+fn next_store_seq() -> Int {
+  store_seq.val = store_seq.val + 1
+  store_seq.val
+}
+
+///|
 async fn cache_publish_archive(dir : String, archive : Bytes) -> Bool {
   mkdir_p(dir)
   let final_path = join_path(dir, CACHE_ENTRY_FILE)
   // The temp name carries the pid so two concurrent stores of the same
-  // key do not scribble on each other's partial file before the rename.
+  // key do not scribble on each other's partial file before the rename,
+  // and a counter so two *actions within one process* cannot either —
+  // under `-j` the pid no longer tells one writer from another.
   // A process killed between the write and the rename leaves the temp
   // file behind; `pkf cache prune` / `clear` reclaim it, and it is never
   // mistaken for an entry because lookups name `entry.tar.gz` exactly.
-  let tmp_path = final_path + ".tmp." + current_pid().to_string()
+  let tmp_path = final_path +
+    ".tmp." +
+    current_pid().to_string() +
+    "." +
+    next_store_seq().to_string()
   @fs.write_bytes_to_file(tmp_path, archive) catch {
     _ => return false
   }
@@ -2003,6 +2049,13 @@ struct RunOptions {
   timing : Bool
   /// Cache-partition tag; also exported to the command as `$PKF_PROFILE`.
   profile : String
+  /// Let the command write straight to this process's stdout and
+  /// stderr. True for a sequential run, where streaming is what makes a
+  /// long build watchable. False under `-j`, where several commands
+  /// write at once and interleaved bytes are worse than delayed ones:
+  /// each action's output is then captured and printed as one block
+  /// when it finishes.
+  stream_output : Bool
 }
 
 ///|
@@ -2017,6 +2070,7 @@ fn RunOptions::default() -> RunOptions {
     quiet: false,
     timing: false,
     profile: "",
+    stream_output: true,
   }
 }
 
@@ -2251,16 +2305,43 @@ async fn[X] run_task(
       }
     }
   }
-  if !opts.quiet && !task.quiet {
-    println("pkf: $ \{task.name}")
+  // Streaming vs. buffered. Sequentially the command owns this
+  // process's stdout, which is what makes a long build watchable. Under
+  // `-j` several commands would be writing at once, so each action's
+  // output is captured and printed as one block here, after it
+  // finishes — delayed, but attributable to the task that produced it.
+  let code = if opts.stream_output {
+    if !opts.quiet && !task.quiet {
+      println("pkf: $ \{task.name}")
+    }
+    @process.run_inherit(
+      task.shell.view(),
+      argv[:],
+      extra_env~,
+      inherit_env=task.inherit_env,
+      cwd=task_cwd.view(),
+    )
+  } else {
+    let (status, out_data, err_data) = @process.collect_output(
+      task.shell.view(),
+      argv[:],
+      extra_env~,
+      inherit_env=task.inherit_env,
+      cwd=task_cwd.view(),
+    )
+    if !opts.quiet && !task.quiet {
+      println("pkf: $ \{task.name}")
+    }
+    let out = @utf8.decode_lossy(out_data.binary())
+    let err = @utf8.decode_lossy(err_data.binary())
+    if out.length() > 0 {
+      print_block(out)
+    }
+    if err.length() > 0 {
+      eprint_block(err)
+    }
+    status
   }
-  let code = @process.run_inherit(
-    task.shell.view(),
-    argv[:],
-    extra_env~,
-    inherit_env=task.inherit_env,
-    cwd=task_cwd.view(),
-  )
   stop_services(running)
   if code != 0 {
     return code
@@ -2281,8 +2362,10 @@ async fn[X] run_task(
     }
   }
   if missing.length() > 0 {
-    die(
-      "task `\{task.name}` exited 0 but did not produce its declared output(s): " +
+    // Reported, not fatal: under `-j` exiting here would strand the
+    // other actions mid-write. The non-zero return still fails the run.
+    eprintln(
+      "pkf: task `\{task.name}` exited 0 but did not produce its declared output(s): " +
       join_with(missing, ", "),
     )
     return 1
@@ -2437,6 +2520,10 @@ struct ParsedRunArgs {
   /// here rather than in `RunOptions` because it changes what the run
   /// loop does after a failure, not what any single task does.
   keep_going : Bool
+  /// How many actions may be in flight at once. 1 is sequential, and
+  /// stays the default: raising it changes when side effects happen
+  /// relative to each other, which is the Taskfile author's call.
+  jobs : Int
 }
 
 ///|
@@ -2456,7 +2543,7 @@ fn runner_bool_flags() -> Array[String] {
 ///|
 /// Reserved runner flags that take a value.
 fn runner_value_flags() -> Array[String] {
-  ["profile"]
+  ["profile", "jobs"]
 }
 
 ///|
@@ -2466,18 +2553,35 @@ fn runner_value_flags() -> Array[String] {
 /// unrecognised flag was silently dropped. A flag that does not do what
 /// its name says must fail loudly, not be ignored.
 fn runner_unimplemented_flags() -> Array[(String, String)] {
-  [
-    (
-      "jobs",
-      "parallel execution is not implemented; the runner executes the topological order sequentially",
-    ),
-    (
-      "j",
-      "parallel execution is not implemented; the runner executes the topological order sequentially",
-    ),
-    ("watch", "use `pkf watch <task>` instead"),
-    ("on-fail", "not implemented"),
-  ]
+  [("watch", "use `pkf watch <task>` instead"), ("on-fail", "not implemented")]
+}
+
+///|
+/// Parse the value of `-j` / `--jobs`: a positive count, or `auto` for
+/// one per available CPU. Returns None after reporting the problem.
+///
+/// `0` is rejected rather than read as "unlimited". A build that
+/// launches every ready action at once is how a machine ends up
+/// thrashing, and the flag that does it should be spelled out, not
+/// spelled `0`.
+fn parse_jobs(value : String) -> Int? {
+  if value == "auto" {
+    return Some(auto_jobs())
+  }
+  try {
+    let n = @string.parse_int(value)
+    if n >= 1 {
+      Some(n)
+    } else {
+      die("pkf run: `-j \{value}` must be at least 1 (or `auto`)")
+      None
+    }
+  } catch {
+    _ => {
+      die("pkf run: `-j \{value}` is not a number (use a count or `auto`)")
+      None
+    }
+  }
 }
 
 ///|
@@ -2517,6 +2621,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
   let mut timing = false
   let mut keep_going = false
   let mut profile = ""
+  let mut jobs = 1
   let mut i = 0
   let mut after_dash_dash = false
   while i < args.length() {
@@ -2531,13 +2636,24 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
       i = i + 1
       continue
     }
-    // `-j 8` / `-j8`: short form of an unimplemented flag. Match it
-    // here so the diagnostic names the flag rather than "unknown task".
-    if arg.has_prefix("-j") {
-      die(
-        "pkf run: `-j` is not supported yet — parallel execution is not implemented; the runner executes the topological order sequentially",
-      )
-      return None
+    // `-j 8` / `-j8`. Matched before the general single-dash branch so
+    // the attached form is not read as an unknown flag.
+    if arg.has_prefix("-j") && !arg.has_prefix("--") {
+      let value = if arg.length() > 2 {
+        arg[2:arg.length()].to_owned()
+      } else if i + 1 < args.length() {
+        i = i + 1
+        args[i]
+      } else {
+        die("pkf run: `-j` requires a value (a count or `auto`)")
+        return None
+      }
+      jobs = match parse_jobs(value) {
+        Some(n) => n
+        None => return None
+      }
+      i = i + 1
+      continue
     }
     if arg.has_prefix("--") {
       let stripped = arg[2:arg.length()].to_owned()
@@ -2575,6 +2691,11 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
         }
         if name == "profile" {
           profile = v
+        } else if name == "jobs" {
+          jobs = match parse_jobs(v) {
+            Some(n) => n
+            None => return None
+          }
         }
         i = i + 1
         continue
@@ -2629,6 +2750,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
     flags,
     positionals,
     keep_going,
+    jobs,
     opts: RunOptions::{
       no_cache,
       refresh,
@@ -2639,6 +2761,9 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
       quiet,
       timing,
       profile,
+      // Only a sequential run can stream: with several commands
+      // writing at once the lines arrive shuffled.
+      stream_output: jobs == 1,
     },
   })
 }
@@ -4366,7 +4491,7 @@ fn completion_bash() -> String {
     #|      ;;
     #|    run)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --remote-only" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --remote-only -j --jobs" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -4555,7 +4680,9 @@ fn completion_zsh() -> String {
     #|          '--quiet[suppress per-task log lines]' \
     #|          '--keep-going[do not stop on first failure]' \
     #|          '--profile[profile name for cache keys]' \
-    #|          '--remote-only[consult only remote cache]'
+    #|          '--remote-only[consult only remote cache]' \
+    #|          '-j[actions to run at once, or auto]' \
+    #|          '--jobs[actions to run at once, or auto]'
     #|      else
     #|        local -a tasks
     #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -4735,6 +4862,8 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l remote-only -d 'consult only remote cache'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -s j -d 'actions to run at once, or auto'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l jobs -d 'actions to run at once, or auto'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -s f -l file -d 'path to Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l check -d 'fail when a file is read but not declared'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l emit -d 'print a matching inputs block'
@@ -4770,9 +4899,9 @@ fn usage_text() -> String {
     #|usage: pkf <command> [args...]
     #|
     #|commands:
-    #|  run <task>... [--dry-run] [--print-hash] [--no-cache] [--refresh]
-    #|              [--explain-cache] [--remote-only] [--keep-going]
-    #|              [--profile=NAME] [--quiet] [--timing]
+    #|  run <task>... [-j N|auto] [--dry-run] [--print-hash] [--no-cache]
+    #|              [--refresh] [--explain-cache] [--remote-only]
+    #|              [--keep-going] [--profile=NAME] [--quiet] [--timing]
     #|              [--name=value]... [-- positional...]
     #|  list [-v] [--all]
     #|  graph [--all]
@@ -4811,6 +4940,16 @@ fn extract_file_flag(args : ArrayView[String]) -> (String?, Array[String]) {
       i = i + 1
       continue
     }
+    // A flag that takes a separate value consumes the token after it.
+    // Without this, `pkf run -j 4 -f Taskfile.pkl build` reads `4` as
+    // the first positional and stops looking for `-f`, which then
+    // reaches the run parser as an unknown flag.
+    if !seen_positional && detached_value_flag(a) && i + 1 < args.length() {
+      remaining.push(a)
+      remaining.push(args[i + 1])
+      i = i + 2
+      continue
+    }
     if !a.has_prefix("-") {
       seen_positional = true
     }
@@ -4818,6 +4957,16 @@ fn extract_file_flag(args : ArrayView[String]) -> (String?, Array[String]) {
     i = i + 1
   }
   (explicit, remaining)
+}
+
+///|
+/// Runner flags whose value is a separate argument rather than
+/// `--name=value`. `-f` / `--file` are handled above, since this
+/// function exists to extract them.
+fn detached_value_flag(arg : String) -> Bool {
+  // `-j4` and `--jobs=4` carry their value in the same token, so only
+  // the bare forms consume the next one.
+  arg == "-j" || arg == "--jobs" || arg == "--profile"
 }
 
 ///|
@@ -5571,50 +5720,36 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         }
         None => ()
       }
-      let order = graph.order
-      let started = now_sec()
-      let timings : Array[(String, Int64)] = []
-      let mut exit_code = 0
-      for name in order {
-        let task = plan.tasks.get(name).unwrap()
-        // CLI flags / positional args only apply to the arg target.
-        let (flags, positionals) = if name == arg_target {
-          (parsed.flags, parsed.positionals)
-        } else {
-          (Map([], capacity=0), [])
-        }
-        let resolved_params = match resolve_task_params(task, flags) {
-          Some(m) => m
-          None => return 2
-        }
-        let task_started = now_sec()
-        let code = run_task(
-          group,
-          plan,
-          task,
-          repo_root,
-          resolved_params,
-          positionals,
-          opts=parsed.opts,
-          graph=Some(graph),
-        )
-        timings.push((name, now_sec() - task_started))
-        if code != 0 {
-          println("pkf: task `\{name}` failed with exit code \{code}")
-          exit_code = code
-          if !parsed.keep_going {
-            break
-          }
-        }
+      // `--dry-run` and `--print-hash` report rather than execute, and
+      // the report *is* the deliverable: one line per task, in
+      // dependency order. Running those concurrently would shuffle the
+      // lines for no gain, since neither spawns anything.
+      let jobs = if parsed.opts.dry_run || parsed.opts.print_hash {
+        1
+      } else {
+        parsed.jobs
       }
+      let opts = if jobs == parsed.jobs {
+        parsed.opts
+      } else {
+        { ..parsed.opts, stream_output: true }
+      }
+      let result = run_action_graph(
+        group,
+        plan,
+        graph,
+        repo_root,
+        arg_target,
+        parsed.flags,
+        parsed.positionals,
+        opts,
+        jobs,
+        parsed.keep_going,
+      )
       if parsed.opts.timing {
-        println("pkf: timing")
-        for entry in timings {
-          println("pkf:   \{entry.0}  \{entry.1}s")
-        }
-        println("pkf:   total  \{now_sec() - started}s")
+        report_timing(result, graph)
       }
-      exit_code
+      result.exit_code
     }
     "describe" => {
       let (explicit_taskfile, rest) = extract_file_flag(args[1:])

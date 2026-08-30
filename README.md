@@ -299,6 +299,8 @@ pkf completion bash > ~/.bash_completion.d/pkf  # dynamic task-name completion
 pkf completion zsh > "${fpath[1]}/_pkf"
 pkf completion fish > ~/.config/fish/completions/pkf.fish
 pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
+pkf run -j 4 ci                # run up to 4 actions at once, respecting the graph
+pkf run -j auto ci             # one per available CPU (capped at 16)
 pkf list --long                # audit task visibility/cache/quiet/deps/io/shell flags
 pkf explain build              # dump every input to the action key (cache-miss debug)
 pkf explain --diff old/Taskfile.pkl build  # compare action-key inputs against another Taskfile
@@ -494,6 +496,58 @@ executionPlatform  executionProperties
 `pkf run --explain-cache <task>` prints it; that dump is the answer to
 "why did this miss?", because a miss is always one of those lines
 differing from last time.
+
+### Running actions in parallel
+
+`pkf run -j N` runs up to `N` actions at once; `-j auto` uses one per
+available CPU, capped at 16. Sequential is still the default, because
+raising it changes when a Taskfile's side effects happen relative to
+each other and that is the author's call, not the runner's.
+
+The graph decides what may overlap. An action starts only once
+everything it depends on has finished — declared `deps` and derived
+artifact edges alike — so `-j` cannot reorder a build into
+incorrectness; it can only stop independent branches from waiting on
+each other.
+
+Two behaviours change with `N > 1`:
+
+- **Output is buffered per action.** Sequentially the command writes
+  straight to your terminal, which is what makes a long build
+  watchable. With several commands running at once those bytes would
+  arrive shuffled, so each action's output is captured and printed as
+  one block when it finishes — attributable, at the cost of arriving
+  late.
+- **Ties break on the topological order.** When several actions are
+  ready, the one earliest in that order goes first. `-j 1` is therefore
+  identical to the old sequential walk, and any `-j` schedules the same
+  way twice in a row.
+
+A failure stops *scheduling*; it does not kill what is already running,
+because cancelling a compiler mid-write leaves a half-written output
+that a later run would treat as real. `--keep-going` keeps launching,
+but only actions whose dependencies all succeeded — anything downstream
+of a failure is reported as skipped:
+
+```
+pkf: task `build` failed with exit code 1
+pkf: - test (skipped: `build` failed)
+pkf: - ci (skipped: `build` failed)
+```
+
+`--timing` reports the critical path, which is the number that decides
+how long a parallel run takes — shortening anything off that chain
+changes nothing:
+
+```
+pkf:   total  1.0s wall
+pkf:   critical path  1.0s  compile -> link -> package
+```
+
+Two caveats. A task that expects a terminal (progress bars, colour
+detection) sees a pipe under `-j`. And two tasks that each declare the
+same `services { … }` will each start it; services are not deduplicated
+across concurrent actions yet.
 
 ### Artifacts: the files are the edges
 
@@ -717,7 +771,7 @@ Open a PR to add yours.
 | --- | --- | --- |
 | 0 | Pkl schema, `pkl test` baseline, CLI skeleton | ✅ |
 | 1 | Load `Taskfile.pkl` via `pkl-go`, build DAG, run serially | ✅ |
-| 2 | Parallel execution honoring `deps` (per-task IO capture) | ⛔ the MoonBit runner executes the topological order sequentially; `-j` / `--jobs` are rejected rather than ignored |
+| 2 | Parallel execution honoring `deps` (per-task IO capture) | ✅ `pkf run -j N` / `-j auto`; sequential remains the default |
 | 3 | Action key (SHA-256 over a canonical action descriptor) | ✅ |
 | 4 | Local CAS, hit/miss, output restore | ✅ |
 | 5 | Watch mode (`pkf watch <task>`) | ✅ |

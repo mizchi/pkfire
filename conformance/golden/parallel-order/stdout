@@ -1,0 +1,4 @@
+gen ran
+consume read artifact
+pkf: $ gen
+pkf: $ consume

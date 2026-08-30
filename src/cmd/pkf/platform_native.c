@@ -1,3 +1,9 @@
+/* sched_getaffinity / CPU_COUNT are GNU extensions; the define has to
+ * precede every include or glibc hides them. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <moonbit.h>
 #include <stdint.h>
 
@@ -71,4 +77,66 @@ MOONBIT_FFI_EXPORT int32_t mizchi_pkf_getpid(void) { return (int32_t)_getpid(); 
  * not write to the same partial file.
  */
 MOONBIT_FFI_EXPORT int32_t mizchi_pkf_getpid(void) { return (int32_t)getpid(); }
+#endif
+
+/*
+ * Number of CPUs available to this process, for `pkf run -j auto`.
+ *
+ * "Available" rather than "installed": on a container with a CPU quota
+ * the online count is the host's, and sizing a build to it is how a
+ * two-core CI runner ends up trying to run 64 compilers. Linux exposes
+ * the affinity mask, which cgroup-aware runtimes set; everything else
+ * falls back to the online count. Returns 0 when nothing can be
+ * determined, and the caller decides what to do with that rather than
+ * silently picking a number.
+ */
+#ifdef _WIN32
+#include <windows.h>
+MOONBIT_FFI_EXPORT int32_t mizchi_pkf_cpu_count(void) {
+  SYSTEM_INFO info;
+  GetSystemInfo(&info);
+  return (int32_t)info.dwNumberOfProcessors;
+}
+#else
+#include <unistd.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
+MOONBIT_FFI_EXPORT int32_t mizchi_pkf_cpu_count(void) {
+#ifdef __linux__
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+    int n = CPU_COUNT(&set);
+    if (n > 0) {
+      return (int32_t)n;
+    }
+  }
+#endif
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  return n > 0 ? (int32_t)n : 0;
+}
+#endif
+
+/*
+ * Monotonic-ish wall clock in milliseconds.
+ *
+ * `mizchi_pkf_now_sec` is what the sequential runner reported timings
+ * with, and at one-second resolution a parallel run's per-task times
+ * are mostly zeros. This is only used for reporting, so a coarse
+ * epoch-based value is fine; it never reaches the action key.
+ */
+#ifdef _WIN32
+MOONBIT_FFI_EXPORT int64_t mizchi_pkf_now_ms(void) {
+  return (int64_t)GetTickCount64();
+}
+#else
+#include <sys/time.h>
+MOONBIT_FFI_EXPORT int64_t mizchi_pkf_now_ms(void) {
+  struct timeval tv;
+  if (gettimeofday(&tv, NULL) != 0) {
+    return 0;
+  }
+  return (int64_t)tv.tv_sec * 1000 + (int64_t)(tv.tv_usec / 1000);
+}
 #endif

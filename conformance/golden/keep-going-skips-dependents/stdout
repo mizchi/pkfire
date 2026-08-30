@@ -1,0 +1,7 @@
+bad ran
+pkf: $ bad
+pkf: task `bad` failed with exit code 3
+pkf: - after (skipped: `bad` failed)
+other ran
+pkf: $ other
+pkf: - all (skipped: `bad` failed)
