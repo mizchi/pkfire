@@ -1,0 +1,1 @@
+{"findings":[{"path":"/tmp/pkfconf-a-shadowed-task-is-reported-by-lint-.4098.3563a7d/work/Taskfile.pkl","line":10,"level":"warning","kind":"shadowed-by-builtin","task":"list","message":"task \"list\" has the same name as the `pkf list` subcommand, so `pkf list` runs the subcommand and not this task","suggestion":"rename the task, or invoke it as `pkf run list`"}]}

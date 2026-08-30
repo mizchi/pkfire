@@ -1,0 +1,20 @@
+/// Fixture for the `pkf <task>` shorthand's one hard rule.
+///
+/// A built-in subcommand always wins. This Taskfile declares a task
+/// called `list`, and `pkf list` must still be the subcommand — a
+/// command whose meaning depends on the repository it is run in is one
+/// nobody can learn. The task stays reachable as `pkf run list`, and
+/// `pkf lint` reports the collision so it is not a silent surprise.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
+
+local listTask = new Task {
+  name = "list"
+  cmd = "echo this task is shadowed by the subcommand"
+}
+
+local shadowMe = new Task {
+  name = "shadow-me"
+  cmd = "echo a task with an ordinary name"
+}
+
+tasks { listTask; shadowMe }

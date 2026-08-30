@@ -526,6 +526,53 @@ scenarios {
     }
   }
   new {
+    id = "shorthand-runs-a-task-without-run"
+    fixture = "examples/basic"
+    // `pkf hello` is `pkf run hello`. Typing `run` for the thing this
+    // tool mostly does is ceremony every comparable runner drops.
+    argv { "hello" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "hello from pkfire" } }
+  }
+  new {
+    id = "shorthand-does-not-shadow-a-builtin"
+    fixture = "examples/shadowed"
+    // The fixture declares a task called `list`. `pkf list` must stay
+    // the subcommand: a command whose meaning depends on the repository
+    // it runs in is one nobody can learn. The task's own output must
+    // not appear.
+    argv { "list" }
+    contract = new {
+      exit = true
+      mustContain { "shadow-me" }
+    }
+  }
+  new {
+    id = "a-shadowed-task-is-reported-by-lint"
+    fixture = "examples/shadowed"
+    // Losing the shorthand is a real surprise, so it is said at lint
+    // time rather than the first time someone types `pkf list` and gets
+    // the wrong thing.
+    argv { "lint" }
+    contract = new {
+      exit = true
+      mustContain { "shadowed-by-builtin"; "pkf run list" }
+    }
+  }
+  new {
+    id = "an-unknown-name-names-both-possibilities"
+    fixture = "examples/basic"
+    // `pkf helo` could be a typo for either a subcommand or a task, and
+    // the message cannot know which — so it offers the near misses it
+    // has rather than guessing.
+    argv { "helo" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr { "unknown subcommand or task `helo`"; "hello" }
+    }
+  }
+  new {
     id = "eval-cache-sees-an-edited-taskfile"
     fixture = "examples/eval-cache"
     // `setup` warms the evaluation cache and then edits the Taskfile,

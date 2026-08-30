@@ -291,6 +291,21 @@ Rules:
 value's origin. The file equivalent needs no schema —
 `inputs { ...producer.outputs }` is ordinary Pkl.
 
+## Command dispatch
+
+`pkf <name>` where `<name>` is not a built-in subcommand is rewritten to
+`pkf run <name>` and re-dispatched, so flags, params, positionals and
+globs behave identically.
+
+- Built-ins always win. A task sharing a name with one is reachable only
+  as `pkf run <name>`; `pkf lint` reports it as `shadowed-by-builtin`.
+- The fallback fires only when the name resolves to a task or matches a
+  task glob; otherwise the name is reported as unknown, with near
+  misses from both the subcommand list and the task list.
+- A token starting with `-` is never a task name.
+- Outside a project the name is reported unknown rather than
+  complaining about a missing Taskfile.
+
 ## Timeouts and platform requirements
 
 `timeoutSeconds > 0` runs the command under a deadline. On expiry the

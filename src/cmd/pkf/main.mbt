@@ -4780,6 +4780,28 @@ fn lint_rendered_tasks(
       )
     }
   }
+  // Rule: shadowed-by-builtin. `pkf <task>` is shorthand for
+  // `pkf run <task>`, and a built-in subcommand always wins it — a
+  // command whose meaning depends on the repository it runs in is one
+  // nobody can learn. So a task sharing a name with a subcommand is
+  // still runnable, just not the way every other task is, and that is
+  // worth saying at lint time rather than the first time someone tries.
+  for name in builtin_shadowed_tasks(plan) {
+    let line = match line_of.get(name) {
+      Some(l) if l != 0 => l
+      _ => 1
+    }
+    mk(
+      line,
+      "warning",
+      "shadowed-by-builtin",
+      name,
+      "task \"\{name}\" has the same name as the `pkf \{name}` subcommand, " +
+      "so `pkf \{name}` runs the subcommand and not this task",
+      "rename the task, or invoke it as `pkf run \{name}`",
+      false,
+    )
+  }
   // Rule 6: undeclared-artifact-dep. Analysis over the whole Taskfile,
   // not a run set: a consumer whose inputs reach into another task's
   // declared outputs depends on that task, and if no `deps` chain says
@@ -5126,9 +5148,13 @@ fn completion_bash() -> String {
     #|  cur="${COMP_WORDS[COMP_CWORD]}"
     #|  prev="${COMP_WORDS[COMP_CWORD-1]}"
     #|
-    #|  # First positional = subcommand.
+    #|  # First positional = a subcommand, or a task name: `pkf build` is
+    #|  # shorthand for `pkf run build` whenever `build` is not a subcommand.
     #|  if [ "$COMP_CWORD" -eq 1 ]; then
-    #|    COMPREPLY=($(compgen -W "init list describe info run up trace doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help" -- "$cur"))
+    #|    local subs tasks
+    #|    subs="init list describe info run up trace doctor lint format hooks affected clean cache completion graph explain migrate pkl-cache version help"
+    #|    tasks=$(pkf list 2>/dev/null | awk '{print $1}')
+    #|    COMPREPLY=($(compgen -W "$subs $tasks" -- "$cur"))
     #|    return
     #|  fi
     #|
@@ -5464,6 +5490,10 @@ fn completion_fish() -> String {
     #|function __pkf_tasks
     #|    pkf list 2>/dev/null | awk '{print $1}'
     #|end
+    #|
+    #|# `pkf build` is shorthand for `pkf run build`, so a task name is a
+    #|# valid first word wherever it does not collide with a subcommand.
+    #|complete -c pkf -f -n '__fish_use_subcommand' -a '(__pkf_tasks)' -d 'task'
     #|
     #|# Subcommands when no subcommand has been picked yet.
     #|complete -c pkf -f -n '__fish_use_subcommand' -a init      -d 'write a starter Taskfile.pkl'
@@ -6655,9 +6685,49 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       pkl_cache_cmd(sub_args[:])
     }
     other => {
-      eprintln("pkf: unknown subcommand `\{other}`")
-      eprintln(usage_text())
-      1
+      // `pkf build` means `pkf run build` — but only when `build` is a
+      // task. Anything else keeps saying it is unknown, rather than
+      // handing a typo to the runner to fail on somewhere further in.
+      //
+      // A built-in never reaches here, so a task sharing a name with one
+      // stays reachable as `pkf run <name>` and `pkf lint` reports the
+      // collision. See `shorthand.mbt`.
+      if !could_be_task_name(other) {
+        suggest_unknown_command(other, None)
+        return 1
+      }
+      let (explicit_taskfile, _) = extract_file_flag(args[1:])
+      let plan = match find_taskfile(explicit_taskfile) {
+        Some(taskfile) => {
+          let raw_json = eval_taskfile(taskfile)
+          Some(parse_plan(raw_json, taskfile~))
+        }
+        // Outside a project there is nothing to run and nothing to
+        // suggest, and the user was not asking about a Taskfile.
+        None => None
+      }
+      let is_task = match plan {
+        Some(p) => p.tasks.get(other) is Some(_)
+        None => false
+      }
+      // A glob reaches the runner too: `pkf 'test:*'` should behave as
+      // `pkf run 'test:*'`, and only the runner knows what it matches.
+      let is_pattern = match plan {
+        Some(p) => expand_task_patterns([other], p.tasks).length() > 0
+        None => false
+      }
+      if !is_task && !is_pattern {
+        suggest_unknown_command(other, plan)
+        return 1
+      }
+      // Re-dispatch rather than duplicate the run path: `run` is matched
+      // above, so this recurses exactly once, and every flag, param and
+      // positional behaves identically to spelling `run` out.
+      let forwarded = ["run"]
+      for arg in args {
+        forwarded.push(arg)
+      }
+      run_main(group, forwarded)
     }
   }
 }

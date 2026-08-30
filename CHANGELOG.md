@@ -10,6 +10,42 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- **`run` is optional: `pkf build` means `pkf run build`.** Running a
+  task is the overwhelmingly common thing to do with this tool, and
+  every comparable runner — npm, make, just, task — lets the name stand
+  on its own. Flags, params, positionals and globs behave identically,
+  because the shorthand re-dispatches through the same code path rather
+  than reimplementing it.
+
+  ```sh
+  pkf build --mode=prod
+  pkf greet -- world
+  pkf 'test:*'
+  ```
+
+  **A built-in subcommand always wins.** A Taskfile declaring a task
+  called `list` does not get to change what `pkf list` means — a command
+  whose meaning depends on the repository it runs in is one nobody can
+  learn. The task stays reachable as `pkf run list`, and a new lint
+  rule, `shadowed-by-builtin`, reports the collision rather than leaving
+  it to be discovered by typing it.
+
+  The fallback only fires when the name resolves to a real task, so a
+  typo still reports itself — and because it cannot know whether you
+  meant a subcommand or a task, it offers the near misses from both:
+
+  ```
+  $ pkf helo
+  pkf: unknown subcommand or task `helo`
+    did you mean the subcommand: help
+    did you mean the task: hello
+  ```
+
+  A leading `-` is never treated as a task name, so `pkf --verison`
+  stays an unknown flag rather than becoming an unknown task.
+
 ### Changed
 
 - **The examples pinned to a relative `amends` now use the published

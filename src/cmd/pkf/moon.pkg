@@ -39,6 +39,8 @@ options(
     "fspy_source.mbt": [ "native" ],
     "main.mbt": [ "native" ],
     "providers.mbt": [ "native" ],
+    "shorthand.mbt": [ "native" ],
+    "shorthand_wbtest.mbt": [ "native" ],
     "steps.mbt": [ "native" ],
     "toolchain.mbt": [ "native" ],
     "toolchain_wbtest.mbt": [ "native" ],

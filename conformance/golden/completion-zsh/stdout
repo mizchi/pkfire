@@ -12,6 +12,7 @@ _pkf() {
     'info:structured snapshot (schema version + defaults + tasks + workflowTests)'
     'run:run one or more tasks'
     'up:supervise long-running services'
+    'trace:run a task under the fspy shim and audit its declared inputs'
     'doctor:diagnose pkfire setup'
     'lint:detect Taskfile issues'
     'format:pkl format -w wrapper'
@@ -35,20 +36,14 @@ _pkf() {
 
   case "${words[2]}" in
     list)
-      if [[ "${words[$((CURRENT-1))]}" == "--color" ]]; then
-        _values 'color' auto always never
-      elif [[ "${words[$CURRENT]}" == -* ]]; then
+      if [[ "${words[$CURRENT]}" == -* ]]; then
         _values 'list option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
           '-v[show cmd preview and deps]' \
           '--verbose[show cmd preview and deps]' \
-          '--long[show compact audit table]' \
           '--json[emit machine-readable output]' \
-          '--all[include internal tasks]' \
-          '--unsorted[use declaration order]' \
-          '--source-order[use declaration order]' \
-          '--color[when to color output]'
+          '--all[include internal tasks]'
       fi
       ;;
     lint)
@@ -56,9 +51,7 @@ _pkf() {
         _values 'lint option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
-          '--json[emit machine-readable output]' \
-          '--fix[apply safe fixes]' \
-          '--dry-run[show fixes without writing files]'
+          '--json[emit machine-readable output]'
       fi
       ;;
     doctor)
@@ -66,9 +59,7 @@ _pkf() {
         _values 'doctor option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
-          '--json[emit machine-readable output]' \
-          '--fix[apply safe fixes]' \
-          '--dry-run[show fixes without writing files]'
+          '--json[emit machine-readable output]'
       fi
       ;;
     affected)
@@ -76,20 +67,8 @@ _pkf() {
         _values 'affected option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
-          '--since[git ref to diff against]' \
-          '--files[simulate changed file paths]' \
-          '--explain[show matching input patterns]' \
           '--check[run workflowTests]' \
-          '--dry-run[preview plan without running]' \
-          '--no-cache[disable cache for this run]' \
-          '--refresh[skip lookup but store outputs]' \
-          '--timing[print task durations]' \
-          '--quiet[suppress per-task log lines]' \
-          '--keep-going[do not stop on first failure]' \
-          '--profile[profile name for cache keys]' \
-          '--watch[recompute affected set on change]' \
-          '-j[max concurrent tasks]' \
-          '--jobs[max concurrent tasks]'
+          '--changed[read newline-separated changed paths from a file]'
       else
         local -a tasks
         tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -101,7 +80,6 @@ _pkf() {
         _values 'run option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
-          '--watch[re-run on input changes]' \
           '--dry-run[preview plan without running]' \
           '--print-hash[print action keys and exit]' \
           '--explain-cache[explain cache decisions and exit]' \
@@ -111,10 +89,9 @@ _pkf() {
           '--quiet[suppress per-task log lines]' \
           '--keep-going[do not stop on first failure]' \
           '--profile[profile name for cache keys]' \
-          '--on-fail[action on task failure]' \
           '--remote-only[consult only remote cache]' \
-          '-j[max concurrent tasks]' \
-          '--jobs[max concurrent tasks]'
+          '-j[actions to run at once, or auto]' \
+          '--jobs[actions to run at once, or auto]'
       else
         local -a tasks
         tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -125,6 +102,19 @@ _pkf() {
       local -a tasks
       tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
       _describe 'task' tasks
+      ;;
+    trace)
+      if [[ "${words[$CURRENT]}" == -* ]]; then
+        _values 'trace option' \
+          '-f[path to Taskfile.pkl]' \
+          '--file[path to Taskfile.pkl]' \
+          '--check[fail when a file is read but not declared]' \
+          '--emit[print a matching inputs block]'
+      else
+        local -a tasks
+        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
+        _describe 'task' tasks
+      fi
       ;;
     describe)
       if [[ "${words[$CURRENT]}" == -* ]]; then
@@ -164,26 +154,23 @@ _pkf() {
       ;;
     graph)
       if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
-        _values 'format' dot mermaid tree json
+        _values 'format' tree dot mermaid json
       elif [[ "${words[$CURRENT]}" == -* ]]; then
         _values 'graph option' \
           '-f[path to Taskfile.pkl]' \
           '--file[path to Taskfile.pkl]' \
-          '--format[output format]' \
           '--json[emit machine-readable output]' \
-          '--target[render only one task subgraph]' \
           '--all[include internal tasks]' \
-          '--unsorted[use declaration order]' \
-          '--source-order[use declaration order]' \
-          '--depth[limit dependency traversal]'
+          '--format[output format: tree, dot, mermaid, json]' \
+          '--target[only this task and what it depends on]' \
+          '--depth[follow at most N dependency hops]'
       fi
       ;;
     explain)
       if [[ "${words[$CURRENT]}" == -* ]]; then
         _values 'explain option' \
           '-f[path to Taskfile.pkl]' \
-          '--file[path to Taskfile.pkl]' \
-          '--diff[compare against another Taskfile.pkl]'
+          '--file[path to Taskfile.pkl]'
       else
         local -a tasks
         tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
