@@ -62,11 +62,30 @@ jobs:
         working-directory: examples/basic
         run: ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe graph
 
-      - name: Smoke - pkf run hello (cache miss + cache hit)
+      - name: Smoke - pkf run hello
         working-directory: examples/basic
         env:
           PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-mbt-cache
         run: |
           rm -rf "$PKFIRE_MBT_CACHE_DIR"
           ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe run hello
-          ../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe run hello
+
+      # This step used to run `hello` twice and call it "cache miss +
+      # cache hit". `hello` declares no `inputs`, so it is never cached
+      # and the second run was another miss; nothing was asserted
+      # either way. `count` appends to a file it does not declare as an
+      # output, so the byte count is the evidence: one after a hit, two
+      # after a re-run.
+      - name: Smoke - a cache hit skips the command
+        working-directory: examples/cache-hit
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-hit-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" runs.log out.log
+          "$BIN" run count
+          "$BIN" run count | tee second.log
+          grep -q 'cache hit' second.log || { echo "second run did not hit"; exit 1; }
+          actual=$(wc -c < runs.log | tr -d ' ')
+          [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }

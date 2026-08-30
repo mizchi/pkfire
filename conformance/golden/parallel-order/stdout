@@ -1,4 +1,5 @@
-gen ran
-consume read artifact
 pkf: $ gen
+gen ran
 pkf: $ consume
+consume read artifact
+pkf: 2 task(s) · 2 ran · 7ms

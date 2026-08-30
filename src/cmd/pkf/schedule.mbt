@@ -57,8 +57,9 @@ fn auto_jobs() -> Int {
 ///|
 /// What happened to one action.
 enum ActionOutcome {
-  /// Ran (or hit the cache) and reported this exit code.
-  Finished(Int)
+  /// Reached a conclusion of its own — ran, hit the cache, or had
+  /// nothing to do. The exit code is inside the `TaskOutcome`.
+  Finished(TaskOutcome)
   /// Never launched: something it depends on failed, or the run had
   /// already failed and `--keep-going` was not set. The `String` names
   /// the action that caused it.
@@ -183,7 +184,7 @@ async fn[X] run_action_graph(
     graph.order.length() + 1,
     initial_value=0,
   )
-  let inbox : Array[(String, Int, Int64, Int64)] = []
+  let inbox : Array[(String, TaskOutcome, Int64, Int64)] = []
   let mut running = 0
   let mut outstanding = 0
   let mut exit_code = 0
@@ -265,7 +266,7 @@ async fn[X] run_action_graph(
       outstanding = outstanding + 1
       let launched = now_ms()
       group.spawn_bg(() => {
-        let code = run_task(
+        let outcome = run_task(
           group,
           plan,
           task,
@@ -275,7 +276,7 @@ async fn[X] run_action_graph(
           opts~,
           graph=Some(graph),
         )
-        inbox.push((name, code, now_ms() - launched, launched - started))
+        inbox.push((name, outcome, now_ms() - launched, launched - started))
         completions.release()
       })
     }
@@ -288,12 +289,13 @@ async fn[X] run_action_graph(
     if inbox.length() == 0 {
       continue
     }
-    let (name, code, duration_ms, start_ms) = inbox.remove(0)
+    let (name, outcome, duration_ms, start_ms) = inbox.remove(0)
+    let code = outcome.code()
     running = running - 1
     outstanding = outstanding - 1
     runs.push(ActionRun::{
       task: name,
-      outcome: Finished(code),
+      outcome: Finished(outcome),
       duration_ms,
       start_ms,
     })
@@ -313,6 +315,87 @@ async fn[X] run_action_graph(
 }
 
 ///|
+/// One line at the end of a run saying what actually happened.
+///
+/// The per-task lines already say `# name (cache hit …)`, but in a
+/// fifty-task build they scroll past and the reader is left asking the
+/// only question that matters after a change: how much of this did we
+/// actually redo? A count answers it without reading the log, and the
+/// wall clock next to it is what a cache is for.
+///
+/// Printed for every run, not behind a flag: a summary you have to ask
+/// for is one nobody sees.
+fn report_summary(result : ScheduleResult) -> Unit {
+  match summary_line(result) {
+    Some(line) => println("pkf: " + line)
+    None => ()
+  }
+}
+
+///|
+/// The summary text, or `None` when there is nothing worth saying.
+///
+/// Split from the printing so the counting can be tested: which
+/// outcomes count as work is the part that can quietly go wrong, and a
+/// summary that overstates what ran is worse than none.
+fn summary_line(result : ScheduleResult) -> String? {
+  let mut hits = 0
+  let mut remote = 0
+  let mut ran = 0
+  let mut skipped = 0
+  let mut reported = 0
+  for run in result.runs {
+    match run.outcome {
+      Finished(LocalHit) => hits = hits + 1
+      Finished(RemoteHit) => remote = remote + 1
+      Finished(Ran(_)) => ran = ran + 1
+      // An umbrella task spawns nothing, so it is not work; counting it
+      // as "ran" would overstate what happened.
+      Finished(Umbrella) => ()
+      Finished(Reported) => reported = reported + 1
+      Skipped(_) => skipped = skipped + 1
+    }
+  }
+  // `--dry-run` and `--print-hash` printed a report per task; a summary
+  // of work that did not happen would only be noise.
+  if reported > 0 {
+    return None
+  }
+  let total = hits + remote + ran + skipped
+  if total == 0 {
+    return None
+  }
+  let parts : Array[String] = ["\{total} task(s)"]
+  let cached = hits + remote
+  if cached > 0 {
+    if remote > 0 && hits > 0 {
+      parts.push("\{cached} cached (\{remote} remote)")
+    } else if remote > 0 {
+      parts.push("\{cached} cached (remote)")
+    } else {
+      parts.push("\{cached} cached")
+    }
+  }
+  parts.push("\{ran} ran")
+  if skipped > 0 {
+    parts.push("\{skipped} skipped")
+  }
+  parts.push(format_ms(result.wall_ms))
+  let mut line = ""
+  for i, part in parts {
+    if i > 0 {
+      line = line + " · "
+    }
+    line = line + part
+  }
+  // The case worth calling out: nothing had to be redone.
+  if ran == 0 && skipped == 0 && cached == total {
+    line = line + "  (nothing to rebuild)"
+  }
+  Some(line)
+}
+
+///|
 /// Render `--timing`.
 ///
 /// Sequentially the interesting number is each task's duration and
@@ -324,6 +407,8 @@ fn report_timing(result : ScheduleResult, graph : ActionGraph) -> Unit {
   println("pkf: timing")
   for run in result.runs {
     match run.outcome {
+      Finished(LocalHit) | Finished(RemoteHit) =>
+        println("pkf:   \{run.task}  \{format_ms(run.duration_ms)}  (cached)")
       Finished(_) =>
         println(
           "pkf:   \{run.task}  \{format_ms(run.duration_ms)}" +

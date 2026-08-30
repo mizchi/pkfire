@@ -487,6 +487,34 @@ executionPlatform  executionProperties
 "why did this miss?", because a miss is always one of those lines
 differing from last time.
 
+### What a run tells you it skipped
+
+Every run ends with one line saying how much of it was actually redone:
+
+```
+$ pkf run ci
+pkf: $ build
+pkf: $ test
+pkf: 3 task(s) · 1 cached · 2 ran · 4.1s
+
+$ pkf run ci                       # nothing changed
+pkf: # build (cache hit 5a1b2c3d)
+pkf: # test (cache hit 9e0f1a2b)
+pkf: 3 task(s) · 3 cached · 0 ran · 12ms  (nothing to rebuild)
+```
+
+The per-task `# name (cache hit …)` lines were always there, but in a
+fifty-task build they scroll past, and the question left afterwards is
+the one the summary answers. A remote hit is counted separately
+(`2 cached (1 remote)`) because "my cache works" and "CI's cache works"
+are different facts. Tasks skipped after a failure are counted too, so
+a run that stopped early cannot look like a run that finished.
+
+Deps-only umbrella tasks are not counted: they spawn nothing, and
+calling them "ran" would overstate the build. `--quiet` suppresses the
+line along with the per-task ones, and `--dry-run` / `--print-hash`
+omit it because nothing was executed to summarise.
+
 ### Running actions in parallel
 
 `pkf run -j N` runs up to `N` actions at once; `-j auto` uses one per

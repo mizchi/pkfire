@@ -12,6 +12,23 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Every run ends with a summary of how much of it was skipped.**
+
+  ```
+  pkf: 3 task(s) · 3 cached · 0 ran · 12ms  (nothing to rebuild)
+  ```
+
+  The per-task `# name (cache hit …)` lines were always there, but in a
+  fifty-task build they scroll past and the question left afterwards is
+  how much was actually redone. Remote hits are counted separately, and
+  tasks skipped after a failure are counted too, so a run that stopped
+  early cannot look like one that finished. Deps-only umbrella tasks
+  are not counted — they spawn nothing. `--quiet` suppresses it;
+  `--dry-run` and `--print-hash` omit it, having executed nothing.
+
+  `--timing` now marks cached tasks as such rather than reporting the
+  microseconds a cache lookup took as if it were the task's duration.
+
 - **`pkf run --sandbox` runs an action against only what it declared.**
   `inputs` was a promise nothing checked: a task that reads a file it
   never declared runs fine, caches fine, and then serves a stale hit
@@ -147,6 +164,16 @@ Action version all move together — there is one tag per release
   patterns.
 
 ### Fixed
+
+- **Nothing tested that a cache hit skips the command.** The CI step
+  named "cache miss + cache hit" ran `pkf run hello` twice and asserted
+  nothing — and `hello` declares no `inputs`, so it is never cached and
+  the second run was another miss. A hit reporting itself was covered;
+  a hit *not running the command* was not. There is now a conformance
+  scenario whose fixture appends to a file it does not declare as an
+  output, so the empty filesystem delta is the proof, and the CI step
+  checks the byte count. Both were confirmed to fail when caching is
+  bypassed.
 
 - **The repo's own `moon check` / `moon test` / `build` tasks did not
   declare the resolved dependency tree.** A transitive package moving

@@ -1,0 +1,18 @@
+/// Fixture proving a cache hit *skips the command*, not just that it
+/// reports one.
+///
+/// `count` appends a byte to `runs.log` — which it never declares as an
+/// output, so the cache neither stores nor restores it. After a first
+/// run the file is one byte. A second run that genuinely hits leaves it
+/// alone; a second run that re-executes makes it two, and the
+/// filesystem delta says so.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local count = new Task {
+  name = "count"
+  cmd = "printf x >> runs.log && cp runs.log out.log"
+  inputs { "seed.txt" }
+  outputs { "out.log" }
+}
+
+tasks { count }
