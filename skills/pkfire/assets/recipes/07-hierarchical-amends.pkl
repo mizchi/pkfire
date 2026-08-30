@@ -21,7 +21,7 @@
 ///
 /// This file is the *root*. The leaf example follows below in a
 /// comment.
-amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.14.2#/Taskfile.pkl"
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.15.0#/Taskfile.pkl"
 
 local sources: Listing<String> = new {
   "**/*.go"

@@ -35,7 +35,7 @@ perl -i -pe "s/^  \"[0-9]+\.[0-9]+\.[0-9]+\"\$/  \"${new}\"/" src/cmd/pkf/main.m
 # Bumping them pre-release leaves `pkl eval examples/<x>/Taskfile.pkl`
 # 404'ing until the new version is actually released. After the
 # release ships, bump examples in a follow-up commit (see the
-# "Cut a release" section in README.md).
+# "Cutting a release" section in CONTRIBUTING.md).
 #
 # Two reference forms get swept in lockstep:
 #   - `pkfire@<ver>`         — Pkl package URI / release tag

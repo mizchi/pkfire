@@ -8,38 +8,72 @@ The Pkl schema version, the `pkf` binary version, and the GitHub
 Action version all move together — there is one tag per release
 (`pkfire@<version>`) and one row per release in this file.
 
-## [Unreleased]
+## [0.15.0] - 2026-08-29
 
-### Fixed
+The local cache was not hitting at all before this release, and fixing
+that exposed everything downstream of it: the action key was blind to
+several values that change a build, archives were not safe to unpack,
+and a failed restore counted as a hit. All of that is fixed here, but
+the fixes change behaviour for existing Taskfiles — read "Changed"
+below before upgrading.
 
-- **Two loader tests shared one package cache directory.** The
-  `download_package_uri_to_cache` tests both wrote to `p/n@1.0.0`, and
-  the isolation they appeared to have was illusory:
-  `PKL_MBT_PACKAGE_CACHE` is process-global, so the per-test cache roots
-  are last-writer-wins and after a full run only one of them exists —
-  every test's package lands inside it. The success test and the
-  sha256-mismatch test therefore shared a directory, which is what made
-  the suite fail intermittently under load. Each test now uses a
-  distinct package path in its `package://` URI, so they cannot collide
-  whichever root wins or whatever order they run in.
+**Run `pkf cache clear` after upgrading.** The action key covers new
+fields, so every entry written by an earlier version is unreachable
+and only takes up disk. Entries holding outputs that contain symlinks
+or empty directories were also written in a shape this version no
+longer produces; they are rejected rather than restored, but clearing
+is the cheaper way to get there.
 
-- **Every evaluation error in a Taskfile was reported as
-  "Taskfile output has no `tasks` mapping".** A typo'd identifier, an
-  unknown method, or a task listed in `tasks { … }` but never defined
-  all produced that one message, pointing the reader at the `tasks`
-  declaration — the part of the file that is almost always fine. It also
-  quietly undercut the schema's own selling point, that misspelling a
-  dependency fails at evaluation time: it does, but the message named
-  the wrong thing. The embedded evaluator renders a member it cannot
-  evaluate as `null` rather than reporting a diagnostic, so pkfire now
-  recognises `tasks: null` as a failed evaluation, says so, and points
-  at `pkl eval <taskfile>` for the exact line and column. Missing and
-  wrong-typed `tasks` are reported as themselves. Syntax errors were
-  already reported correctly and are unchanged. See #65 for the
-  upstream half.
+`-j` / `--jobs`, `--watch` and `--on-fail` were parsed as task params
+and silently dropped; they now exit with the reason. A run that passed
+one of them was never getting the behaviour it asked for.
+
+### Added
+
+- **A canonical action descriptor behind the action key.** The key is
+  now a SHA-256 over a length-prefixed serialization of an
+  `ActionDescriptor` — mnemonic, executable, argv, effective env,
+  `inheritEnv`, inputs with digests, declared outputs, working
+  directory, execution platform, and execution properties. Adding a
+  field to the key means adding a field to the IR, so a value cannot
+  reach the command while staying invisible to the cache. Length
+  prefixes make the form injection-proof: a `cmd` containing the
+  serializer's own separators cannot forge a neighbouring field.
+- **`pkf run` reserved flags now work**: `--dry-run`, `--print-hash`,
+  `--explain-cache`, `--no-cache`, `--refresh`, `--remote-only`,
+  `--quiet`, `--timing`, `--keep-going`, `--profile=NAME`. Multiple
+  targets (`pkf run a b c`) and glob targets (`pkf run 'test:*'`) run
+  the topological union. `-j` / `--jobs`, `--watch` and `--on-fail` are
+  rejected with the reason rather than ignored — the runner is
+  sequential, and `pkf watch` is the watch entry point.
+- **`pkf trace <task>`** — discover a task's real inputs by observing
+  what it reads, using an `LD_PRELOAD` shim over libc's `open` family
+  (the approach [vite-task uses][vite-task]). `--check` audits the
+  observed reads against the declared `inputs` and exits non-zero when a
+  file is read that no input covers; `--emit` prints an `inputs { … }`
+  block matching reality. Linux only; see
+  [docs/auto-inputs.md](./docs/auto-inputs.md) for the mechanism and its
+  limits.
+
+[vite-task]: https://zenn.dev/herp_inc/articles/strange-task-runner
 
 ### Changed
 
+- **A task with no declared `inputs` is no longer cached.** Its action
+  key depends on nothing a user can edit, so with the cache-hit bug
+  fixed the first run would have stored an entry and every run after it
+  would have been a permanent hit — a git hook task installed by
+  `pkf hooks install` would have fired exactly once. `cache` still
+  defaults to `true`; declaring `inputs` is what opts a task into it.
+- **A task that exits 0 without producing its declared `outputs` now
+  fails.** Previously it published an empty cache entry, which a later
+  run restored over a working tree. A task whose literal `outputs` are
+  aspirational rather than real needs them removed or `cache = false`.
+- **Every existing cache entry is invalidated.** The action key is now
+  a digest over a canonical descriptor covering `defaults.env`,
+  `inheritEnv`, the declared outputs, the workdir and the execution
+  platform — none of which it saw before — so no key computed by an
+  earlier version can match.
 - **`pkf doctor` reports what the cache actually costs.** The cache row
   counted top-level CAS shards — a number between 0 and 256 that says
   nothing about disk use — so it could not answer the one question it
@@ -57,6 +91,14 @@ Action version all move together — there is one tag per release
   malformed value falls back to the default rather than breaking
   `doctor`. Multi-line check messages now indent their continuation
   under the message column instead of breaking the table.
+
+- **`mizchi/pkl` 0.6.0 → 0.7.0, and the `mizchi/cst` workaround is
+  gone.** The broken `cst@0.1.7` reached pkfire through `pkl@0.6.0`,
+  which pinned it; pkfire could only force the resolver upward by
+  declaring `mizchi/cst@0.1.9` as a direct dependency of its own — a
+  constraint on a package pkfire does not itself use. `pkl@0.7.0` pins
+  `cst@0.1.10`, so the direct dependency is dropped and the transitive
+  graph is correct on its own.
 
 ### Fixed
 
@@ -83,7 +125,6 @@ Action version all move together — there is one tag per release
 - **`pkf cache --help` printed "unknown cache subcommand".** `--help`,
   `-h` and `help` now reach the usage block, matching what `pkf` itself
   does at the top level. A genuine typo still errors as before.
-
 - **The local cache never hit.** `cache_hit` probed for a `manifest`
   file, but the entry format has been a single `entry.tar.gz` blob since
   the archive rewrite, so a freshly stored entry missed on the next run
@@ -120,16 +161,6 @@ Action version all move together — there is one tag per release
   All six are fixed — long names use a GNU `LongLink` member, checksums
   are verified, escaping paths and oversized expansions are rejected,
   and every entry is published by an atomic rename.
-- **A task with no declared `inputs` is no longer cached.** Its action
-  key depends on nothing a user can edit, so with the cache-hit bug
-  fixed the first run would have stored an entry and every run after it
-  would have been a permanent hit — a git hook task installed by
-  `pkf hooks install` would have fired exactly once. `cache` still
-  defaults to `true`; declaring `inputs` is what opts a task into it.
-- **A task could "succeed" without producing its declared outputs.** A
-  command that exits 0 having written none of its literal `outputs` now
-  fails, instead of publishing an empty cache entry that later restores
-  over a working tree.
 - **`quiet = true` on a task did nothing.** The schema field and the
   README described suppressing pkfire's per-task diagnostic lines, but
   the runner never read it. It now does, and `pkf run --quiet` does the
@@ -140,45 +171,30 @@ Action version all move together — there is one tag per release
   `moonbitlang/x@0.4.47` binds a runtime symbol that was renamed. Both
   dependencies are bumped, and the deprecated `@sys` env / `StringBuilder`
   APIs are migrated so `moon check --deny-warn` passes again.
-
-### Changed
-
-- **`mizchi/pkl` 0.6.0 → 0.7.0, and the `mizchi/cst` workaround is
-  gone.** The broken `cst@0.1.7` reached pkfire through `pkl@0.6.0`,
-  which pinned it; pkfire could only force the resolver upward by
-  declaring `mizchi/cst@0.1.9` as a direct dependency of its own — a
-  constraint on a package pkfire does not itself use. `pkl@0.7.0` pins
-  `cst@0.1.10`, so the direct dependency is dropped and the transitive
-  graph is correct on its own.
-
-### Added
-
-- **A canonical action descriptor behind the action key.** The key is
-  now a SHA-256 over a length-prefixed serialization of an
-  `ActionDescriptor` — mnemonic, executable, argv, effective env,
-  `inheritEnv`, inputs with digests, declared outputs, working
-  directory, execution platform, and execution properties. Adding a
-  field to the key means adding a field to the IR, so a value cannot
-  reach the command while staying invisible to the cache. Length
-  prefixes make the form injection-proof: a `cmd` containing the
-  serializer's own separators cannot forge a neighbouring field.
-- **`pkf run` reserved flags now work**: `--dry-run`, `--print-hash`,
-  `--explain-cache`, `--no-cache`, `--refresh`, `--remote-only`,
-  `--quiet`, `--timing`, `--keep-going`, `--profile=NAME`. Multiple
-  targets (`pkf run a b c`) and glob targets (`pkf run 'test:*'`) run
-  the topological union. `-j` / `--jobs`, `--watch` and `--on-fail` are
-  rejected with the reason rather than ignored — the runner is
-  sequential, and `pkf watch` is the watch entry point.
-- **`pkf trace <task>`** — discover a task's real inputs by observing
-  what it reads, using an `LD_PRELOAD` shim over libc's `open` family
-  (the approach [vite-task uses][vite-task]). `--check` audits the
-  observed reads against the declared `inputs` and exits non-zero when a
-  file is read that no input covers; `--emit` prints an `inputs { … }`
-  block matching reality. Linux only; see
-  [docs/auto-inputs.md](./docs/auto-inputs.md) for the mechanism and its
-  limits.
-
-[vite-task]: https://zenn.dev/herp_inc/articles/strange-task-runner
+- **Two loader tests shared one package cache directory.** The
+  `download_package_uri_to_cache` tests both wrote to `p/n@1.0.0`, and
+  the isolation they appeared to have was illusory:
+  `PKL_MBT_PACKAGE_CACHE` is process-global, so the per-test cache roots
+  are last-writer-wins and after a full run only one of them exists —
+  every test's package lands inside it. The success test and the
+  sha256-mismatch test therefore shared a directory, which is what made
+  the suite fail intermittently under load. Each test now uses a
+  distinct package path in its `package://` URI, so they cannot collide
+  whichever root wins or whatever order they run in.
+- **Every evaluation error in a Taskfile was reported as
+  "Taskfile output has no `tasks` mapping".** A typo'd identifier, an
+  unknown method, or a task listed in `tasks { … }` but never defined
+  all produced that one message, pointing the reader at the `tasks`
+  declaration — the part of the file that is almost always fine. It also
+  quietly undercut the schema's own selling point, that misspelling a
+  dependency fails at evaluation time: it does, but the message named
+  the wrong thing. The embedded evaluator renders a member it cannot
+  evaluate as `null` rather than reporting a diagnostic, so pkfire now
+  recognises `tasks: null` as a failed evaluation, says so, and points
+  at `pkl eval <taskfile>` for the exact line and column. Missing and
+  wrong-typed `tasks` are reported as themselves. Syntax errors were
+  already reported correctly and are unchanged. See #65 for the
+  upstream half.
 
 ## [0.14.2] - 2026-08-03
 
@@ -920,7 +936,9 @@ sits on top of the unchanged 0.4 schema.
 - Skill at `skills/pkfire/SKILL.md` plus seven copy-paste recipes.
 - Nix flake (`nix run github:mizchi/pkfire`) and Go install path.
 
-[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.14.1...HEAD
+[Unreleased]: https://github.com/mizchi/pkfire/compare/pkfire@0.15.0...HEAD
+[0.15.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.15.0
+[0.14.2]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.14.2
 [0.14.1]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.14.1
 [0.13.0]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.13.0
 [0.12.4]: https://github.com/mizchi/pkfire/releases/tag/pkfire@0.12.4
