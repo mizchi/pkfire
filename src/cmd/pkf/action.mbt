@@ -28,7 +28,13 @@
 /// Bump when the canonical serialization changes shape. Every existing
 /// cache entry is invalidated by a bump, which is the intent: a stale
 /// entry written under a different set of hashed fields is not a hit.
-const ACTION_IR_VERSION : String = "pkfire-action-v2"
+///
+/// v3 also covers a change on the *entry* side rather than the key: an
+/// entry may now carry the run's stdout and stderr under a reserved
+/// `.pkf-meta/` prefix, and a restore drops members with that prefix
+/// instead of writing them. A v2 entry could hold a task's real output
+/// there, so the bump is what keeps the new restore from deleting it.
+const ACTION_IR_VERSION : String = "pkfire-action-v3"
 
 ///|
 /// One spawned process, fully described.
@@ -259,6 +265,7 @@ fn lower_task_to_action(
   positionals : Array[String],
   profile : String,
   consumed_artifacts~ : Array[(String, String)] = [],
+  providers~ : Array[(String, String)] = [],
 ) -> ActionDescriptor {
   // argv: exactly what run_task hands to the shell, so the key sees the
   // real command line rather than a reconstruction of it.
@@ -281,6 +288,12 @@ fn lower_task_to_action(
   let merged : Map[String, String] = Map([], capacity=8)
   for k, v in plan.default_env {
     merged[k] = v
+  }
+  // Providers sit between the module defaults and the task's own env:
+  // a value a task merely depends on must not override one it declared
+  // itself, and both must beat a project-wide default.
+  for pair in providers {
+    merged[pair.0] = pair.1
   }
   for k, v in task.env {
     merged[k] = v

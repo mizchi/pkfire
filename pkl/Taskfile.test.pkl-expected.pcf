@@ -30,6 +30,10 @@ examples {
       hermetic = false
       acceptsArgs = false
       params {}
+      provides {
+        executable = null
+        env {}
+      }
       specRef = null
     }
   }

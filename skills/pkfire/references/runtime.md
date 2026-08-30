@@ -186,6 +186,38 @@ A cycle over declared and derived edges is reported before any task
 runs, naming each edge's reason. A task does not consume its own
 outputs, so a formatter that rewrites what it reads is not a cycle.
 
+## Providers
+
+A task's `provides` block is data its **direct** dependents receive:
+
+```pkl
+provides = new Providers {
+  executable = "target/release/cli"   // literal path, must be in `outputs`
+  env { ["CLI_CHANNEL"] = "stable" }
+}
+```
+
+Dependents see `executable` as `$PKF_<TASK>_EXECUTABLE` (task name
+uppercased, non-alphanumerics to `_`), with the path re-rooted into the
+dependent's own `workdir` — a producer in `crates/cli` and a consumer
+in `apps/web` get `../../crates/cli/target/release/cli`. `env` entries
+arrive under their own names.
+
+Rules:
+
+- Direct dependents only; providers do not travel a second hop.
+- Precedence is `defaults.env` < providers < task `env` < params.
+- `executable` must be matched by the producer's `outputs`, and the
+  producer must have a `cmd`; otherwise the Taskfile is rejected at
+  load time.
+- Values land in the merged env overlay, so they are in the action key
+  like any other variable. A producer declaring nothing changes no key.
+- Sorted by name, so evaluation order cannot affect the key.
+
+`pkf explain <task>` prints a `providers (N):` block naming each
+value's origin. The file equivalent needs no schema —
+`inputs { ...producer.outputs }` is ordinary Pkl.
+
 ## Local cache
 
 The cache root is selected in this order:
@@ -206,12 +238,19 @@ After a successful miss, pkf expands existing `outputs`, archives
 regular files and recursive directory contents, preserves file modes
 best-effort, and writes the entry.
 
-Known `0.14.0` implementation gap: `cache_store` writes only
-`entry.tar.gz`, while `cache_hit` still tests for a legacy `manifest`
-file. A newly stored local entry is visible to `cache stats` but is not
-recognized as a hit. A remote GET can still restore an archive, but the
-next invocation consults the remote again. Treat local reuse as broken
-until the hit check and archive layout are reconciled.
+The entry also carries the run's stdout and stderr under a reserved
+`.pkf-meta/` prefix, capped at 1 MiB per stream. A restore hands those
+members to the runner and never writes them into the workspace; the
+hit line becomes `# name (cache hit <key>, replaying logs)` and the
+stored streams are printed verbatim. A task that printed nothing keeps
+the plain hit line. Declaring an output under `.pkf-meta/` is rejected
+at load time — it would be stored and then dropped on every hit.
+
+Capture uses pipes, so a cached task's command does not see a terminal
+and colour-on-tty detection turns colour off. Uncacheable tasks
+(`cache = false`, empty `inputs`, `--no-cache`) are unaffected, and
+sequential output is still forwarded as it arrives rather than buffered
+to the end.
 
 Current path caveat: cache input/output expansion is rooted at the
 Taskfile directory even when `workdir` is set. `clean` instead joins

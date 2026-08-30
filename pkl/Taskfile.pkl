@@ -55,6 +55,37 @@ class Param {
 }
 
 /// A unit of work authored by the user.
+/// What a task exposes to the tasks that depend on it.
+///
+/// `deps` has always meant "run this first". A provider makes it carry
+/// data as well: a dependent gets these values without re-deriving them
+/// from the producer's `outputs`, and — the part that cannot be written
+/// by hand correctly — with paths resolved into the dependent's own
+/// working directory rather than the producer's.
+///
+/// Providers reach *direct* dependents only. Propagating them another
+/// hop would inject a value into a task that never named the producer,
+/// which is a surprise rather than a convenience; a task that wants to
+/// re-export something can declare it itself.
+class Providers {
+  /// The one runnable artifact this task produces, relative to the
+  /// producing task's own root.
+  ///
+  /// Dependents see it as `$PKF_<TASK>_EXECUTABLE`, resolved into their
+  /// own working directory. Must be a literal path (no globs) that the
+  /// task's `outputs` actually cover — otherwise a dependent would be
+  /// handed a path to something nothing produces.
+  executable: String(!contains("*") && !contains("?"))? = null
+
+  /// Values placed in a dependent's environment.
+  ///
+  /// The dependent's own `env` wins on a collision: a task's local
+  /// declaration should not be silently overridden by something it
+  /// merely depends on. These are literal strings and are folded into
+  /// the dependent's action key, so a changed value is a cache miss.
+  env: Mapping<String, String> = new {}
+}
+
 class Task {
   /// Identifier. Used as the Mapping key in the rendered output and as
   /// the visible name in `pkf list` / `pkf graph`. `/` is allowed so a
@@ -229,6 +260,12 @@ class Task {
   /// key when `cache = true`.
   params: Listing<Param> = new {}
 
+  /// What this task exposes to its dependents. See `Providers`.
+  ///
+  /// Declaring nothing here — the default — leaves `deps` exactly as it
+  /// was: an ordering constraint and nothing more.
+  provides: Providers = new Providers {}
+
   /// Optional link to a [pkspec](https://github.com/mizchi/pkspec)
   /// `Scenario.id`. When set, this task is the implementation of the
   /// referenced spec scenario — useful as a structured equivalent to
@@ -289,6 +326,12 @@ class RenderedWorkflowTest {
   direct: Listing<String>
 }
 
+/// Wire format mirror of `Providers` consumed by the runner.
+class RenderedProviders {
+  executable: String?
+  env: Mapping<String, String>
+}
+
 /// Wire format consumed by the Go runner. `name` is lifted to the Mapping
 /// key in `Rendered.tasks`; `deps` is projected from `Listing<Task>` to
 /// `Listing<String>` so the runner can deserialize without recursion.
@@ -316,6 +359,7 @@ class RenderedTask {
   hermetic: Boolean
   acceptsArgs: Boolean
   params: Listing<RenderedParam>
+  provides: RenderedProviders
   specRef: String?
 }
 
@@ -389,6 +433,10 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
             description = p.description
           }
         }
+      }
+      provides = new RenderedProviders {
+        executable = t.provides.executable
+        env = t.provides.env
       }
       specRef = t.specRef
     }

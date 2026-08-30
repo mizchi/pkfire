@@ -1,0 +1,1 @@
+pkf: task `bad` declares the output `.pkf-meta/stdout`, but `.pkf-meta/` is reserved for pkfire's cache metadata

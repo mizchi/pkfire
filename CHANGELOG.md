@@ -12,6 +12,83 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`provides`: typed values a task hands to its dependents.** `deps`
+  has meant one thing — run that first. It can now carry data as well.
+
+  ```pkl
+  local cli = new Task {
+    name = "cli"
+    workdir = "crates/cli"
+    cmd = "cargo build --release"
+    outputs { "target/release/cli" }
+    provides = new Providers {
+      executable = "target/release/cli"
+      env { ["CLI_CHANNEL"] = "stable" }
+    }
+  }
+
+  local smoke = new Task {
+    name = "smoke"
+    workdir = "apps/web"
+    cmd = "\"$PKF_CLI_EXECUTABLE\" --version"
+    deps { cli }
+  }
+  ```
+
+  `smoke` runs from `apps/web`, so the path it needs is not the one
+  `cli` declared — it is `../../crates/cli/target/release/cli`. That
+  re-rooting is the reason this is a schema feature rather than a
+  string you could inline: a provider is resolved into the consumer's
+  own working directory, which nobody writes correctly by hand in a
+  monorepo. `env` providers cover the half that is not a file at all.
+
+  Provider values reach the command as environment variables and go
+  into the action key through the same merged overlay every other
+  variable does — a value the command can read and the key cannot see
+  is how a cache goes stale. Existing Taskfiles are unaffected: a
+  producer that declares nothing leaves `deps` exactly as it was, and
+  keys are byte-identical.
+
+  Providers reach *direct* dependents only, the consumer's own `env`
+  wins a collision, and an `executable` that no `outputs` pattern
+  covers is refused when the Taskfile loads — otherwise the failure
+  would surface in the dependent's command and be reported against the
+  wrong task. `pkf explain` lists each value with the dependency it
+  came from.
+
+  The file half needs no schema: `inputs { ...cli.outputs }` is
+  ordinary Pkl and already worked, and the bytes behind an
+  `executable` are already hashed in as consumed artifacts.
+
+- **A cache hit replays the logs of the run that filled the entry.**
+
+  ```
+  pkf: # build (cache hit 5a1b2c3d, replaying logs)
+  bundle: 412 kB
+  ```
+
+  The stdout and stderr of a cached task are stored inside the entry
+  alongside its outputs, so a hit reproduces the transcript instead of
+  swallowing it. A build's output should not depend on whether the
+  cache happened to be warm — that is how a CI log becomes unreadable
+  the moment caching starts working, and how people come to distrust
+  the cache. Remote hits replay too, since the entry carries the logs.
+
+  A task that printed nothing keeps the plain `(cache hit …)` line
+  rather than claiming a replay of an empty log. Each stream is capped
+  at 1 MiB in the entry, with a note saying how much was dropped:
+  entries are downloaded whole on a remote hit.
+
+  Capturing a stream means the command writes to a pipe rather than to
+  the terminal, so a tool that colours conditionally will turn colour
+  off. This applies only to tasks that are actually cached — anything
+  uncacheable still gets the terminal directly — and output is not
+  delayed either way: sequentially it is forwarded as it arrives.
+
+  `.pkf-meta/` is now reserved inside a cache entry. A task declaring
+  an output under that prefix is rejected at load time rather than
+  having it stored and then dropped on every later hit.
+
 - **`pkf graph --format dot|mermaid` is back, with `--target` and
   `--depth`.** The Go implementation had them, the MoonBit port dropped
   them, and the README kept advertising them — so the documented
@@ -157,6 +234,11 @@ Action version all move together — there is one tag per release
   and a concrete path matching both.
 
 ### Changed
+
+- **The action IR version is now `pkfire-action-v3`**, which invalidates
+  every existing cache entry. A v2 entry could hold a task's real output
+  under `.pkf-meta/`, which a v3 restore would drop; the bump is what
+  keeps the new restore from deleting it.
 
 - **`pkf lint --fix` / `--dry-run` and `pkf explain --diff` are
   rejected with a reason.** They were accepted and ignored, so

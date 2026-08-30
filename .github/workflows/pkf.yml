@@ -89,3 +89,42 @@ jobs:
           grep -q 'cache hit' second.log || { echo "second run did not hit"; exit 1; }
           actual=$(wc -c < runs.log | tr -d ' ')
           [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }
+
+      # `provides` is unreleased, so no URI-pinned example can exercise
+      # it yet — this fixture amends the in-tree schema instead, which
+      # makes this step the end-to-end check until the release moves
+      # the examples onto the published package.
+      - name: Smoke - a provider reaches the task that depends on it
+        working-directory: examples/providers
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-provider-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" apps/web/smoked.txt crates/cli/target
+          "$BIN" run smoke
+          # `cli` writes its binary under `crates/cli`; `smoke` runs from
+          # `apps/web`. The path that works from there is the walk
+          # between the two, which is what the provider computed.
+          grep -q '^source$' apps/web/smoked.txt || { echo "executable provider did not resolve"; exit 1; }
+          grep -q '^channel=stable$' apps/web/smoked.txt || { echo "env provider did not resolve"; exit 1; }
+          "$BIN" explain smoke | grep -q 'PKF_CLI_EXECUTABLE=../../crates/cli/target/cli' \
+            || { echo "explain did not report the provider"; exit 1; }
+
+      # A hit that skips the command must still show what the command
+      # said, or a build's transcript depends on whether the cache
+      # happened to be warm. `say` is not re-executed here, so every
+      # line below came out of the cache entry.
+      - name: Smoke - a cache hit replays the stored logs
+        working-directory: examples/cache-hit
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-replay-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" said.txt
+          "$BIN" run say
+          "$BIN" run say > replay.out 2> replay.err
+          grep -q 'replaying logs' replay.out || { echo "hit did not announce a replay"; exit 1; }
+          grep -q 'built the thing' replay.out || { echo "stdout was not replayed"; exit 1; }
+          grep -q 'a warning' replay.err || { echo "stderr was not replayed"; exit 1; }

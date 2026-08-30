@@ -19,3 +19,20 @@ MOONBIT_FFI_EXPORT void mizchi_pkf_eprint(moonbit_bytes_t s) {
  * rare enough that the cost is irrelevant.
  */
 MOONBIT_FFI_EXPORT void mizchi_pkf_flush_stdout(void) { fflush(stdout); }
+
+/*
+ * Write a UTF-8 byte string to stdout verbatim and flush.
+ *
+ * Used by the log tee, which forwards a child's output chunk by chunk
+ * as it arrives. `println` cannot do this: a chunk boundary can fall
+ * inside a multi-byte character or mid-line, and decoding each chunk
+ * separately would corrupt the first and add a newline to the second.
+ * The flush is what keeps the forwarding live — stdout is block
+ * buffered whenever it is not a terminal, and a build whose output
+ * appears only at exit is not being streamed.
+ */
+MOONBIT_FFI_EXPORT void mizchi_pkf_print(moonbit_bytes_t s) {
+  int32_t len = (int32_t)Moonbit_array_length(s);
+  fwrite((const char *)s, 1, (size_t)len, stdout);
+  fflush(stdout);
+}
