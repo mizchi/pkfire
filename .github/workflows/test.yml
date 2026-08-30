@@ -32,6 +32,18 @@ jobs:
       - name: Check pkfire@<ver> reference consistency
         run: scripts/check-version-consistency.sh
 
+      # A workflow can be valid YAML and still be rejected by Actions,
+      # in which case it runs *no jobs at all* — the failure looks like
+      # CI skipping the checks rather than like a syntax error. Linted
+      # here so a bad workflow fails a job that does run.
+      - name: Lint workflows
+        run: |
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+            -o /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          tar xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint .github/workflows/*.yml
+
       - name: Build pkf (release)
         run: |
           moon update

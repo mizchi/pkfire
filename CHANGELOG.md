@@ -12,6 +12,15 @@ Action version all move together — there is one tag per release
 
 ### Fixed
 
+- **`pkf run lint:workflows` (actionlint) joins the preflight gate.** A
+  workflow can be perfectly valid YAML and still be rejected by GitHub
+  Actions, in which case it runs *no jobs at all* — the failure looks
+  like CI skipping the checks rather than like a syntax error. A
+  duplicate `NO_PROXY` / `no_proxy` pair (legal YAML; env names are
+  case-insensitive to Actions) took the whole smoke workflow out this
+  way. The task skips with a note when `actionlint` is not installed, so
+  a contributor without it can still run the gate; CI installs it.
+
 - **The remote cache uploaded nothing to a backend that reads bodies by
   `Content-Length`.** The PUT went out `Transfer-Encoding: chunked` with
   no length — legal HTTP, and the reference Cloudflare Worker handles

@@ -159,6 +159,32 @@ local testWorkflow: Task = new {
   }
 }
 
+/// Validate the GitHub Actions workflows.
+///
+/// `yaml.safe_load` is not enough: a workflow can be perfectly valid
+/// YAML and still be rejected by Actions, in which case it runs *no
+/// jobs at all* and the failure looks like CI silently skipping the
+/// checks rather than like a syntax error. That is how a duplicate
+/// `NO_PROXY` / `no_proxy` pair — legal YAML, but env names are
+/// case-insensitive to Actions — took the whole smoke workflow out.
+///
+/// Skipped with a note rather than failing when `actionlint` is not
+/// installed: a contributor without it should still be able to run the
+/// gate, and CI installs it.
+local lintWorkflows: Task = new {
+  name = "lint:workflows"
+  description = "actionlint over .github/workflows (skipped if not installed)"
+  cmd =
+    """
+    if ! command -v actionlint > /dev/null 2>&1; then
+      echo "actionlint not installed; skipping (see https://github.com/rhysd/actionlint)"
+      exit 0
+    fi
+    actionlint .github/workflows/*.yml
+    """
+  inputs { ".github/workflows/*.yml" }
+}
+
 local checkVersion: Task = new {
   name = "check-version"
   description = "Verify every `pkfire@<ver>` reference matches pkl/PklProject"
@@ -255,6 +281,7 @@ local preflight: Task = new {
     testPkl
     testExamples
     lintTaskfile
+    lintWorkflows
     testWorkflow
     checkVersion
     testReleaseNotes
@@ -310,6 +337,7 @@ workflowTests {
       "test:pkl"
       "test:examples"
       "lint:taskfile"
+      "lint:workflows"
       "test:workflow"
       "test:release-notes"
       "test:homebrew"
@@ -329,6 +357,7 @@ tasks {
   testPkl
   testExamples
   lintTaskfile
+  lintWorkflows
   testWorkflow
   testReleaseNotes
   testHomebrew

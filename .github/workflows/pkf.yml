@@ -250,8 +250,6 @@ jobs:
         env:
           PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-remote-cache
           PKFIRE_MBT_REMOTE_CACHE: http://127.0.0.1:8760
-          NO_PROXY: 127.0.0.1,localhost
-          no_proxy: 127.0.0.1,localhost
         run: |
           set -eu
           BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
