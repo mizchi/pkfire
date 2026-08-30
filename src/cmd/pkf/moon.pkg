@@ -34,6 +34,8 @@ options(
     "graph_render_wbtest.mbt": [ "native" ],
     "fspy_source.mbt": [ "native" ],
     "main.mbt": [ "native" ],
+    "providers.mbt": [ "native" ],
+    "providers_wbtest.mbt": [ "native" ],
     "replay.mbt": [ "native" ],
     "replay_wbtest.mbt": [ "native" ],
     "sandbox.mbt": [ "native" ],

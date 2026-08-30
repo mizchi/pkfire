@@ -1,0 +1,36 @@
+/// Fixture for typed providers.
+///
+/// `cli` builds a binary in its own workdir and declares it as
+/// `provides.executable`. `smoke` lives in a *different* workdir and
+/// runs it. The path `smoke` needs is not the path `cli` declared —
+/// it is the walk between the two directories — which is exactly the
+/// value a Taskfile author cannot write correctly by hand and the
+/// reason a provider is not just a string constant.
+/// Relative `amends` so this fixture tracks the in-tree schema.
+/// `provides` is unreleased, so the published package URI the other
+/// examples pin does not have it yet; this one moves to the URI form
+/// with the release that ships the field.
+amends "../../pkl/Taskfile.pkl"
+
+local cli = new Task {
+  name = "cli"
+  workdir = "crates/cli"
+  cmd = "mkdir -p target && cp src.txt target/cli && chmod +x target/cli"
+  inputs { "src.txt" }
+  outputs { "target/cli" }
+  provides = new Providers {
+    executable = "target/cli"
+    env { ["CLI_CHANNEL"] = "stable" }
+  }
+}
+
+local smoke = new Task {
+  name = "smoke"
+  workdir = "apps/web"
+  cmd = "cat \"$PKF_CLI_EXECUTABLE\" > smoked.txt && echo \"channel=$CLI_CHANNEL\" >> smoked.txt"
+  inputs { "page.txt" }
+  outputs { "smoked.txt" }
+  deps { cli }
+}
+
+tasks { cli; smoke }

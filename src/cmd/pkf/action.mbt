@@ -265,6 +265,7 @@ fn lower_task_to_action(
   positionals : Array[String],
   profile : String,
   consumed_artifacts~ : Array[(String, String)] = [],
+  providers~ : Array[(String, String)] = [],
 ) -> ActionDescriptor {
   // argv: exactly what run_task hands to the shell, so the key sees the
   // real command line rather than a reconstruction of it.
@@ -287,6 +288,12 @@ fn lower_task_to_action(
   let merged : Map[String, String] = Map([], capacity=8)
   for k, v in plan.default_env {
     merged[k] = v
+  }
+  // Providers sit between the module defaults and the task's own env:
+  // a value a task merely depends on must not override one it declared
+  // itself, and both must beat a project-wide default.
+  for pair in providers {
+    merged[pair.0] = pair.1
   }
   for k, v in task.env {
     merged[k] = v

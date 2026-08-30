@@ -186,6 +186,38 @@ A cycle over declared and derived edges is reported before any task
 runs, naming each edge's reason. A task does not consume its own
 outputs, so a formatter that rewrites what it reads is not a cycle.
 
+## Providers
+
+A task's `provides` block is data its **direct** dependents receive:
+
+```pkl
+provides = new Providers {
+  executable = "target/release/cli"   // literal path, must be in `outputs`
+  env { ["CLI_CHANNEL"] = "stable" }
+}
+```
+
+Dependents see `executable` as `$PKF_<TASK>_EXECUTABLE` (task name
+uppercased, non-alphanumerics to `_`), with the path re-rooted into the
+dependent's own `workdir` — a producer in `crates/cli` and a consumer
+in `apps/web` get `../../crates/cli/target/release/cli`. `env` entries
+arrive under their own names.
+
+Rules:
+
+- Direct dependents only; providers do not travel a second hop.
+- Precedence is `defaults.env` < providers < task `env` < params.
+- `executable` must be matched by the producer's `outputs`, and the
+  producer must have a `cmd`; otherwise the Taskfile is rejected at
+  load time.
+- Values land in the merged env overlay, so they are in the action key
+  like any other variable. A producer declaring nothing changes no key.
+- Sorted by name, so evaluation order cannot affect the key.
+
+`pkf explain <task>` prints a `providers (N):` block naming each
+value's origin. The file equivalent needs no schema —
+`inputs { ...producer.outputs }` is ordinary Pkl.
+
 ## Local cache
 
 The cache root is selected in this order:

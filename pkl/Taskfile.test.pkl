@@ -138,6 +138,30 @@ facts {
     sealed.inheritEnv == true
   }
 
+  ["provides is empty by default, so deps stay an ordering constraint"] {
+    build.provides.executable == null && build.provides.env.isEmpty
+  }
+
+  ["provides round-trips an executable and env"] {
+    local producer = new Schema.Task {
+      name = "cli"
+      cmd = "cargo build --release"
+      outputs { "target/release/cli" }
+      provides = new Schema.Providers {
+        executable = "target/release/cli"
+        env { ["CLI_CHANNEL"] = "stable" }
+      }
+    }
+    producer.provides.executable == "target/release/cli"
+      && producer.provides.env["CLI_CHANNEL"] == "stable"
+  }
+
+  ["a glob is rejected as an executable"] {
+    // A dependent is handed this path verbatim; a pattern would reach
+    // the command as a literal `*`, which resolves to nothing.
+    module.catch(() -> (new Schema.Providers { executable = "dist/*" }).executable) != null
+  }
+
   ["acceptsArgs defaults to false"] {
     build.acceptsArgs == false
   }

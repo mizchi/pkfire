@@ -757,6 +757,73 @@ rewrites `src/**` is a fixpoint, not a cycle. A genuine cycle — two
 tasks each reading what the other writes — is reported before anything
 runs, naming the patterns and a path that matches both.
 
+### Providers: what a dependency hands over
+
+`deps` has meant one thing: run that first. A `provides` block makes it
+carry data as well.
+
+```pkl
+local cli = new Task {
+  name = "cli"
+  workdir = "crates/cli"
+  cmd = "cargo build --release"
+  inputs { "src/**"; "Cargo.toml" }
+  outputs { "target/release/cli" }
+  provides = new Providers {
+    executable = "target/release/cli"
+    env { ["CLI_CHANNEL"] = "stable" }
+  }
+}
+
+local smoke = new Task {
+  name = "smoke"
+  workdir = "apps/web"
+  cmd = "\"$PKF_CLI_EXECUTABLE\" --version"
+  deps { cli }
+}
+```
+
+`smoke` runs from `apps/web`, so the path it needs is not the one `cli`
+declared — it is `../../crates/cli/target/release/cli`, the walk
+between the two directories. That is the point: a provider is not a
+string constant you could inline, it is a value resolved into the
+consumer's own working directory. `env` providers are the other half,
+for the things that are not files at all.
+
+Everything a provider puts in front of the command goes into the action
+key, which is the reason to route it through `provides` rather than
+through the shell: a value the command can read and the key cannot see
+is how a cache goes stale. Change `CLI_CHANNEL` and `smoke` misses —
+`cli`, whose own key does not contain it, does not.
+
+Three rules:
+
+- **Direct dependents only.** A provider does not travel a second hop.
+  A variable appearing in a task that never named the producer is a
+  surprise, not a convenience; a task that wants to pass something
+  along declares it itself.
+- **The consumer wins a collision.** Provider values sit between the
+  module `defaults.env` and the task's own `env`, so a task's local
+  declaration is never overridden by something it merely depends on.
+- **`executable` must be something the task produces.** A path no
+  `outputs` pattern covers is refused when the Taskfile loads, because
+  the failure would otherwise surface in the *dependent's* command and
+  be reported against the wrong task.
+
+`pkf explain <task>` lists them with their origin, which is the answer
+to "where did `$PKF_CLI_EXECUTABLE` come from?":
+
+```
+providers (2):
+  PKF_CLI_EXECUTABLE=../../crates/cli/target/cli  (executable from `cli`)
+  CLI_CHANNEL=stable  (env from `cli`)
+```
+
+The file half of a provider needs no schema — `inputs { ...cli.outputs }`
+is ordinary Pkl and has always worked, and the bytes behind an
+`executable` are already hashed into the consumer's key as consumed
+artifacts.
+
 ### Two contracts that are NOT the same
 
 | | Visible to `cmd`? | Part of the action key? |

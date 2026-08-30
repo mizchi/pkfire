@@ -43,6 +43,8 @@ struct Task {
   /// ambient environment. `--sandbox` turns the first half on for a
   /// whole run; this is the per-task, checked-in form.
   hermetic : Bool
+  /// What this task hands to its direct dependents. See `providers.mbt`.
+  provides : Providers
   params : Array[Param]
   accepts_args : Bool
   service : Bool
@@ -253,6 +255,20 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(v) => parse_bool(v, default=false)
       None => false
     }
+    let provides = match task_entries.get("provides") {
+      Some(Object(p)) => {
+        let executable = match p.get("executable") {
+          Some(String(v)) => v
+          _ => ""
+        }
+        let provided_env = match p.get("env") {
+          Some(v) => parse_string_map(v)
+          None => Map([], capacity=0)
+        }
+        Providers::{ executable, env: provided_env }
+      }
+      _ => Providers::empty()
+    }
     let accepts_args = match task_entries.get("acceptsArgs") {
       Some(v) => parse_bool(v, default=false)
       None => false
@@ -348,7 +364,8 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       cache,
       workdir,
       inherit_env,
-    hermetic,
+      hermetic,
+      provides,
       params,
       accepts_args,
       service,
@@ -360,6 +377,11 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       shutdown_timeout_seconds,
       description,
       visibility,
+    }
+    // Checked against the finished Task, so the message can name the
+    // outputs it compared against.
+    if provider_declaration_error(tasks[name]) is Some(problem) {
+      die(problem)
     }
   }
   let workflow_tests : Array[WorkflowTest] = []
@@ -482,6 +504,22 @@ fn task_to_json(t : Task, with_kind : Bool, keep : Map[String, Bool]?) -> Json {
   o["inheritEnv"] = jbool(t.inherit_env)
   if t.hermetic {
     o["hermetic"] = jbool(true)
+  }
+  // Omitted entirely when the task declares none, so `list --json`
+  // keeps the shape every existing consumer already parses.
+  if !t.provides.is_empty() {
+    let p : Map[String, Json] = Map([], capacity=2)
+    if t.provides.executable.length() > 0 {
+      p["executable"] = Json::string(t.provides.executable)
+    }
+    if t.provides.env.length() > 0 {
+      let env_o : Map[String, Json] = Map([], capacity=t.provides.env.length())
+      for k in sorted_keys(t.provides.env) {
+        env_o[k] = Json::string(t.provides.env.get(k).unwrap())
+      }
+      p["env"] = Json::object(env_o)
+    }
+    o["provides"] = Json::object(p)
   }
   match t.workdir {
     Some(wd) => o["workdir"] = Json::string(wd)
@@ -2191,6 +2229,12 @@ fn action_for_task(
     Some(g) => consumed_artifact_hashes(g, repo_root, task.name, input_hashes)
     None => []
   }
+  // Values this action's dependencies hand it. They reach the command
+  // as environment variables, so they belong in the same merged overlay
+  // the key already hashes — computed here, from the same function
+  // `run_task` uses, so the key cannot describe an environment the
+  // command never saw.
+  let providers = provider_env_overlay(provided_values(plan, repo_root, task))
   lower_task_to_action(
     plan,
     task,
@@ -2199,6 +2243,7 @@ fn action_for_task(
     positionals,
     opts.profile,
     consumed_artifacts=consumed,
+    providers~,
   )
 }
 
@@ -2372,6 +2417,12 @@ async fn[X] run_task(
   let extra_env : Map[String, String] = Map([], capacity=4)
   for k, v in plan.default_env {
     extra_env[k] = v
+  }
+  // Same order as `lower_task_to_action`'s merge, and for the same
+  // reason: the key describes this environment, so the two must not
+  // drift.
+  for pair in provider_env_overlay(provided_values(plan, repo_root, task)) {
+    extra_env[pair.0] = pair.1
   }
   for k, v in task.env {
     extra_env[k] = v
@@ -5692,6 +5743,21 @@ async fn explain_cmd(
       "artifacts:   \{action.consumed_artifacts.length()} file(s) from " +
       joined,
     )
+  }
+  // What the dependencies handed over. These reach the command as
+  // environment variables, so without this line the only way to find
+  // out where `$PKF_BUILD_EXECUTABLE` came from is to read every
+  // dependency's Taskfile entry.
+  let provided = provided_values(plan, repo_root, task)
+  if provided.length() > 0 {
+    println("")
+    println("providers (\{provided.length()}):")
+    for value in provided {
+      println(
+        "  " + value.name + "=" + value.value + "  (" + value.kind + " from `" +
+        value.producer + "`)",
+      )
+    }
   }
   // Derived edges only. Declared deps are on the line above and in the
   // Taskfile; these are the ones that exist because of what the task

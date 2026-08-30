@@ -1,0 +1,4 @@
+# Produced by running the fixture; the CI smoke step and the local
+# `pkf run smoke` both write these.
+apps/web/smoked.txt
+crates/cli/target/
