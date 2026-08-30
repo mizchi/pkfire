@@ -304,6 +304,14 @@ fn lower_task_to_action(
   for k, v in params {
     props["param." + k] = v
   }
+  // Hermetic execution changes what the command can read, so a
+  // hermetic and a non-hermetic run of the same task must not share an
+  // entry: the second may have been computed from a file the first
+  // cannot see. `execution_properties` is where the IR keeps exactly
+  // this kind of constraint, so it needs no new field.
+  if task.hermetic {
+    props["hermetic"] = "true"
+  }
   if profile.length() > 0 {
     props["profile"] = profile
   }
@@ -321,7 +329,10 @@ fn lower_task_to_action(
     executable: task.shell,
     argv,
     env,
-    inherit_env: task.inherit_env,
+    // A hermetic task does not inherit the ambient environment,
+    // whatever `inheritEnv` says. The key records the effective value,
+    // which is what the command will actually see.
+    inherit_env: task.inherit_env && !task.hermetic,
     inputs: input_hashes,
     consumed_artifacts,
     outputs,

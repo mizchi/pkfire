@@ -314,6 +314,48 @@ scenarios {
     contract = new { exit = true; fsDelta = true }
   }
   new {
+    id = "sandbox-undeclared-read"
+    fixture = "examples/sandbox"
+    // `sneaky` reads a file it never declared. Unsandboxed it succeeds
+    // and caches; the empty fsDelta is the other half of the
+    // assertion — a failed sandboxed action leaves the workspace
+    // exactly as it found it.
+    argv { "run"; "--no-cache"; "--sandbox"; "sneaky" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      fsDelta = true
+      mustContainStderr { "No such file or directory" }
+    }
+  }
+  new {
+    id = "sandbox-undeclared-write"
+    fixture = "examples/sandbox"
+    // `messy` writes `dist/scratch.log` without declaring it. The
+    // declared output comes back; the undeclared one is reported and
+    // stays in the sandbox, so fsDelta names only `dist/messy.txt`.
+    argv { "run"; "--no-cache"; "--sandbox"; "messy" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      fsDelta = true
+      mustContainStderr {
+        "it did not declare as outputs"
+        "dist/scratch.log"
+      }
+    }
+  }
+  new {
+    id = "clean-dry-run"
+    fixture = "examples/cat-io"
+    // `--dry-run` used to be accepted and ignored, so this exact
+    // invocation printed "removed:" and removed them. The empty
+    // fsDeleted golden is the assertion that matters.
+    argv { "clean"; "--dry-run" }
+    setup { "printf hi > src.txt"; "printf out > out.txt" }
+    contract = new { exit = true; fsDelta = true; mustContain { "would remove" } }
+  }
+  new {
     id = "cache-stats-structural"
     fixture = "examples/basic"
     argv { "cache"; "stats" }

@@ -456,35 +456,61 @@ fn consumed_artifact_hashes(
   task : String,
   own_inputs : Array[(String, String)],
 ) -> Array[(String, String)] {
-  let node = match graph.nodes.get(task) {
-    Some(n) => n
-    None => return []
-  }
   let already : Map[String, Bool] = Map([], capacity=own_inputs.length())
   for pair in own_inputs {
     already[pair.0] = true
   }
   let root = if repo_root.length() == 0 { "." } else { repo_root }
   let collected : Map[String, String] = Map([], capacity=16)
-  for edge in node.edges {
-    match graph.nodes.get(edge.producer) {
-      Some(producer) =>
-        for rel in expand_inputs(root, producer.outputs) {
-          // `already` is keyed on the consumer's own input paths, which
-          // are relative to *its* root. Comparing repo-relative paths
-          // against them is only exact when the two roots agree; when
-          // they differ the path is kept, and the worst case is one
-          // extra digest in the key, not a wrong one.
-          if !already.contains(rel) && !collected.contains(rel) {
-            collected[rel] = hex_encode(hash_file(join_path(root, rel)))
-          }
-        }
-      None => ()
+  for rel in producer_output_files(graph, repo_root, task) {
+    // `already` is keyed on the consumer's own input paths, which are
+    // relative to *its* root. Comparing repo-relative paths against
+    // them is only exact when the two roots agree; when they differ the
+    // path is kept, and the worst case is one extra digest in the key,
+    // not a wrong one.
+    if !already.contains(rel) && !collected.contains(rel) {
+      collected[rel] = hex_encode(hash_file(join_path(root, rel)))
     }
   }
   let out : Array[(String, String)] = []
   for path in sorted_keys(collected) {
     out.push((path, collected.get(path).unwrap()))
   }
+  out
+}
+
+///|
+/// Every file, repo-relative, produced by the actions `task` depends
+/// on and present on disk now.
+///
+/// The key hashes the subset this action does not already declare; the
+/// sandbox materializes all of them, since a file being both a declared
+/// input and a dependency's output is a reason to have it, not a reason
+/// to leave it out.
+fn producer_output_files(
+  graph : ActionGraph,
+  repo_root : String,
+  task : String,
+) -> Array[String] {
+  let node = match graph.nodes.get(task) {
+    Some(n) => n
+    None => return []
+  }
+  let root = if repo_root.length() == 0 { "." } else { repo_root }
+  let seen : Map[String, Bool] = Map([], capacity=16)
+  let out : Array[String] = []
+  for edge in node.edges {
+    match graph.nodes.get(edge.producer) {
+      Some(producer) =>
+        for rel in expand_inputs(root, producer.outputs) {
+          if !seen.contains(rel) {
+            seen[rel] = true
+            out.push(rel)
+          }
+        }
+      None => ()
+    }
+  }
+  out.sort()
   out
 }

@@ -39,6 +39,10 @@ struct Task {
   cache : Bool
   workdir : String?
   inherit_env : Bool
+  /// Run against a tree holding only the declared inputs, and drop the
+  /// ambient environment. `--sandbox` turns the first half on for a
+  /// whole run; this is the per-task, checked-in form.
+  hermetic : Bool
   params : Array[Param]
   accepts_args : Bool
   service : Bool
@@ -245,6 +249,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(v) => parse_bool(v, default=true)
       None => true
     }
+    let hermetic = match task_entries.get("hermetic") {
+      Some(v) => parse_bool(v, default=false)
+      None => false
+    }
     let accepts_args = match task_entries.get("acceptsArgs") {
       Some(v) => parse_bool(v, default=false)
       None => false
@@ -330,6 +338,7 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       cache,
       workdir,
       inherit_env,
+    hermetic,
       params,
       accepts_args,
       service,
@@ -461,6 +470,9 @@ fn task_to_json(t : Task, with_kind : Bool, keep : Map[String, Bool]?) -> Json {
   }
   o["acceptsArgs"] = jbool(t.accepts_args)
   o["inheritEnv"] = jbool(t.inherit_env)
+  if t.hermetic {
+    o["hermetic"] = jbool(true)
+  }
   match t.workdir {
     Some(wd) => o["workdir"] = Json::string(wd)
     None => ()
@@ -2049,6 +2061,10 @@ struct RunOptions {
   timing : Bool
   /// Cache-partition tag; also exported to the command as `$PKF_PROFILE`.
   profile : String
+  /// Run the command against a tree holding only its declared inputs
+  /// and the outputs of what it depends on, then collect the declared
+  /// outputs back. Turns `inputs` from a promise into a constraint.
+  sandbox : Bool
   /// Let the command write straight to this process's stdout and
   /// stderr. True for a sequential run, where streaming is what makes a
   /// long build watchable. False under `-j`, where several commands
@@ -2070,6 +2086,7 @@ fn RunOptions::default() -> RunOptions {
     quiet: false,
     timing: false,
     profile: "",
+    sandbox: false,
     stream_output: true,
   }
 }
@@ -2305,6 +2322,50 @@ async fn[X] run_task(
       }
     }
   }
+  // `--sandbox`: run against a tree holding only the declared inputs
+  // and the artifacts this action consumes, so a read of anything else
+  // fails here rather than becoming a stale hit three commits later.
+  // A task with no declared inputs has nothing to constrain, and one
+  // whose `workdir` leaves the repo cannot be mirrored — both run
+  // unsandboxed, and say so rather than pretending.
+  let sandboxed = (opts.sandbox || task.hermetic) && task.inputs.length() > 0
+  let box : Sandbox? = if sandboxed {
+    match sandbox_create(repo_root, task_cwd) {
+      Some(b) => {
+        let artifacts = match graph {
+          Some(g) => producer_output_files(g, repo_root, task.name)
+          None => []
+        }
+        if sandbox_materialize(
+            b,
+            repo_root,
+            task_cwd,
+            expand_inputs(task_cwd, task.inputs),
+            artifacts,
+          ) {
+          Some(b)
+        } else {
+          sandbox_destroy(b)
+          eprintln(
+            "pkf: task `\{task.name}`: could not materialize the sandbox; running unsandboxed",
+          )
+          None
+        }
+      }
+      None => {
+        eprintln(
+          "pkf: task `\{task.name}`: `workdir` resolves outside the repo; running unsandboxed",
+        )
+        None
+      }
+    }
+  } else {
+    None
+  }
+  let run_cwd = match box {
+    Some(b) => b.cwd
+    None => task_cwd
+  }
   // Streaming vs. buffered. Sequentially the command owns this
   // process's stdout, which is what makes a long build watchable. Under
   // `-j` several commands would be writing at once, so each action's
@@ -2318,16 +2379,16 @@ async fn[X] run_task(
       task.shell.view(),
       argv[:],
       extra_env~,
-      inherit_env=task.inherit_env,
-      cwd=task_cwd.view(),
+      inherit_env=task.inherit_env && !task.hermetic,
+      cwd=run_cwd.view(),
     )
   } else {
     let (status, out_data, err_data) = @process.collect_output(
       task.shell.view(),
       argv[:],
       extra_env~,
-      inherit_env=task.inherit_env,
-      cwd=task_cwd.view(),
+      inherit_env=task.inherit_env && !task.hermetic,
+      cwd=run_cwd.view(),
     )
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
@@ -2343,6 +2404,39 @@ async fn[X] run_task(
     status
   }
   stop_services(running)
+  match box {
+    Some(b) => {
+      // Nothing comes out of a failed action. A command that died
+      // half-way has written half an output, and moving that into the
+      // workspace is how a later step comes to consume garbage — the
+      // sandbox exists precisely so the failure can be contained.
+      // Unsandboxed the partial file would already be in the tree;
+      // here it does not have to be.
+      if code == 0 {
+        // Summarised, not enumerated. A command that fetches
+        // dependencies or writes build scratch leaves thousands of
+        // files behind, and a line each buries the run's real output.
+        // A count plus a few names is enough to tell "I forgot an
+        // `outputs` line" from "that is scratch".
+        let undeclared = sandbox_collect(b, task_cwd, task.outputs)
+        if undeclared.length() > 0 {
+          eprintln(
+            "pkf: task `\{task.name}` wrote \{undeclared.length()} file(s) it did not " +
+            "declare as outputs (discarded; add them to `outputs` to keep them):",
+          )
+          let shown = if undeclared.length() < 5 { undeclared.length() } else { 5 }
+          for i in 0..<shown {
+            eprintln("pkf:   " + undeclared[i])
+          }
+          if undeclared.length() > shown {
+            eprintln("pkf:   … and \{undeclared.length() - shown} more")
+          }
+        }
+      }
+      sandbox_destroy(b)
+    }
+    None => ()
+  }
   if code != 0 {
     return code
   }
@@ -2536,7 +2630,7 @@ struct ParsedRunArgs {
 fn runner_bool_flags() -> Array[String] {
   [
     "dry-run", "print-hash", "explain-cache", "no-cache", "refresh",
-    "remote-only", "quiet", "timing", "keep-going",
+    "remote-only", "quiet", "timing", "keep-going", "sandbox",
   ]
 }
 
@@ -2620,6 +2714,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
   let mut quiet = false
   let mut timing = false
   let mut keep_going = false
+  let mut sandbox = false
   let mut profile = ""
   let mut jobs = 1
   let mut i = 0
@@ -2717,6 +2812,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
           "quiet" => quiet = on
           "timing" => timing = on
           "keep-going" => keep_going = on
+          "sandbox" => sandbox = on
           _ => ()
         }
         i = i + 1
@@ -2761,6 +2857,7 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
       quiet,
       timing,
       profile,
+      sandbox,
       // Only a sequential run can stream: with several commands
       // writing at once the lines arrive shuffled.
       stream_output: jobs == 1,
@@ -4186,7 +4283,22 @@ async fn lint_cmd(explicit_taskfile : String?, args : ArrayView[String]) -> Int 
     match arg {
       // lint always emits JSON; `--json` is accepted for symmetry but is a no-op.
       "--json" => ()
-      "--fix" | "--dry-run" => () // not implemented: silently ignore
+      // Accepted-and-ignored is the worst of the three options: a
+      // reader who asked for their Taskfile to be fixed gets silence
+      // and an unfixed Taskfile. Say so instead.
+      "--fix" =>
+        {
+          die(
+            "pkf lint: `--fix` is not supported yet — findings report the " +
+            "edit to make; apply it by hand",
+          )
+          return 2
+        }
+      "--dry-run" =>
+        {
+          die("pkf lint: `--dry-run` is not supported yet — `pkf lint` never writes")
+          return 2
+        }
       _ =>
         if arg.has_prefix("--") {
           die("pkf lint: unknown flag `\{arg}`")
@@ -4464,20 +4576,18 @@ fn completion_bash() -> String {
     #|  local sub="${COMP_WORDS[1]}"
     #|  case "$sub" in
     #|    list)
-    #|      if [[ "$prev" == "--color" ]]; then
-    #|        COMPREPLY=($(compgen -W "auto always never" -- "$cur"))
-    #|      elif [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file -v --verbose --long --json --all --unsorted --source-order --color" -- "$cur"))
+    #|      if [[ "$cur" == -* ]]; then
+    #|        COMPREPLY=($(compgen -W "-f --file -v --verbose --json --all" -- "$cur"))
     #|      fi
     #|      ;;
     #|    lint)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
     #|      fi
     #|      ;;
     #|    doctor)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --json --fix --dry-run" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --json" -- "$cur"))
     #|      fi
     #|      ;;
     #|    affected)
@@ -4543,15 +4653,13 @@ fn completion_bash() -> String {
     #|      fi
     #|      ;;
     #|    graph)
-    #|      if [[ "$prev" == "--format" ]]; then
-    #|        COMPREPLY=($(compgen -W "dot mermaid tree json" -- "$cur"))
-    #|      elif [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --format --json --target --all --unsorted --source-order --depth" -- "$cur"))
+    #|      if [[ "$cur" == -* ]]; then
+    #|        COMPREPLY=($(compgen -W "-f --file --json --all" -- "$cur"))
     #|      fi
     #|      ;;
     #|    explain)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --diff" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -4617,20 +4725,14 @@ fn completion_zsh() -> String {
     #|
     #|  case "${words[2]}" in
     #|    list)
-    #|      if [[ "${words[$((CURRENT-1))]}" == "--color" ]]; then
-    #|        _values 'color' auto always never
-    #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+    #|      if [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'list option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
     #|          '-v[show cmd preview and deps]' \
     #|          '--verbose[show cmd preview and deps]' \
-    #|          '--long[show compact audit table]' \
     #|          '--json[emit machine-readable output]' \
-    #|          '--all[include internal tasks]' \
-    #|          '--unsorted[use declaration order]' \
-    #|          '--source-order[use declaration order]' \
-    #|          '--color[when to color output]'
+    #|          '--all[include internal tasks]'
     #|      fi
     #|      ;;
     #|    lint)
@@ -4638,9 +4740,7 @@ fn completion_zsh() -> String {
     #|        _values 'lint option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--json[emit machine-readable output]' \
-    #|          '--fix[apply safe fixes]' \
-    #|          '--dry-run[show fixes without writing files]'
+    #|          '--json[emit machine-readable output]'
     #|      fi
     #|      ;;
     #|    doctor)
@@ -4648,9 +4748,7 @@ fn completion_zsh() -> String {
     #|        _values 'doctor option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--json[emit machine-readable output]' \
-    #|          '--fix[apply safe fixes]' \
-    #|          '--dry-run[show fixes without writing files]'
+    #|          '--json[emit machine-readable output]'
     #|      fi
     #|      ;;
     #|    affected)
@@ -4744,27 +4842,19 @@ fn completion_zsh() -> String {
     #|      fi
     #|      ;;
     #|    graph)
-    #|      if [[ "${words[$((CURRENT-1))]}" == "--format" ]]; then
-    #|        _values 'format' dot mermaid tree json
-    #|      elif [[ "${words[$CURRENT]}" == -* ]]; then
+    #|      if [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'graph option' \
     #|          '-f[path to Taskfile.pkl]' \
     #|          '--file[path to Taskfile.pkl]' \
-    #|          '--format[output format]' \
     #|          '--json[emit machine-readable output]' \
-    #|          '--target[render only one task subgraph]' \
-    #|          '--all[include internal tasks]' \
-    #|          '--unsorted[use declaration order]' \
-    #|          '--source-order[use declaration order]' \
-    #|          '--depth[limit dependency traversal]'
+    #|          '--all[include internal tasks]'
     #|      fi
     #|      ;;
     #|    explain)
     #|      if [[ "${words[$CURRENT]}" == -* ]]; then
     #|        _values 'explain option' \
     #|          '-f[path to Taskfile.pkl]' \
-    #|          '--file[path to Taskfile.pkl]' \
-    #|          '--diff[compare against another Taskfile.pkl]'
+    #|          '--file[path to Taskfile.pkl]'
     #|      else
     #|        local -a tasks
     #|        tasks=(${(f)"$(pkf list 2>/dev/null | awk '{print $1}')"})
@@ -4837,19 +4927,11 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from hooks' -a 'install uninstall list'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from cache' -a 'stats prune rm clear'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l color -a 'auto always never'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -s v -l verbose -d 'show cmd preview and deps'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l long -d 'show compact audit table'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l json -d 'emit machine-readable output'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l all -d 'include internal tasks'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l unsorted -d 'use declaration order'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from list' -l source-order -d 'use declaration order'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l json -d 'emit machine-readable output'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l fix -d 'apply safe fixes'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from lint' -l dry-run -d 'show fixes without writing files'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l json -d 'emit machine-readable output'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l fix -d 'apply safe fixes'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from doctor' -l dry-run -d 'show fixes without writing files'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l check -d 'run workflowTests'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from affected' -l changed -d 'read newline-separated changed paths from a file'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l dry-run -d 'preview plan without running'
@@ -4867,18 +4949,12 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -s f -l file -d 'path to Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l check -d 'fail when a file is read but not declared'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from trace' -l emit -d 'print a matching inputs block'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from clean' -l dry-run -d 'list what would be removed, remove nothing'
     #|
-    #|# `pkf graph --format <TAB>`.
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l format -a 'dot mermaid tree json'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l json -d 'emit machine-readable output'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l target -d 'render only one task subgraph'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l all -d 'include internal tasks'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l unsorted -d 'use declaration order'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l source-order -d 'use declaration order'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from graph' -l depth -d 'limit dependency traversal'
     #|
     #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -s f -l file -d 'path to Taskfile.pkl'
-    #|complete -c pkf -f -n '__fish_seen_subcommand_from explain' -l diff -d 'compare against another Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from describe' -s f -l file -d 'path to Taskfile.pkl'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from describe' -l json -d 'emit machine-readable output'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from info' -s f -l file -d 'path to Taskfile.pkl'
@@ -5172,8 +5248,14 @@ async fn explain_cmd(
   let positionals : Array[String] = []
   for a in args {
     if a == "--diff" {
-      // --diff is out of scope for pkf — silently skip.
-      ()
+      // Skipping the flag while erroring on the file it names is the
+      // most confusing of the possible behaviours: the reader is told
+      // they passed too many task names.
+      die(
+        "pkf explain: `--diff` is not supported yet — run `pkf explain` " +
+        "against each Taskfile and compare the output",
+      )
+      return 2
     } else if a.has_prefix("--") {
       die("pkf explain: unknown flag `\{a}`")
       return 2
@@ -5484,18 +5566,22 @@ async fn clean_cmd(
   explicit_taskfile : String?,
   args : ArrayView[String],
 ) -> Int {
-  // Parse args: collect task names (positional), ignore --dry-run silently
-  // to avoid breaking users who copy Go invocations.
+  // `--dry-run` used to be accepted and ignored, so `pkf clean
+  // --dry-run` printed "removed: …" and removed them. A flag whose
+  // whole purpose is "do not do the thing" must not do the thing.
   let requested : Array[String] = []
+  let mut dry_run = false
   for a in args {
     if a == "--dry-run" {
-      // dry-run not implemented: silently no-op (output still printed)
-      ()
+      dry_run = true
     } else if a == "-h" || a == "--help" {
       println("pkf clean — remove tasks' declared outputs")
       println("")
       println("usage:")
-      println("  pkf clean [-f FILE] [task...]")
+      println("  pkf clean [-f FILE] [--dry-run] [task...]")
+      println("")
+      println("flags:")
+      println("      --dry-run   list what would be removed, remove nothing")
       return 0
     } else if a.has_prefix("-") {
       die("pkf clean: unknown flag `\{a}`")
@@ -5571,8 +5657,12 @@ async fn clean_cmd(
       if !@fs.path_exists(path) {
         continue
       }
-      rm_rf(path)
-      println("removed: \{path}  (\{name})")
+      if dry_run {
+        println("would remove: \{path}  (\{name})")
+      } else {
+        rm_rf(path)
+        println("removed: \{path}  (\{name})")
+      }
       removed = removed + 1
     }
   }

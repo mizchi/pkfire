@@ -258,9 +258,7 @@ cd /repo/root && pkf run ci               # uses /repo/root/Taskfile.pkl
 
 ```sh
 pkf list                       # show public tasks
-pkf list --unsorted            # show tasks in Taskfile declaration order
 pkf list --all                 # include internal tasks
-pkf list --color=always        # force ANSI color (auto, always, never)
 pkf list -v                    # add cmd preview and deps
 pkf list --json                # machine-readable (for editor / CI tooling)
 pkf run test                   # builds first, then tests; second run hits cache
@@ -270,15 +268,12 @@ pkf run --explain-cache test   # explain cache hit/miss/forced-run decisions
 pkf run --no-cache test        # bypass cache lookup AND store for this run
 pkf run --refresh test         # bypass cache lookup but DO re-store (re-baseline)
 pkf up dev                     # start every service:true task in dev's subgraph
-pkf graph                      # emit Graphviz DOT for the full DAG
-pkf graph --format mermaid     # emit Mermaid flowchart (renders on GitHub)
+pkf graph                      # dependency tree, one root per line
 pkf graph --json               # machine-readable graph (tasks + edges)
-pkf graph --target test        # only the subgraph rooted at `test`
 pkf doctor                     # diagnose pkf PATH, pkl/cache/remote/taskfile setup
 pkf doctor --json              # emit structured setup checks
-pkf doctor --fix --dry-run     # preview replacing stale pkf on PATH with this binary
 pkf format                     # pkl format -w on the Taskfile's directory
-pkf format --check pkl examples # exit 11 (CI-friendly) if anything is unformatted
+pkf format --check pkl examples # exit non-zero (CI-friendly) if anything is unformatted
 pkf hooks install              # write .git/hooks/<event> shims for matching tasks
 pkf hooks list                 # show which hook events are wired
 pkf affected src/main.go       # list tasks affected by the given changed paths
@@ -289,7 +284,8 @@ pkf run                        # no args = the `default` task (errors if absent)
 pkf run -- a b c               # forward args to the `default` task when it accepts args
 pkf run --timing build         # also print per-task wall time at the end
 pkf run 'test:*'               # glob over task names (also works on affected / clean)
-pkf clean                      # rm declared outputs of every task; --dry-run to preview
+pkf clean                      # rm declared outputs of every task
+pkf clean --dry-run            # list what would be removed, remove nothing
 pkf cache stats                # local CAS: entries, size, oldest/newest
 pkf cache prune --older-than=7d  # drop stale entries (--dry-run to preview)
 pkf cache rm <action-key>      # remove a specific entry (≥2-char prefix accepted)
@@ -301,20 +297,15 @@ pkf completion fish > ~/.config/fish/completions/pkf.fish
 pkf run --keep-going lint test # don't stop on first failure (Bazel / make -k)
 pkf run -j 4 ci                # run up to 4 actions at once, respecting the graph
 pkf run -j auto ci             # one per available CPU (capped at 16)
-pkf list --long                # audit task visibility/cache/quiet/deps/io/shell flags
+pkf run --sandbox test         # run against only the declared inputs
 pkf explain build              # dump every input to the action key (cache-miss debug)
-pkf explain --diff old/Taskfile.pkl build  # compare action-key inputs against another Taskfile
 pkf run --profile=ci build     # tag the run; $PKF_PROFILE + cache splits per profile
 pkf run --remote-only build    # skip local cache, only consult remote (verify remote populated)
 pkf trace build                # list the workspace files the task actually read
 pkf trace --check build        # fail when a file is read but no declared input covers it
 pkf trace --emit build         # print an `inputs { ... }` block matching the observed reads
-pkf graph --target build --depth=1   # show only direct deps (one hop)
-pkf graph --format tree        # terminal-readable dependency tree (roots only when no target)
-pkf graph --format tree --target test --depth=2  # tree with deps up to two hops
 pkf lint                       # detect dead local tasks, cache footguns, and suspicious task definitions
 pkf lint --json                # emit machine-readable findings for CI/editor tooling
-pkf lint --fix                 # safely add cache = false for outputs-without-inputs findings
 pkf migrate --to=0.5.0         # rewrite Taskfile.pkl's amends URI + verify
 pkf pkl-cache warm             # pre-populate ~/.pkl/cache (CI prefetch step)
 pkf <plugin> <args>            # exec `pkf-<plugin>` on PATH (git-style fallthrough)
@@ -344,20 +335,19 @@ action key, cache decision, declared outputs, matched input file count,
 and input patterns that matched no files. Use `pkf explain <task>` when
 you need the full component-by-component action-key dump.
 
-Visualizing a Taskfile is a single pipeline:
+`pkf graph` prints a dependency tree, and `pkf graph --json` emits the
+same graph as `{tasks, edges}` for anything that wants to draw it:
 
 ```sh
-pkf graph | dot -Tsvg -o tasks.svg
-pkf graph --format mermaid > tasks.mmd
-pkf graph --format tree --target test
+pkf graph
+pkf graph --json | jq '.edges'
 ```
 
 ### Machine-readable introspection
 
 Use `pkf list --json` when tooling needs the task inventory, and
 `pkf graph --json` when it also needs dependency edges. Both commands
-respect visibility by default; pass `--all` to include internal tasks
-and `--unsorted` to preserve Taskfile declaration order.
+respect visibility by default; pass `--all` to include internal tasks.
 
 `pkf list --json` emits:
 
@@ -549,6 +539,78 @@ detection) sees a pipe under `-j`. And two tasks that each declare the
 same `services { … }` will each start it; services are not deduplicated
 across concurrent actions yet.
 
+### Running an action against only what it declared
+
+`inputs` has always been a promise about what a command reads, and
+nothing checked it. A task that reads a file it never declared runs
+fine and caches fine — and then serves a stale hit the day that file
+changes, so the failure shows up as a wrong build, far from the
+undeclared read that caused it.
+
+`pkf run --sandbox` makes the promise structural. Before the command
+runs, pkfire builds a tree containing exactly the declared inputs and
+the outputs of the actions this one depends on, and runs the command
+there:
+
+```
+$ pkf run sneaky              # reads a file it never declared
+pkf: $ sneaky
+$ pkf run --sandbox sneaky
+cat: undeclared/extra.txt: No such file or directory
+pkf: task `sneaky` failed with exit code 1
+```
+
+Declared outputs are collected back into the workspace afterwards.
+Anything else the command wrote stays in the sandbox and is reported,
+because an undeclared output is usually a missing `outputs` line:
+
+```
+pkf: task `messy` wrote `dist/scratch.log` without declaring it as an
+     output (discarded; add it to `outputs` to keep it)
+```
+
+A failed action produces nothing at all: a command that died half-way
+has written half an output, and the sandbox is what lets that stay out
+of the tree.
+
+This is Bazel's symlink forest and deliberately not its namespace
+sandbox. Inputs are symlinked, so materializing a large input set costs
+almost nothing — and **absolute paths still resolve**. `/usr/bin/cc`,
+`$HOME/.cargo`, the toolchain generally, are all still reachable. That
+is a real limit: hermetic *toolchains* are a separate problem, and a
+sandbox that hid `/usr/bin` would make every task fail for a reason
+that has nothing to do with its `inputs`. What this catches is the
+mistake people actually make, which is reading a workspace file you
+forgot to declare.
+
+A task can opt in permanently with `hermetic = true`, which is the
+checked-in form of the flag:
+
+```pkl
+local check = new Task {
+  name = "check"
+  cmd = "cargo clippy -- -D warnings"
+  inputs { "src/**"; "Cargo.toml"; "Cargo.lock" }
+  hermetic = true
+}
+```
+
+`hermetic = true` also seals the environment — the ambient host
+variables are dropped, whatever `inheritEnv` says — because a task told
+to depend on nothing it did not declare should not be reading a
+`$SOME_VAR` the action key cannot see either. That is not silent:
+`pkf run --explain-cache` prints the descriptor with `inheritEnv:
+false`, which is what the key hashes. `hermetic` is part of the key
+too, so a hermetic and a non-hermetic run of the same task never share
+a cache entry.
+
+Tasks with no declared `inputs` run unsandboxed — there is nothing to
+constrain — as does a task whose root shares no ancestor with the repo,
+which cannot be mirrored; both say so rather than pretending.
+[`pkf trace`](./docs/auto-inputs.md) is the complement: the sandbox
+tells you that you forgot something, `trace --emit` tells you what to
+write down.
+
 ### Artifacts: the files are the edges
 
 A declared `outputs` pattern makes its task the *producer* of those
@@ -616,6 +678,7 @@ runs, naming the patterns and a path that matches both.
 | resolved `params` values (`$NAME`) | ✓ | ✓ (when `cache = true`) |
 | tail args from `-- a b c` (`$@`) | ✓ | ✓ (when `cache = true`) |
 | `task.Tools` | as env hints only | ✓ |
+| `hermetic` | ✓ (it decides what the command can read) | ✓ |
 | declared `outputs` | ✗ | ✓ |
 | outputs of the tasks this one depends on | ✓ (they are on disk) | ✓ |
 | `workdir` | ✓ (it is the cwd) | ✓ |
@@ -760,7 +823,7 @@ Open a PR to add yours.
 | [`examples/node`](./examples/node/) | Node project using the built-in `node:test` runner; zero dev deps |
 | [`examples/rust`](./examples/rust/) | Single-binary Rust crate driven through `cargo` (fmt + clippy + test + build) |
 | [`examples/monorepo`](./examples/monorepo/) | pnpm workspaces with one Task generated per package via a `Package` template |
-| [`examples/diagnostics`](./examples/diagnostics/) | `list --long`, `lint --json/--fix`, `doctor --json/--fix`, internal tasks, quiet output, strict shell flags |
+| [`examples/diagnostics`](./examples/diagnostics/) | `lint --json`, `doctor --json`, internal tasks, quiet output, strict shell flags |
 | [`examples/split-import`](./examples/split-import/) | Single entry Taskfile with task fragments under `tasks/`, shared constants, and typed cross-file deps |
 | [`examples/dogfood`](./examples/dogfood/Taskfile.pkl) | pkfire builds itself: cross-compile matrix + checksum + integration |
 | [`examples/remote-cache-worker`](./examples/remote-cache-worker/) | Cloudflare Worker that backs the remote-cache protocol with R2 |
@@ -783,6 +846,8 @@ Open a PR to add yours.
 | 11 | Readiness probes (`readyPort` / `readyCmd`): reuse already-running services and gate dependents on real readiness | ✅ |
 | 12 | Env inheritance default + variadic tail args (`acceptsArgs`) + typed named params (`params` w/ string/enum/int/bool) + `/` in task names | ✅ |
 | 13 | Input auditing via libc interposition (`pkf trace`) — see [docs/auto-inputs.md](./docs/auto-inputs.md) | ✅ Linux only |
+| 14 | Sandboxed execution (`pkf run --sandbox`, or `hermetic = true` per task): declared inputs only, declared outputs collected back, ambient env sealed | ✅ symlink forest; absolute paths (the toolchain) still resolve |
+| — | Presentation flags the Go implementation had and the MoonBit port has not reimplemented: `list --long` / `--unsorted` / `--color`, `graph --format` (DOT, Mermaid) / `--target` / `--depth`, `doctor --fix`, `explain --diff`, `lint --fix` | ⛔ they exit with "unknown flag"; `graph --json` and `list --json` cover the tooling cases |
 
 The [Bazel-style build engine roadmap][roadmap] tracks what separates
 this from a real action-graph engine: hermetic execution, a parallel

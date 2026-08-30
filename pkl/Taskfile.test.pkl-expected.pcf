@@ -27,6 +27,7 @@ examples {
       readyCmd = ""
       readyTimeoutSeconds = 30
       inheritEnv = true
+      hermetic = false
       acceptsArgs = false
       params {}
       specRef = null

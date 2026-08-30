@@ -32,7 +32,7 @@ formats, and graph target selection are not implemented.
 
 | Command | Implemented arguments | Result |
 | --- | --- | --- |
-| `run` | `<task>... [-j N\|auto] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
+| `run` | `<task>... [-j N\|auto] [--sandbox] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
 | `affected` | `<path>...`, `--changed=<file>`, or `--check` | Print the affected plan or run authored workflow tests. |
 | `watch` | `[task...]` | Watch the Taskfile directory and run affected non-service tasks, optionally filtered to exact names. |
 | `up` | `[service...]` | Start all or selected service tasks in the foreground. |
@@ -44,6 +44,13 @@ is rejected. `--watch` is rejected too — `pkf watch` is the watch entry
 point. Every other reserved flag in the table above is implemented, and
 a `--name` the target does not declare as a param is an error rather
 than a silently ignored value.
+
+`--sandbox` runs each action in a tree holding only its declared
+inputs and the outputs of what it depends on, then collects the
+declared outputs back. An undeclared read fails; an undeclared write is
+reported and discarded; a failed action produces nothing. Absolute
+paths still resolve, so the toolchain works. Tasks with no `inputs`,
+and tasks whose `workdir` leaves the repo, run unsandboxed and say so.
 
 `-j N` runs up to N actions at once and `-j auto` uses one per
 available CPU (capped at 16); sequential is the default. Ordering still
@@ -60,8 +67,9 @@ git diff --name-only origin/main...HEAD > /tmp/changed.txt
 pkf affected --changed=/tmp/changed.txt
 ```
 
-`clean --dry-run` is a compatibility no-op: it still deletes outputs.
-Never use it as a safety preview.
+`clean --dry-run` lists what would be removed and removes nothing. It
+used to be accepted and ignored, so the flag printed "removed:" and
+removed them.
 
 ## Taskfile maintenance
 
@@ -74,12 +82,13 @@ Never use it as a safety preview.
 | `pkl-cache` | `[warm] [path...]` | Run external `pkl eval` to warm `~/.pkl/cache`. |
 | `completion` | `bash|zsh|fish` | Print a completion script. |
 
-The generated completion scripts still advertise some Go-era flags
-that the MoonBit dispatcher does not implement. Treat completion as a
-typing aid, not an interface specification.
+The generated completion scripts advertise only flags the dispatcher
+implements. They used to carry Go-era flags that error when used.
 
-`lint --fix` and `lint --dry-run` are accepted but do not modify or
-preview anything. `explain --diff` is also accepted and ignored.
+`lint --fix`, `lint --dry-run` and `explain --diff` are rejected with
+the reason. They used to be accepted and ignored, so `pkf lint --fix`
+reported findings and changed nothing.
+
 
 ## Cache maintenance
 

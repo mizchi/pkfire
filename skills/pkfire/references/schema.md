@@ -72,6 +72,7 @@ Set per-task `shell` and `shellFlags` when they differ from
 | `readyCmd` | `String` | `""` | Exit-zero readiness probe; empty disables it. |
 | `readyTimeoutSeconds` | non-negative `Int` | `30` | Post-spawn readiness budget. |
 | `inheritEnv` | `Boolean` | `true` | Whether the process inherits ambient environment variables. |
+| `hermetic` | `Boolean` | `false` | Run against a tree holding only `inputs` and the outputs of `deps`, collecting `outputs` back; also drops the ambient environment whatever `inheritEnv` says. Part of the action key. |
 | `acceptsArgs` | `Boolean` | `false` | Allows positional args after `--`. |
 | `params` | `Listing<Param>` | empty | Typed named target flags. |
 | `specRef` | `String?` | `null` | Optional pkspec Scenario id; schema-rendered but currently discarded by the MoonBit plan parser. |

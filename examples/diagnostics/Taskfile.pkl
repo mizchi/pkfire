@@ -3,12 +3,11 @@
 /// This Taskfile is intentionally small and lint-clean while still
 /// showing the fields and CLI commands that are easy to miss:
 ///
-///   pkf list --long --all --color=never
+///   pkf list --all --json
 ///   pkf lint --json
-///   pkf lint --fix --dry-run
 ///   pkf doctor --json
-///   pkf doctor --fix --dry-run
-///   pkf explain --diff old/Taskfile.pkl ci
+///   pkf explain ci
+///   pkf clean --dry-run
 amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
 
 local strictShellFlags: List<String> = List("-eu", "-o", "pipefail", "-c")
@@ -21,7 +20,8 @@ local renderReport = new Task {
   outputs { "build/report.txt" }
 
   // A task with outputs but no inputs would be suspicious if cache
-  // were enabled. `pkf lint --fix` safely adds this exact line.
+  // were enabled: its action key would depend on nothing a user can
+  // edit. `pkf lint` reports exactly that, and this line answers it.
   cache = false
 }
 
@@ -45,18 +45,18 @@ local doctorJson = new Task {
 
 local auditList = new Task {
   name = "audit:list"
-  description = "Show every task with cache/quiet/deps/io/shell columns"
-  cmd = "pkf list --long --all --color=never"
+  description = "Every task, internal ones included, as JSON"
+  cmd = "pkf list --all --json"
   shellFlags = strictShellFlags
   cache = false
   quiet = true
   visibility = "internal"
 }
 
-local doctorFixPlan = new Task {
-  name = "doctor:fix-plan"
-  description = "Preview replacing a stale pkf on PATH"
-  cmd = "pkf doctor --fix --dry-run"
+local cleanPlan = new Task {
+  name = "clean:plan"
+  description = "List the declared outputs `pkf clean` would remove"
+  cmd = "pkf clean --dry-run"
   shellFlags = strictShellFlags
   cache = false
   quiet = true
@@ -69,4 +69,4 @@ local ci = new Task {
   deps { lintJson; doctorJson; auditList; renderReport }
 }
 
-tasks { lintJson; doctorJson; auditList; doctorFixPlan; renderReport; ci }
+tasks { lintJson; doctorJson; auditList; cleanPlan; renderReport; ci }

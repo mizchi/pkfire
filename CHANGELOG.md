@@ -12,6 +12,50 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`pkf run --sandbox` runs an action against only what it declared.**
+  `inputs` was a promise nothing checked: a task that reads a file it
+  never declared runs fine, caches fine, and then serves a stale hit
+  the day that file changes — so the failure surfaces as a wrong build,
+  far from the undeclared read that caused it. The sandbox materializes
+  exactly the declared inputs, plus the outputs of the actions this one
+  depends on, and runs the command there, so the read fails at the
+  mistake:
+
+  ```
+  $ pkf run --sandbox sneaky
+  cat: undeclared/extra.txt: No such file or directory
+  pkf: task `sneaky` failed with exit code 1
+  ```
+
+  Declared outputs come back into the workspace on success; anything
+  else the command wrote is reported and discarded, since an undeclared
+  output is usually a missing `outputs` line. A failed action produces
+  nothing at all — a command that died half-way has written half an
+  output, and containing that is what the sandbox is for.
+
+  This is Bazel's symlink forest, not its namespace sandbox: inputs are
+  symlinked, so a large input set costs nothing to materialize and
+  absolute paths still resolve. `/usr/bin/cc` and `$HOME/.cargo` are
+  still reachable — hermetic *toolchains* are a separate problem, and a
+  sandbox that hid `/usr/bin` would fail every task for a reason
+  unrelated to its `inputs`. Tasks with no `inputs`, and tasks whose
+  `workdir` shares no ancestor with the repo, run unsandboxed and say
+  so. See #60 (P1: hermetic sandbox executor).
+
+- **`Task.hermetic` — a new schema field.** `hermetic = true` is the
+  checked-in form of `--sandbox` for one task, and additionally seals
+  the environment: the ambient host variables are dropped whatever
+  `inheritEnv` says, because a task told to depend on nothing it did
+  not declare should not be reading a `$SOME_VAR` the key cannot see
+  either. The descriptor records the effective `inheritEnv` (false) and
+  carries `hermetic` as an execution property, so a hermetic and a
+  non-hermetic run of the same task never share a cache entry. This
+  closes the last open P0 item in #60.
+
+  **This adds a field to the public Pkl schema**, so the next release
+  is a minor bump and `examples/` follow it after the package
+  publishes.
+
 - **`pkf run -j N` runs actions in parallel.** With an action graph to
   schedule against, `-j` is a ready queue over in-degrees: an action
   starts once everything it depends on has finished, and up to `N` run
@@ -82,6 +126,13 @@ Action version all move together — there is one tag per release
 
 ### Changed
 
+- **`pkf lint --fix` / `--dry-run` and `pkf explain --diff` are
+  rejected with a reason.** They were accepted and ignored, so
+  `pkf lint --fix` printed findings, changed nothing, and exited as if
+  it had done the work. `explain --diff` was worse: the flag was
+  skipped but the Taskfile it named became a second positional, so the
+  error read "too many task names".
+
 - **The action key covers consumed artifacts, invalidating every
   existing entry.** `consumedArtifacts` is a new field of the action
   descriptor, so the IR version moves to `pkfire-action-v2` and no key
@@ -96,6 +147,44 @@ Action version all move together — there is one tag per release
   patterns.
 
 ### Fixed
+
+- **The repo's own `moon check` / `moon test` / `build` tasks did not
+  declare the resolved dependency tree.** A transitive package moving
+  from 0.1.7 to 0.1.9 — which happened during this cycle — changes what
+  those commands compile against without any declared input changing,
+  so the cache could serve a pass computed against the old tree. They
+  now hash `.mooncakes/*/*/moon.mod`: a different resolved version has
+  a different `version =` line and a different `import` block, which is
+  the signal, and it costs ~30ms rather than the ~2.5s of hashing all
+  6330 files under `.mooncakes/`.
+
+- **`pkf clean --dry-run` removed the outputs it claimed to preview.**
+  The flag was accepted and ignored, so the command printed
+  `removed: …` and removed them — the one invocation a person reaches
+  for precisely because they are not sure what will be deleted. It now
+  prints `would remove: …` and touches nothing.
+
+- **The README documented flags that do not exist.** Every `pkf …`
+  form in it was run against the binary; nine exited with "unknown
+  flag". `list --long` / `--unsorted` / `--color`, `graph --format`
+  (DOT, Mermaid) / `--target` / `--depth`, `doctor --fix`,
+  `explain --diff` and `lint --fix` were Go-era flags the MoonBit port
+  never reimplemented. The README also claimed `pkf graph` emits
+  Graphviz DOT (it prints a tree, so the documented
+  `pkf graph | dot -Tsvg` pipeline could not have worked) and that
+  `format --check` exits 11 (it exits 1). All corrected, with the
+  unported flags recorded in the status table rather than quietly
+  dropped.
+
+- **The generated shell completions offered flags that error.** All
+  three shells advertised the same Go-era set. They now offer only
+  what the dispatcher implements, plus `clean --dry-run`.
+
+- **`examples/diagnostics` could not run.** Two of its tasks invoked
+  `pkf list --long --all --color=never` and `pkf doctor --fix
+  --dry-run`, so `pkf run ci` in that example failed with "unknown
+  flag". They now use `pkf list --all --json` and `pkf clean
+  --dry-run`.
 
 - **`--keep-going` ran the dependents of a failed task.** It was
   implemented as "carry on down the topological order", so a task whose

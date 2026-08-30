@@ -1,0 +1,2 @@
+pkf: task `messy` wrote 1 file(s) it did not declare as outputs (discarded; add them to `outputs` to keep them):
+pkf:   dist/scratch.log

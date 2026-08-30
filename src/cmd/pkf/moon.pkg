@@ -32,6 +32,8 @@ options(
     "fspy.mbt": [ "native" ],
     "fspy_source.mbt": [ "native" ],
     "main.mbt": [ "native" ],
+    "sandbox.mbt": [ "native" ],
+    "sandbox_wbtest.mbt": [ "native" ],
     "schedule.mbt": [ "native" ],
     "schedule_wbtest.mbt": [ "native" ],
     "tar.mbt": [ "native" ],

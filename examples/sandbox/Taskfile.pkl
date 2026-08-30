@@ -1,0 +1,30 @@
+/// Fixture for `pkf run --sandbox`.
+///
+/// `honest` declares everything it reads. `sneaky` reads
+/// `undeclared/extra.txt` and never says so: unsandboxed it succeeds
+/// and caches, which is the unsoundness the sandbox exists to catch.
+/// `messy` writes a file it never declared as an output.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local honest = new Task {
+  name = "honest"
+  cmd = "mkdir -p dist && cat src/a.txt > dist/out.txt && echo honest ok"
+  inputs { "src/a.txt" }
+  outputs { "dist/out.txt" }
+}
+
+local sneaky = new Task {
+  name = "sneaky"
+  cmd = "mkdir -p dist && cat src/a.txt undeclared/extra.txt > dist/sneaky.txt"
+  inputs { "src/a.txt" }
+  outputs { "dist/sneaky.txt" }
+}
+
+local messy = new Task {
+  name = "messy"
+  cmd = "mkdir -p dist && echo o > dist/messy.txt && echo scratch > dist/scratch.log"
+  inputs { "src/a.txt" }
+  outputs { "dist/messy.txt" }
+}
+
+tasks { honest; sneaky; messy }

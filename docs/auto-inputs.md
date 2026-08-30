@@ -113,12 +113,23 @@ the contract in ways pkfire is not ready for:
 - Anything invisible to the shim (static binaries, `openat` under a
   directory fd) becomes a *correctness* bug rather than a reporting gap.
 
-So `trace` is an auditing tool today: it tells you what your `inputs`
-should say, and `--check` keeps them honest in CI. Promoting the
-observed set to the key belongs with the hermetic sandbox executor in
-[issue #60][issue] — once an action's inputs are materialized into a
-sandbox, the observed read set and the declared one can be reconciled by
-construction rather than by report.
+So `trace` is an auditing tool: it tells you what your `inputs` should
+say, and `--check` keeps them honest in CI.
+
+`pkf run --sandbox` is the same guarantee by construction rather than
+by report. It materializes exactly the declared inputs (and the outputs
+of the actions this one depends on) into a tree and runs the command
+there, so an undeclared read finds nothing and the action fails at the
+mistake. The two are complementary: `trace` tells you *what to declare*
+— it names the file — while the sandbox tells you *that you forgot*, in
+whatever terms the command uses for a missing file. Reach for `trace`
+when a sandboxed run fails and you need the list.
+
+Neither one covers absolute paths: `/usr/bin/cc` and `$HOME/.cargo`
+resolve inside the sandbox exactly as they do outside it. Hermetic
+*toolchains* are a separate problem — execution platforms in
+[issue #60][issue] — and promoting an observed read set to the action
+key still needs the two-phase model described above.
 
 [article]: https://zenn.dev/herp_inc/articles/strange-task-runner
 [issue]: https://github.com/mizchi/pkfire/issues/60

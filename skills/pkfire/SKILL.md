@@ -232,8 +232,9 @@ Do not claim or generate these interfaces; they do not exist:
   target execution, or dry-run mode; it prints the computed plan.
 - `pkf list` has no `--long`, `--unsorted`, or color flag.
 - `pkf graph` has no format, target, or depth selector.
-- `pkf lint --fix/--dry-run` and `pkf explain --diff` are accepted
-  compatibility no-ops.
+- `pkf lint --fix` / `--dry-run` and `pkf explain --diff` are rejected
+  with the reason. They used to be accepted and ignored, which meant
+  `pkf lint --fix` reported findings and changed nothing.
 - `pkf run --watch` and `--on-fail` are rejected with a reason;
   `pkf watch` is the watch entry point.
 - `specRef` is accepted and rendered by the Pkl schema, but the current

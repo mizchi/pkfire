@@ -123,6 +123,7 @@ fn key_test_task(name : String) -> Task {
     cache: true,
     workdir: None,
     inherit_env: true,
+    hermetic: false,
     params: [],
     accepts_args: false,
     service: false,

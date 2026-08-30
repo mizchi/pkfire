@@ -29,6 +29,7 @@ fn graph_test_task(
     cache: true,
     workdir,
     inherit_env: true,
+    hermetic: false,
     params: [],
     accepts_args: false,
     service: false,

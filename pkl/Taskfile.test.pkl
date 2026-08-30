@@ -116,6 +116,28 @@ facts {
     (new Schema.Task { name = "hermetic"; cmd = "x"; inheritEnv = false }).inheritEnv == false
   }
 
+  ["hermetic defaults to false"] {
+    build.hermetic == false
+  }
+
+  ["hermetic round-trips through the rendered task"] {
+    local sealed = new Schema.Task {
+      name = "sealed"
+      cmd = "x"
+      inputs { "src/**" }
+      hermetic = true
+    }
+    sealed.hermetic == true
+  }
+
+  ["hermetic does not change inheritEnv on the authored task"] {
+    // The runner seals the environment for a hermetic task; the
+    // authored value is left alone so `pkf describe` reports what the
+    // Taskfile says rather than what the runner will do with it.
+    local sealed = new Schema.Task { name = "sealed"; cmd = "x"; hermetic = true }
+    sealed.inheritEnv == true
+  }
+
   ["acceptsArgs defaults to false"] {
     build.acceptsArgs == false
   }
