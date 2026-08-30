@@ -1,0 +1,18 @@
+/// Fixture for the Pkl evaluation cache.
+///
+/// Evaluation is memoized because it is most of the work of a warm run.
+/// The risk is a stale plan — yesterday's commands against yesterday's
+/// inputs, reported as success — so the entry records every module the
+/// loader read and re-checks all of them on lookup. These scenarios
+/// edit the Taskfile and its import after warming the cache and assert
+/// the change is seen.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+import "parts/names.pkl" as Names
+
+local build = new Task {
+  name = Names.buildTask
+  cmd = "echo building"
+}
+
+tasks { build }

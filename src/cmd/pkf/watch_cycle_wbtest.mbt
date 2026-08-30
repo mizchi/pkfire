@@ -64,6 +64,8 @@ fn watch_test_task(
     inherit_env: true,
     hermetic: false,
     toolchains: [],
+    timeout_seconds: 0,
+    requires_platform: [],
     target_platform: None,
     steps: [],
     provides: Providers::empty(),

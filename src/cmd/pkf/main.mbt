@@ -46,6 +46,10 @@ struct Task {
   /// External tools resolved and keyed on, rather than self-reported
   /// like `tools`. See `toolchain.mbt`.
   toolchains : Array[Toolchain]
+  /// Seconds after which the command is killed. 0 = no limit.
+  timeout_seconds : Int
+  /// Execution platforms this task can run on. Empty = any.
+  requires_platform : Array[String]
   /// What this task builds *for*, when that differs from where it
   /// runs. None means the execution platform.
   target_platform : String?
@@ -299,6 +303,14 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
         }
       _ => ()
     }
+    let timeout_seconds = match task_entries.get("timeoutSeconds") {
+      Some(Number(n, ..)) => n.to_int()
+      _ => 0
+    }
+    let requires_platform = match task_entries.get("requiresPlatform") {
+      Some(v) => parse_string_array(v)
+      None => []
+    }
     let target_platform = match task_entries.get("targetPlatform") {
       Some(String(v)) => Some(v)
       _ => None
@@ -450,6 +462,8 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       inherit_env,
       hermetic,
       toolchains,
+      timeout_seconds,
+      requires_platform,
       target_platform,
       steps,
       provides,
@@ -2418,6 +2432,20 @@ async fn[X] run_task(
     // deps-only umbrella task — nothing to spawn.
     return Umbrella
   }
+  // Refused before the cache is even consulted. A task that cannot run
+  // here would fail somewhere inside its script with whatever the first
+  // platform-specific tool in it happens to print; saying so by name,
+  // with what was required and what this machine is, is the difference
+  // between a two-second diagnosis and a ten-minute one.
+  if task.requires_platform.length() > 0 {
+    let here = exec_platform()
+    if !task.requires_platform.contains(here) {
+      die(
+        "task `\{task.name}` requires execution platform \{join_with(task.requires_platform, " or ")}, but this machine is \{here}",
+      )
+      return Ran(2)
+    }
+  }
   // Inputs, outputs and the command share the same task root. This keeps
   // action-key expansion aligned with affected/watch for workdir tasks.
   let task_cwd = task_root_of(repo_root, task)
@@ -2653,6 +2681,13 @@ async fn[X] run_task(
   } else {
     None
   }
+  // A hung command otherwise blocks the run until something outside
+  // kills it, and what that something reports is a job timeout rather
+  // than the task responsible. `with_timeout_opt` cancels the inner
+  // spawn, and `@process.run`'s cancel handler is the same
+  // SIGTERM-then-SIGKILL sequence a service teardown uses, so a shell
+  // and its children go together.
+  let spawn_code = async fn() -> Int {
   let code = if opts.stream_output {
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
@@ -2728,6 +2763,42 @@ async fn[X] run_task(
       eprint_block(err)
     }
     status
+  }
+  code
+  }
+  let code = if task.timeout_seconds > 0 {
+    if !opts.quiet && !task.quiet {
+      println("pkf: $ \{task.name}")
+    }
+    let (status, logs) = run_with_deadline(
+      group,
+      task.shell,
+      argv,
+      extra_env,
+      task.inherit_env && !task.hermetic,
+      run_cwd,
+      captured is Some(_),
+      task.timeout_seconds,
+      LOG_CAPTURE_CAP,
+    )
+    match captured {
+      Some(sink) => {
+        sink.stdout = logs.stdout
+        sink.stderr = logs.stderr
+      }
+      None => ()
+    }
+    match status {
+      Some(exit_code) => exit_code
+      None => {
+        eprintln(
+          "pkf: task `\{task.name}` exceeded its \{task.timeout_seconds}s timeout and was killed",
+        )
+        TIMEOUT_EXIT_CODE
+      }
+    }
+  } else {
+    spawn_code()
   }
   stop_services(running)
   match box {
@@ -2876,17 +2947,30 @@ fn taskfile_dir(taskfile : String) -> String {
 
 ///|
 async fn eval_taskfile(taskfile : String) -> String {
+  // Evaluation is a pure function of the modules it reads, and on a
+  // warm run it is most of what `pkf` does — ~164ms of a ~186ms fully
+  // cached `run` on this repository. Reuse it when nothing it read has
+  // moved; `evalcache.mbt` re-validates every recorded dependency, so a
+  // hit means "the evaluation you were about to do returns this".
+  match eval_cache_load(taskfile) {
+    Some(rendered) => return rendered
+    None => ()
+  }
   // The embedded Pkl loader evaluates the Taskfile fully in-process — local,
   // cached, remote `package://`, `http(s)://` and glob-import modules are all
   // resolved here, with no eval subprocess to fall back to.
-  let result = @loader.eval_module_path(taskfile) catch {
+  let (result, modules) = @loader.eval_module_path_tracked(taskfile) catch {
     err => {
       die("evaluate \{taskfile}: \{err.message()}")
       panic()
     }
   }
   match result {
-    @pkl.EvalOk(value) => @pkl.render_value_as_json(extract_output_value(value))
+    @pkl.EvalOk(value) => {
+      let rendered = @pkl.render_value_as_json(extract_output_value(value))
+      eval_cache_store(taskfile, modules, rendered)
+      rendered
+    }
     @pkl.EvalError(errors) => {
       for e in errors {
         println("pkf: " + e.message)

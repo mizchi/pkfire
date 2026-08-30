@@ -516,6 +516,29 @@ executionPlatform  executionProperties
 "why did this miss?", because a miss is always one of those lines
 differing from last time.
 
+### Evaluation is cached too
+
+The action cache makes the *tasks* free; evaluating the Taskfile was
+still paid on every invocation — about 85% of the work of a warm run.
+That is memoized now:
+
+```
+pkf list                    182 ms  ->    4 ms
+pkf run fmt:check (cached)  190 ms  ->    7 ms
+```
+
+An evaluation is a pure function of the modules it read, and the Pkl
+loader already walks `amends` / `extends` / `import` — glob imports
+included — so it knows that set exactly. The entry records every module
+with its digest and re-validates all of them on lookup: edit the
+Taskfile, edit anything it imports, add or remove a file matching an
+`import*` glob, and the next run re-evaluates. Anything unexpected — an
+unreadable module, an entry from an older format — is a miss rather
+than a guess, because a stale plan would run yesterday's commands and
+report success.
+
+`PKFIRE_MBT_NO_EVAL_CACHE=1` turns it off.
+
 ### What a run tells you it skipped
 
 Every run ends with one line saying how much of it was actually redone:
@@ -756,6 +779,43 @@ A task never consumes its own outputs: a formatter that reads and
 rewrites `src/**` is a fixpoint, not a cycle. A genuine cycle — two
 tasks each reading what the other writes — is reported before anything
 runs, naming the patterns and a path that matches both.
+
+### Timeouts
+
+A command that hangs blocks the run until something outside kills it,
+and what that something reports is a job timeout rather than the task
+responsible:
+
+```pkl
+timeoutSeconds = 300
+```
+
+The kill is the whole process tree, and the shell is signalled **before**
+the children it started. That ordering is the feature: a shell whose
+child dies first notices, concludes the command finished, and runs the
+next line of a script that was supposed to have been stopped —
+`sleep 60 && echo after` printed `after`. SIGTERM, then SIGKILL after a
+five-second grace, the same sequence that stops a service. The task
+fails with exit 143, so a log reading only the number still says
+"terminated".
+
+Raising a timeout does not invalidate the cache: it changes nothing
+about what the command produces.
+
+### Platform requirements
+
+```pkl
+requiresPlatform { "linux/amd64"; "linux/arm64" }
+```
+
+Checked before the command is spawned, so a task that cannot run here
+says so by name instead of failing somewhere inside a script with
+whatever the first platform-specific tool in it happens to print:
+
+```
+pkf: task `build:deb` requires execution platform linux/amd64 or linux/arm64,
+     but this machine is darwin/arm64
+```
 
 ### Toolchains: resolved, not declared
 

@@ -442,6 +442,36 @@ scenarios {
     }
   }
   new {
+    id = "eval-cache-sees-an-edited-taskfile"
+    fixture = "examples/eval-cache"
+    // `setup` warms the evaluation cache and then edits the Taskfile,
+    // so the measured run is a lookup whose entry is no longer true.
+    // A cached plan that survived this would run yesterday's commands
+    // and report success, with nothing in the output to say so.
+    setup {
+      "\"$PKF_MBT_BIN\" list > /dev/null"
+      "sed -i.bak 's/echo building/echo rebuilt/' Taskfile.pkl && rm -f Taskfile.pkl.bak"
+    }
+    argv { "describe"; "build-original" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "echo rebuilt" } }
+  }
+  new {
+    id = "eval-cache-sees-an-edited-import"
+    fixture = "examples/eval-cache"
+    // The same, one level down: the entry point is untouched and a
+    // module it imports changed. Keying on the Taskfile alone would
+    // serve a stale plan here, which is why the entry records every
+    // module the loader read and re-checks all of them.
+    setup {
+      "\"$PKF_MBT_BIN\" list > /dev/null"
+      "sed -i.bak 's/build-original/build-renamed/' parts/names.pkl && rm -f parts/names.pkl.bak"
+    }
+    argv { "list" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "build-renamed" } }
+  }
+  new {
     id = "clean-dry-run"
     fixture = "examples/cat-io"
     // `--dry-run` used to be accepted and ignored, so this exact

@@ -90,6 +90,46 @@ jobs:
           actual=$(wc -c < runs.log | tr -d ' ')
           [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }
 
+      # Both halves of a timeout: the run ends at the deadline, and
+      # nothing after the hung command runs. A teardown that signals the
+      # child first would let the shell notice, carry on, and print
+      # "after the sleep" — so its absence is the real assertion.
+      - name: Smoke - a timeout kills the tree and stops the script
+        working-directory: examples/timeout
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-timeout-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" done.txt
+          start=$(date +%s)
+          set +e
+          "$BIN" run hang > hang.out 2> hang.err
+          code=$?
+          set -e
+          elapsed=$(( $(date +%s) - start ))
+          [ "$code" = "143" ] || { echo "expected 143, got $code"; cat hang.err; exit 1; }
+          [ "$elapsed" -lt 30 ] || { echo "waited ${elapsed}s for a 2s deadline"; exit 1; }
+          grep -q 'before the sleep' hang.out || { echo "the command did not start"; exit 1; }
+          grep -q 'after the sleep' hang.out && { echo "the script kept running past its deadline"; exit 1; }
+          grep -q 'exceeded its 2s timeout' hang.err || { echo "no timeout diagnostic"; exit 1; }
+          # The command writes `survived.txt` after its 6s sleep. Waiting
+          # past that and finding no marker is a direct check that the
+          # tree really died — where grepping the process table for a
+          # surviving `sleep` would match unrelated processes on a shared
+          # runner, including the shell running the check.
+          sleep 7
+          [ ! -f survived.txt ] || { echo "the killed command kept running"; exit 1; }
+          # A task inside its deadline is untouched.
+          "$BIN" run quick | grep -q 'finished well inside the deadline'
+          # And a task this machine cannot run says so by name.
+          set +e
+          "$BIN" run elsewhere 2> elsewhere.err
+          set -e
+          grep -q 'requires execution platform plan9/vax' elsewhere.err \
+            || { echo "no platform diagnostic"; cat elsewhere.err; exit 1; }
+          rm -f hang.out hang.err elsewhere.err
+
       # One `cc` declaration, two targets, two compilers, two keys.
       # This is what makes a toolchain a resolver rather than a lookup.
       - name: Smoke - the target platform selects the toolchain

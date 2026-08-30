@@ -411,6 +411,26 @@ fn push_stack(stack : Array[String], path : String) -> Array[String] {
 pub async fn eval_module_path(
   path : String,
 ) -> @pkl.EvalResult raise LoaderError {
+  eval_module_path_tracked(path).0
+}
+
+///|
+/// Same, plus every module the load actually touched.
+///
+/// The loader already walks `amends` / `extends` / `import` — including
+/// glob imports, which it expands here — to seed the evaluator, so it
+/// knows the module graph exactly. Reporting it lets a caller key a
+/// cache on the Taskfile *and everything it reads*, which is the only
+/// honest way to reuse an evaluation: a heuristic that scanned the
+/// source for import lines would miss whatever the loader resolves that
+/// the scan did not think of, and a stale plan is worse than a slow one.
+///
+/// `pkl:` standard-library modules are not listed: they are part of the
+/// evaluator, not of the project, and they move only when the binary
+/// does.
+pub async fn eval_module_path_tracked(
+  path : String,
+) -> (@pkl.EvalResult, Array[String]) raise LoaderError {
   // Clear the process-global sandbox IO cache (import_globs / read_globs / etc.)
   // so stale glob registrations from a prior eval in the same process (the
   // conformance harness, `pkf watch`) can't leak into this one.
@@ -418,5 +438,10 @@ pub async fn eval_module_path(
   let session = @pkl.AnalysisSession::new()
   let loaded : Map[String, Unit] = Map([], capacity=8)
   load_recursive(session, path, [], loaded)
-  session.eval_path(path)
+  let modules : Array[String] = []
+  for name, _ in loaded {
+    modules.push(name)
+  }
+  modules.sort()
+  (session.eval_path(path), modules)
 }

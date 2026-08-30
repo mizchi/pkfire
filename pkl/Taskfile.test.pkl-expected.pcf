@@ -31,6 +31,8 @@ examples {
       acceptsArgs = false
       params {}
       toolchains {}
+      timeoutSeconds = 0
+      requiresPlatform {}
       targetPlatform = null
       steps {}
       provides {
