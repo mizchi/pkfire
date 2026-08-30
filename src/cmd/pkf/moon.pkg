@@ -36,6 +36,8 @@ options(
     "main.mbt": [ "native" ],
     "providers.mbt": [ "native" ],
     "steps.mbt": [ "native" ],
+    "toolchain.mbt": [ "native" ],
+    "toolchain_wbtest.mbt": [ "native" ],
     "steps_wbtest.mbt": [ "native" ],
     "providers_wbtest.mbt": [ "native" ],
     "replay.mbt": [ "native" ],

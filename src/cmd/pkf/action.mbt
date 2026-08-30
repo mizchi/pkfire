@@ -34,7 +34,12 @@
 /// `.pkf-meta/` prefix, and a restore drops members with that prefix
 /// instead of writing them. A v2 entry could hold a task's real output
 /// there, so the bump is what keeps the new restore from deleting it.
-const ACTION_IR_VERSION : String = "pkfire-action-v3"
+///
+/// v4 adds `targetPlatform`: the platform an action builds *for*, as
+/// distinct from the one it runs on. Two cross-compiles that issue the
+/// same command on the same machine and differ only in where the result
+/// is meant to run were previously indistinguishable to the key.
+const ACTION_IR_VERSION : String = "pkfire-action-v4"
 
 ///|
 /// One spawned process, fully described.
@@ -82,6 +87,15 @@ struct ActionDescriptor {
   working_directory : String
   /// `<os>/<arch>` of the machine the action is executed on.
   execution_platform : String
+  /// What the action builds *for*, when the Taskfile says it differs
+  /// from where it runs. Empty means "the execution platform" — the
+  /// ordinary case, where a task builds for the machine it is on.
+  ///
+  /// Separate from `execution_platform` because they answer different
+  /// questions and a cross-compile makes them disagree: the same
+  /// command, on the same machine, producing an arm64 binary and an
+  /// amd64 one must not share an entry.
+  target_platform : String
   /// Everything else that constrains execution: declared tool
   /// versions, cache policy salt, run profile. Sorted by key.
   execution_properties : Array[(String, String)]
@@ -146,6 +160,7 @@ fn canonical_form(a : ActionDescriptor) -> Bytes {
   }
   canon_field(buf, "workdir", a.working_directory)
   canon_field(buf, "platform", a.execution_platform)
+  canon_field(buf, "targetPlatform", a.target_platform)
   canon_field(buf, "execprops.len", a.execution_properties.length().to_string())
   for pair in a.execution_properties {
     canon_field(buf, "execprop.key", pair.0)
@@ -170,6 +185,9 @@ fn describe_action(a : ActionDescriptor) -> String {
   sb.write_string("  executable: " + a.executable + "\n")
   sb.write_string("  workdir:    " + a.working_directory + "\n")
   sb.write_string("  platform:   " + a.execution_platform + "\n")
+  if a.target_platform.length() > 0 {
+    sb.write_string("  target:     " + a.target_platform + "\n")
+  }
   sb.write_string("  inheritEnv: " + a.inherit_env.to_string() + "\n")
   sb.write_string("  argv (\{a.argv.length()}):\n")
   for arg in a.argv {
@@ -266,6 +284,7 @@ fn lower_task_to_action(
   profile : String,
   consumed_artifacts~ : Array[(String, String)] = [],
   providers~ : Array[(String, String)] = [],
+  toolchains~ : Array[(String, String)] = [],
 ) -> ActionDescriptor {
   // argv: exactly what run_task hands to the shell, so the key sees the
   // real command line rather than a reconstruction of it.
@@ -314,6 +333,11 @@ fn lower_task_to_action(
   for k, v in task.tools {
     props["tool." + k] = v
   }
+  // Resolved toolchain facts. `tools` above is what the Taskfile
+  // *claims*; these are what the runner found on this machine.
+  for pair in toolchains {
+    props[pair.0] = pair.1
+  }
   for k, v in params {
     props["param." + k] = v
   }
@@ -351,6 +375,7 @@ fn lower_task_to_action(
     outputs,
     working_directory: normalize_workdir(task.workdir),
     execution_platform: exec_platform(),
+    target_platform: task.target_platform.unwrap_or(""),
     execution_properties,
   }
 }

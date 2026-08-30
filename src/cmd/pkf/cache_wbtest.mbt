@@ -124,6 +124,8 @@ fn key_test_task(name : String) -> Task {
     workdir: None,
     inherit_env: true,
     hermetic: false,
+    toolchains: [],
+    target_platform: None,
     steps: [],
     provides: Providers::empty(),
     params: [],

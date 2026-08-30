@@ -757,6 +757,71 @@ rewrites `src/**` is a fixpoint, not a cycle. A genuine cycle — two
 tasks each reading what the other writes — is reported before anything
 runs, naming the patterns and a path that matches both.
 
+### Toolchains: resolved, not declared
+
+`tools { ["go"] = "1.26.2" }` is a string you type and then have to
+remember to change. Nothing checks it, so upgrading Go leaves the
+action key where it was and every entry the old compiler built stays a
+hit. A `Toolchain` is the same declaration made checkable:
+
+```pkl
+local build = new Task {
+  name = "build"
+  cmd = "go build ./..."
+  inputs { "**/*.go"; "go.mod" }
+  outputs { "bin/app" }
+  toolchains {
+    new Toolchain { name = "go" }
+    new Toolchain { name = "protoc"; versionCmd = "protoc --version" }
+  }
+}
+```
+
+pkfire finds the executable on `PATH`, asks it its version, and keys on
+what it observed. Upgrade the compiler and the key moves with nothing
+edited.
+
+`hashBinary = true` hashes the executable's bytes too. That is the
+sound option — a version string can lie, and two builds of `go1.26.2`
+are not necessarily the same compiler — but it costs a read of the
+whole executable per run, so it is opt-in rather than the default.
+
+The **resolved path stays out of the key**. `/opt/homebrew/bin/go` and
+`/usr/bin/go` are the same toolchain as far as a build is concerned,
+and hashing the path would split the cache between two machines that
+should share it — which is the whole reason a remote cache exists.
+`pkf explain` reports it, because that is where someone asking "why is
+my key different from CI's" will look:
+
+```
+toolchains (1):
+  go  go version go1.26.2 darwin/arm64
+    /opt/homebrew/bin/go
+```
+
+A declared toolchain that is missing is fatal at key time, so the
+message names the task and the tool rather than surfacing as a shell's
+`command not found` on whichever line happened to use it.
+`optional = true` records the absence in the key instead, so a run that
+went ahead without the tool cannot share an entry with one that had it.
+
+Resolution is memoized per process: thirty tasks naming one compiler
+interrogate it once.
+
+### Cross-compiling: what a task builds *for*
+
+The execution platform — the machine running the action — is always in
+the key. `targetPlatform` is the other half:
+
+```pkl
+targetPlatform = "linux/arm64"
+```
+
+Two cross-compiles that issue the same command on the same machine and
+differ only in where the result is meant to run are different actions,
+and now key differently. Null, the default, means the task builds for
+the machine it runs on.
+
 ### Steps: one task, several cached actions
 
 A task is one command and therefore one cache key. A pipeline written

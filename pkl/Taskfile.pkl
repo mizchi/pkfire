@@ -55,6 +55,43 @@ class Param {
 }
 
 /// A unit of work authored by the user.
+/// An external tool whose identity is part of the action key.
+///
+/// `tools { ["go"] = "1.26.2" }` is a string the author types and then
+/// has to remember to change. Nothing checks it, so upgrading Go leaves
+/// the key where it was and every entry the old compiler built stays a
+/// hit. A `Toolchain` is the same declaration made checkable: pkfire
+/// finds the executable, asks it its version, and keys on what it
+/// observed.
+class Toolchain {
+  /// Executable to resolve on `PATH`, or an absolute path.
+  name: String(length > 0)
+
+  /// Command that prints the version. Defaults to `<name> --version`.
+  /// Both stdout and stderr are considered, since tools disagree about
+  /// which one a version banner belongs on; the first non-empty line is
+  /// what reaches the key.
+  versionCmd: String? = null
+
+  /// Also hash the resolved executable's bytes.
+  ///
+  /// A version string can lie — two builds of `go1.26.2` are not
+  /// necessarily the same compiler — so this is the sound option. It
+  /// costs a read of the whole executable per run, which is why it is
+  /// off by default rather than on.
+  hashBinary: Boolean = false
+
+  /// Whether the task can run without it.
+  ///
+  /// False by default: a declared tool that is missing will fail the
+  /// command anyway, and failing at key time names the task and the
+  /// tool instead of surfacing as a shell's `command not found`. When
+  /// true, its absence is recorded in the key rather than being fatal,
+  /// so a run without the tool cannot share an entry with one that had
+  /// it.
+  optional: Boolean = false
+}
+
 /// One command inside a task, cached on its own.
 ///
 /// A task with `steps` is not one action but several, chained in
@@ -298,6 +335,22 @@ class Task {
   /// key when `cache = true`.
   params: Listing<Param> = new {}
 
+  /// External tools this task resolves and keys on. See `Toolchain`.
+  ///
+  /// Prefer this over `tools`, which is a hand-maintained string and
+  /// therefore only as accurate as the last time someone edited it.
+  toolchains: Listing<Toolchain> = new {}
+
+  /// The platform this task produces artifacts *for*, when it differs
+  /// from the one running it — `"linux/arm64"`, `"wasm32-wasi"`.
+  ///
+  /// The execution platform is observed and always in the key. This is
+  /// the other half of the distinction: two cross-compiles that run the
+  /// same command on the same machine and differ only in where the
+  /// result is meant to run must not share a cache entry. Null means
+  /// the task builds for the machine it runs on.
+  targetPlatform: String? = null
+
   /// Commands this task runs, each cached separately. See `Step`.
   ///
   /// Mutually exclusive with `cmd`: a task is either one command or a
@@ -373,6 +426,14 @@ class RenderedWorkflowTest {
   direct: Listing<String>
 }
 
+/// Wire format mirror of `Toolchain` consumed by the runner.
+class RenderedToolchain {
+  name: String
+  versionCmd: String?
+  hashBinary: Boolean
+  optional: Boolean
+}
+
 /// Wire format mirror of `Step` consumed by the runner.
 class RenderedStep {
   name: String
@@ -415,6 +476,8 @@ class RenderedTask {
   hermetic: Boolean
   acceptsArgs: Boolean
   params: Listing<RenderedParam>
+  toolchains: Listing<RenderedToolchain>
+  targetPlatform: String?
   steps: Listing<RenderedStep>
   provides: RenderedProviders
   specRef: String?
@@ -491,6 +554,17 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
           }
         }
       }
+      toolchains = new Listing {
+        for (tc in t.toolchains) {
+          new RenderedToolchain {
+            name = tc.name
+            versionCmd = tc.versionCmd
+            hashBinary = tc.hashBinary
+            optional = tc.optional
+          }
+        }
+      }
+      targetPlatform = t.targetPlatform
       steps = new Listing {
         for (st in t.steps) {
           new RenderedStep {

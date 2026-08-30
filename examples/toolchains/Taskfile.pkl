@@ -1,0 +1,26 @@
+/// Fixture for resolved toolchains.
+///
+/// `tools { ["faketool"] = "1.0.0" }` would be a string nobody checks:
+/// upgrade the tool and the key stays where it was, so every entry the
+/// old one built remains a hit. A `Toolchain` is resolved instead —
+/// found on PATH, asked its version — so the upgrade moves the key with
+/// nothing to remember.
+///
+/// `bin/faketool` stands in for a compiler. The smoke test rewrites it
+/// and asserts the key moved.
+///
+/// Relative `amends` so this fixture tracks the in-tree schema:
+/// `toolchains` is unreleased.
+amends "../../pkl/Taskfile.pkl"
+
+local build = new Task {
+  name = "build"
+  cmd = "mkdir -p dist && faketool > dist/stamp.txt && cat src/a.txt >> dist/stamp.txt"
+  inputs { "src/**" }
+  outputs { "dist/stamp.txt" }
+  toolchains {
+    new Toolchain { name = "faketool" }
+  }
+}
+
+tasks { build }

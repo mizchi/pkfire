@@ -90,6 +90,36 @@ jobs:
           actual=$(wc -c < runs.log | tr -d ' ')
           [ "$actual" = "1" ] || { echo "command re-ran: runs.log is $actual bytes"; exit 1; }
 
+      # `tools` is a string the author must remember to bump; a
+      # `Toolchain` is resolved. The assertion is that upgrading the
+      # tool moves the key with nothing edited in the Taskfile.
+      - name: Smoke - a toolchain upgrade invalidates the cache by itself
+        working-directory: examples/toolchains
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-toolchain-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          export PATH="$PWD/bin:$PATH"
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          before=$("$BIN" run build --print-hash | awk '{print $1}')
+          "$BIN" explain build | grep -q 'faketool version 1.0.0' \
+            || { echo "the toolchain was not resolved"; exit 1; }
+          printf '#!/bin/sh\necho "faketool version 2.0.0"\n' > bin/faketool
+          chmod +x bin/faketool
+          after=$("$BIN" run build --print-hash | awk '{print $1}')
+          [ "$before" != "$after" ] \
+            || { echo "the key did not move when the toolchain did"; exit 1; }
+          # The resolved *path* must stay out of the key, or two
+          # machines with the same compiler at different prefixes stop
+          # sharing remote cache entries.
+          mkdir -p ../../.tc-alt && cp bin/faketool ../../.tc-alt/faketool
+          moved=$(PATH="$PWD/../../.tc-alt:$PATH" "$BIN" run build --print-hash | awk '{print $1}')
+          [ "$moved" = "$after" ] \
+            || { echo "the resolved path leaked into the action key"; exit 1; }
+          rm -rf ../../.tc-alt
+          git checkout -- bin/faketool
+
       # The property that makes steps worth having: an edit that only
       # reaches the later steps reuses the earlier ones. Asserted by
       # what is *not* re-run, since a pipeline written as one `&&`

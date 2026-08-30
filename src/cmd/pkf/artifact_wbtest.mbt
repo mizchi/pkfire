@@ -30,6 +30,8 @@ fn graph_test_task(
     workdir,
     inherit_env: true,
     hermetic: false,
+    toolchains: [],
+    target_platform: None,
     steps: [],
     provides: Providers::empty(),
     params: [],

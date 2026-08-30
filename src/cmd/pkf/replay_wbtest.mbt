@@ -80,6 +80,7 @@ test "captured logs are output, and never reach the action key" {
     Map([]),
     [],
     RunOptions::default(),
+    toolchains=[],
   )
   let described = describe_action(action)
   assert_false(described.contains(".pkf-meta"))

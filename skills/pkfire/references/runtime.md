@@ -186,6 +186,40 @@ A cycle over declared and derived edges is reported before any task
 runs, naming each edge's reason. A task does not consume its own
 outputs, so a formatter that rewrites what it reads is not a cycle.
 
+## Toolchains
+
+`toolchains` is resolved at key time; `tools` is a self-reported string
+and only as accurate as the last edit.
+
+```pkl
+toolchains {
+  new Toolchain { name = "go" }                        // `go --version`
+  new Toolchain { name = "protoc"; versionCmd = "..." }
+  new Toolchain { name = "cc"; hashBinary = true }
+  new Toolchain { name = "shellcheck"; optional = true }
+}
+```
+
+Resolution runs `command -v <name>` in the task's shell, then the
+version command (default `<name> --version`), taking the first
+non-empty line of stdout, or of stderr when stdout is empty.
+
+Execution properties produced:
+
+- `toolchain.<name>.version` — the version line, or `unknown` when the
+  tool is present but the version command failed.
+- `toolchain.<name>.digest` — only with `hashBinary = true`.
+- `toolchain.<name>` = `absent` — only for a missing `optional` tool.
+
+The resolved **path is never hashed** — two prefixes for the same
+compiler must still share remote cache entries — and is reported by
+`pkf explain`. A missing non-optional toolchain is fatal at key time.
+Resolutions are memoized per process by (name, versionCmd, hashBinary).
+
+`targetPlatform` is a descriptor field of its own, distinct from the
+observed `executionPlatform`; null means "builds for the machine it
+runs on".
+
 ## Steps
 
 A task with `steps` is lowered into one action per step plus a
