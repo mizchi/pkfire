@@ -211,6 +211,15 @@ Execution properties produced:
 - `toolchain.<name>.digest` — only with `hashBinary = true`.
 - `toolchain.<name>` = `absent` — only for a missing `optional` tool.
 
+`forTarget` maps a `targetPlatform` to the executable to resolve
+instead of `name`; a target with no entry falls back to `name`, so a
+native build's key is unchanged by its presence. The selection is
+recorded as `toolchain.<name>.selected` only when it differs from
+`name`, the default version probe follows the selection
+(`aarch64-linux-gnu-gcc --version`, not `cc --version`), and the memo
+is keyed on the selected executable so one declaration resolving to two
+compilers does not share a slot.
+
 The resolved **path is never hashed** — two prefixes for the same
 compiler must still share remote cache entries — and is reported by
 `pkf explain`. A missing non-optional toolchain is fatal at key time.
@@ -281,6 +290,24 @@ Rules:
 `pkf explain <task>` prints a `providers (N):` block naming each
 value's origin. The file equivalent needs no schema —
 `inputs { ...producer.outputs }` is ordinary Pkl.
+
+## Glob expansion
+
+A wildcard pattern walks only what it can match, bounded by the pattern
+itself rather than by any cache:
+
+- the walk starts at the literal directory prefix before the first
+  wildcard (`src/**/*.mbt` starts at `src/`);
+- it stops descending past as many components as the pattern has,
+  unless the pattern contains `**` (`.mooncakes/*/*/moon.mod` stops at
+  depth 3).
+
+A literal pattern with no wildcard skips the walk entirely. A prefix
+directory that does not exist yields no matches and no diagnostic —
+`outputs { "dist/**" }` before anything has built `dist` is ordinary.
+
+Nothing here is memoized, so a file a previous task in the same run
+wrote is still found.
 
 ## Local cache
 

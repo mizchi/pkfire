@@ -29,6 +29,28 @@ struct Toolchain {
   hash_binary : Bool
   /// Whether the task can run without it.
   optional : Bool
+  /// Executable to resolve instead of `name` when the task builds for
+  /// a given target platform. This is the constraint that makes a
+  /// toolchain a resolver: the declaration is one thing, and which
+  /// compiler it selects depends on what the task is building for.
+  for_target : Map[String, String]
+}
+
+///|
+/// The executable `tc` resolves to when building for `target`.
+///
+/// A target with no entry falls back to the declared name, so a native
+/// build needs no special case and an unrecognised target degrades to
+/// the host compiler rather than to an error — the command will say
+/// what it thinks of that better than the runner can.
+fn toolchain_executable(tc : Toolchain, target : String) -> String {
+  if target.length() == 0 {
+    return tc.name
+  }
+  match tc.for_target.get(target) {
+    Some(selected) => selected
+    None => tc.name
+  }
 }
 
 ///|
@@ -43,6 +65,11 @@ struct ResolvedToolchain {
   /// Hex digest of the executable, when `hash_binary` asked for one.
   digest : String
   found : Bool
+  /// The executable actually selected — `name`, or the `forTarget`
+  /// entry that matched. Recorded in the key: two cross compilers can
+  /// report the same version string, and the selection is the fact
+  /// that distinguishes them.
+  executable : String
 }
 
 ///|
@@ -57,17 +84,31 @@ struct ResolvedToolchain {
 let toolchain_memo : Map[String, ResolvedToolchain] = Map([], capacity=8)
 
 ///|
-fn toolchain_memo_key(tc : Toolchain) -> String {
-  tc.name + "\u{1F}" + tc.version_cmd + "\u{1F}" + tc.hash_binary.to_string()
+fn toolchain_memo_key(tc : Toolchain, target : String) -> String {
+  // The selected executable, not the declared name: one `cc`
+  // declaration resolves to a different compiler per target, and
+  // sharing one memo slot between them would hand the second target
+  // the first one's version.
+  toolchain_executable(tc, target) +
+  "\u{1F}" +
+  tc.version_cmd +
+  "\u{1F}" +
+  tc.hash_binary.to_string()
 }
 
 ///|
-/// The version command to run for `tc`.
-fn toolchain_version_command(tc : Toolchain) -> String {
+/// The version command to run for `tc` when it resolved to
+/// `executable`.
+///
+/// The default probe follows the selection: a `cc` that resolved to
+/// `aarch64-linux-gnu-gcc` must be asked *its* version, not the host
+/// compiler's. An explicit `versionCmd` is taken literally, since an
+/// author who wrote one has said what to run.
+fn toolchain_version_command(tc : Toolchain, executable : String) -> String {
   if tc.version_cmd.length() > 0 {
     tc.version_cmd
   } else {
-    tc.name + " --version"
+    executable + " --version"
   }
 }
 
@@ -115,8 +156,13 @@ fn trim_ascii(text : String) -> String {
 
 ///|
 /// Find, interrogate and optionally hash one toolchain.
-async fn resolve_toolchain(tc : Toolchain, shell : String) -> ResolvedToolchain {
-  let memo_key = toolchain_memo_key(tc)
+async fn resolve_toolchain(
+  tc : Toolchain,
+  shell : String,
+  target : String,
+) -> ResolvedToolchain {
+  let executable = toolchain_executable(tc, target)
+  let memo_key = toolchain_memo_key(tc, target)
   match toolchain_memo.get(memo_key) {
     Some(cached) => return cached
     None => ()
@@ -125,7 +171,7 @@ async fn resolve_toolchain(tc : Toolchain, shell : String) -> ResolvedToolchain 
   // it reports the same executable the command itself will get.
   let (locate_code, located, _) = @process.collect_output(
     shell.view(),
-    ["-c", "command -v " + shell_quote(tc.name)][:],
+    ["-c", "command -v " + shell_quote(executable)][:],
   )
   let path = if locate_code == 0 {
     first_line(@utf8.decode_lossy(located.binary()))
@@ -138,13 +184,14 @@ async fn resolve_toolchain(tc : Toolchain, shell : String) -> ResolvedToolchain 
       version: "",
       digest: "",
       found: false,
+      executable,
     }
     toolchain_memo[memo_key] = missing
     return missing
   }
   let (version_code, out, err) = @process.collect_output(
     shell.view(),
-    ["-c", toolchain_version_command(tc)][:],
+    ["-c", toolchain_version_command(tc, executable)][:],
   )
   // Version banners land on stdout or stderr depending on the tool, so
   // both are considered rather than guessing which one this tool picked.
@@ -164,7 +211,13 @@ async fn resolve_toolchain(tc : Toolchain, shell : String) -> ResolvedToolchain 
   } else {
     ""
   }
-  let resolved = ResolvedToolchain::{ path, version, digest, found: true }
+  let resolved = ResolvedToolchain::{
+    path,
+    version,
+    digest,
+    found: true,
+    executable,
+  }
   toolchain_memo[memo_key] = resolved
   resolved
 }
@@ -200,13 +253,24 @@ async fn toolchain_key_fields(
   task : Task,
   shell : String,
 ) -> Array[(String, String)] {
+  let target = task.target_platform.unwrap_or("")
   let out : Array[(String, String)] = []
   for tc in task.toolchains {
-    let resolved = resolve_toolchain(tc, shell)
+    let resolved = resolve_toolchain(tc, shell, target)
     if !resolved.found {
       if !tc.optional {
+        // Named twice on purpose when they differ: the author wrote
+        // `cc`, and what is missing is the cross compiler that `cc`
+        // selected for this target. Reporting only one of the two
+        // sends them looking in the wrong place.
+        let what = if resolved.executable == tc.name {
+          "`" + tc.name + "`"
+        } else {
+          "`" + resolved.executable + "` (selected by `" + tc.name +
+          "` for target " + target + ")"
+        }
         die(
-          "task `\{task.name}` declares toolchain `\{tc.name}`, which is not on PATH",
+          "task `\{task.name}` declares toolchain \{what}, which is not on PATH",
         )
       }
       // Recorded, not skipped: a run that went ahead without the tool
@@ -225,6 +289,12 @@ async fn toolchain_key_fields(
     }
     if tc.hash_binary {
       out.push(("toolchain." + tc.name + ".digest", resolved.digest))
+    }
+    // Only when the constraint actually selected something else. A
+    // native build's key is then byte-identical to what it was before
+    // `forTarget` existed.
+    if resolved.executable != tc.name {
+      out.push(("toolchain." + tc.name + ".selected", resolved.executable))
     }
   }
   out.sort_by(fn(a, b) { lex_cmp(a.0, b.0) })

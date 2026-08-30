@@ -12,6 +12,65 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **A toolchain selects a different executable per target platform.**
+  `forTarget` is what makes `toolchains` a resolver rather than a
+  lookup: one declaration, and which compiler it resolves to depends on
+  what the task is building for.
+
+  ```pkl
+  local ccTool = new Toolchain {
+    name = "cc"
+    forTarget {
+      ["linux/arm64"] = "aarch64-linux-gnu-gcc"
+      ["linux/amd64"] = "x86_64-linux-gnu-gcc"
+    }
+  }
+  ```
+
+  A task with `targetPlatform = "linux/arm64"` resolves `cc` to the
+  cross compiler, asks *that* binary its version, and keys on it — so a
+  native build and a cross build of the same source no longer share an
+  entry. `pkf explain` names both halves, because "the Taskfile says
+  `cc`, so which compiler was that?" is the question a cross-compile
+  makes you ask:
+
+  ```
+  toolchains (1):
+    cc -> aarch64-linux-gnu-gcc  aarch64-linux-gnu-gcc 13.2
+      /usr/bin/aarch64-linux-gnu-gcc
+  ```
+
+  A target with no entry falls back to the declared name, so a native
+  build needs no special case and its key is byte-identical to what it
+  was before `forTarget` existed. A missing cross compiler names both
+  the declaration and the selection, since reporting only one sends you
+  looking in the wrong place.
+
+### Performance
+
+- **Globs walk only the tree they can match.** `expand_glob` walked the
+  entire repository for every wildcard pattern and then filtered:
+  `src/**/*.mbt` listed `.mooncakes/`, `_build/` and `.git/` on its way
+  to `src/`, once per pattern. A plan with seven tasks walked a 58 MB
+  dependency tree dozens of times, and none of that work could ever
+  produce a match.
+
+  Two bounds, both read off the pattern itself: the walk starts at the
+  literal directory prefix before the first wildcard, and stops
+  descending past as many components as the pattern has unless it
+  contains `**`. On this repository:
+
+  | | before | after |
+  |---|---|---|
+  | `pkf run ci` (fully cached) | 552 ms | 122 ms |
+  | `pkf run ci --dry-run` | 1489 ms | 327 ms |
+  | `pkf run fmt:check` | 613 ms | 287 ms |
+
+  Neither bound is a cache, so nothing can go stale and a file another
+  task just wrote is still found. A differential test asserts the
+  pruned walk returns exactly what walking everything returned, for the
+  patterns this repository actually uses.
+
 - **`toolchains`: tools the runner resolves instead of taking your word
   for.** `tools { ["go"] = "1.26.2" }` is a string the author types and
   then has to remember to change. Nothing checks it, so upgrading Go

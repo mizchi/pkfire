@@ -288,6 +288,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
                   Some(v) => parse_bool(v, default=false)
                   None => false
                 },
+                for_target: match e.get("forTarget") {
+                  Some(v) => parse_string_map(v)
+                  None => Map([], capacity=0)
+                },
               })
             }
             _ => ()
@@ -1073,16 +1077,6 @@ fn walk_tree(
 /// Names of everything under `root` that carries content — regular
 /// files and symlinks. Used by input globbing, which matches on paths
 /// and has no use for the directory members `walk_tree` emits.
-fn walk_files(root : String, rel_prefix : String, out : Array[String]) -> Unit {
-  let entries : Array[(String, TarKind)] = []
-  walk_tree(root, rel_prefix, entries)
-  for entry in entries {
-    if entry.1 != TarDir {
-      out.push(entry.0)
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Glob matcher: supports literal text, `?`, `*` (no slash), and `**`
 // (zero-or-more slash-separated segments). Mirrors doublestar's subset
@@ -1315,12 +1309,29 @@ fn expand_glob(
     }
     return
   }
+  // Walk only what the pattern can reach. `src/**/*.mbt` cannot match
+  // anything outside `src/`, and a pattern without `**` cannot match
+  // deeper than it has segments — so listing the rest of the repository
+  // was work that could never produce a match. See `globwalk.mbt`.
+  let bounds = glob_bounds(pattern)
+  let base = if root.length() == 0 { "." } else { root }
+  let walk_root = if bounds.root.length() == 0 {
+    base
+  } else {
+    join_path(base, bounds.root)
+  }
   let all : Array[String] = []
-  let walk_root = if root.length() == 0 { "." } else { root }
-  walk_files(walk_root, "", all)
+  walk_files_bounded(walk_root, bounds.max_depth, all)
   for rel in all {
-    if glob_match(pattern, rel) {
-      out[rel] = true
+    // Matched against the pattern's tail, but recorded under the full
+    // path the caller asked about — everything downstream (hashing,
+    // the sandbox, `clean`) resolves these against the task root.
+    if glob_match(bounds.rest, rel) {
+      if bounds.root.length() == 0 {
+        out[rel] = true
+      } else {
+        out[bounds.root + "/" + rel] = true
+      }
     }
   }
 }
@@ -5874,21 +5885,30 @@ async fn explain_cmd(
   if task.toolchains.length() > 0 {
     println("")
     println("toolchains (\{task.toolchains.length()}):")
+    let target = task.target_platform.unwrap_or("")
     for tc in task.toolchains {
-      let resolved = resolve_toolchain(tc, task.shell)
+      let resolved = resolve_toolchain(tc, task.shell, target)
+      // Naming both when they differ is the point of the line: the
+      // Taskfile says `cc`, and which compiler that turned into is the
+      // question a cross-compile makes you ask.
+      let label = if resolved.executable == tc.name {
+        tc.name
+      } else {
+        tc.name + " -> " + resolved.executable
+      }
       if resolved.found {
         let version = if resolved.version.length() > 0 {
           resolved.version
         } else {
           "unknown version"
         }
-        println("  " + tc.name + "  " + version)
+        println("  " + label + "  " + version)
         println("    " + resolved.path)
         if tc.hash_binary {
           println("    digest " + resolved.digest)
         }
       } else {
-        println("  " + tc.name + "  not found (optional)")
+        println("  " + label + "  not found (optional)")
       }
     }
   }

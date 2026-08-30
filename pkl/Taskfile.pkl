@@ -81,6 +81,26 @@ class Toolchain {
   /// off by default rather than on.
   hashBinary: Boolean = false
 
+  /// Executable to resolve *instead of* `name` when the task builds
+  /// for a given `targetPlatform`.
+  ///
+  /// This is what makes a toolchain a resolver rather than a lookup:
+  /// the same declaration selects a different compiler depending on
+  /// what the task is building for, and the one actually selected is
+  /// what reaches the action key.
+  ///
+  ///     new Toolchain {
+  ///       name = "cc"
+  ///       forTarget {
+  ///         ["linux/arm64"] = "aarch64-linux-gnu-gcc"
+  ///         ["linux/amd64"] = "x86_64-linux-gnu-gcc"
+  ///       }
+  ///     }
+  ///
+  /// A target with no entry falls back to `name`, so a native build
+  /// needs no special case.
+  forTarget: Mapping<String, String> = new {}
+
   /// Whether the task can run without it.
   ///
   /// False by default: a declared tool that is missing will fail the
@@ -432,6 +452,7 @@ class RenderedToolchain {
   versionCmd: String?
   hashBinary: Boolean
   optional: Boolean
+  forTarget: Mapping<String, String>
 }
 
 /// Wire format mirror of `Step` consumed by the runner.
@@ -561,6 +582,7 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
             versionCmd = tc.versionCmd
             hashBinary = tc.hashBinary
             optional = tc.optional
+            forTarget = tc.forTarget
           }
         }
       }

@@ -1,0 +1,38 @@
+/// Fixture for constraint-driven toolchain selection.
+///
+/// One `cc` declaration, two tasks: `native` builds for the machine it
+/// runs on, `cross` builds for `linux/arm64`. The same declaration
+/// resolves to a different compiler, and the two get different action
+/// keys — which is what makes a toolchain a resolver rather than a
+/// lookup.
+///
+/// `bin/` holds stand-ins so the fixture needs no real cross toolchain.
+///
+/// Relative `amends`: `toolchains` and `targetPlatform` are unreleased.
+amends "../../pkl/Taskfile.pkl"
+
+local ccTool = new Toolchain {
+  name = "cc"
+  forTarget {
+    ["linux/arm64"] = "aarch64-linux-gnu-gcc"
+  }
+}
+
+local native = new Task {
+  name = "native"
+  cmd = "mkdir -p dist && cc > dist/native.txt"
+  inputs { "src/**" }
+  outputs { "dist/native.txt" }
+  toolchains { ccTool }
+}
+
+local cross = new Task {
+  name = "cross"
+  cmd = "mkdir -p dist && cc > dist/cross.txt"
+  inputs { "src/**" }
+  outputs { "dist/cross.txt" }
+  targetPlatform = "linux/arm64"
+  toolchains { ccTool }
+}
+
+tasks { native; cross }
