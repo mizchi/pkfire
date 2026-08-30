@@ -113,9 +113,13 @@ jobs:
           grep -q 'before the sleep' hang.out || { echo "the command did not start"; exit 1; }
           grep -q 'after the sleep' hang.out && { echo "the script kept running past its deadline"; exit 1; }
           grep -q 'exceeded its 2s timeout' hang.err || { echo "no timeout diagnostic"; exit 1; }
-          # Nothing left holding a CPU once the run reported done.
-          sleep 1
-          ! pgrep -x sleep >/dev/null 2>&1 || { echo "an orphan survived the timeout"; exit 1; }
+          # The command writes `survived.txt` after its 6s sleep. Waiting
+          # past that and finding no marker is a direct check that the
+          # tree really died — where grepping the process table for a
+          # surviving `sleep` would match unrelated processes on a shared
+          # runner, including the shell running the check.
+          sleep 7
+          [ ! -f survived.txt ] || { echo "the killed command kept running"; exit 1; }
           # A task inside its deadline is untouched.
           "$BIN" run quick | grep -q 'finished well inside the deadline'
           # And a task this machine cannot run says so by name.

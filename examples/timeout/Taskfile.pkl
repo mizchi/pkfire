@@ -1,17 +1,24 @@
 /// Fixture for `timeoutSeconds` and `requiresPlatform`.
 ///
-/// `hang` sleeps far past its deadline and then echoes. Both halves
-/// matter: the run must end at the deadline, and `after the sleep` must
-/// never be printed — a shell whose child is killed first notices, and
-/// carries on with the next line of a script that was supposed to have
-/// been stopped.
+/// `hang` sleeps past its 2s deadline and then writes a marker. Both
+/// halves matter: the run must end at the deadline, and neither the
+/// echo nor the marker may ever appear — a shell whose child is killed
+/// first notices, and carries on with the next line of a script that
+/// was supposed to have been stopped.
+///
+/// The sleep is short on purpose. Proving the tree really died means
+/// waiting past it and finding no marker, which is a direct check on
+/// the thing that matters. Grepping the process table for a surviving
+/// `sleep` instead would match unrelated processes on a shared runner —
+/// including the very shell running the check, whose own command line
+/// contains the pattern.
 ///
 /// Relative `amends`: both fields are unreleased.
 amends "../../pkl/Taskfile.pkl"
 
 local hang = new Task {
   name = "hang"
-  cmd = "echo before the sleep && sleep 60 && echo after the sleep"
+  cmd = "echo before the sleep && sleep 6 && echo after the sleep && touch survived.txt"
   inputs { "src/**" }
   outputs { "never.txt" }
   timeoutSeconds = 2
