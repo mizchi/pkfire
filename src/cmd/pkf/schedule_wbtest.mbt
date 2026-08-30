@@ -54,7 +54,7 @@ test "dependents are the reverse edges, deduplicated" {
 ///|
 /// A finished-run record, for the reporting tests.
 fn finished_run(task : String, ms : Int64) -> ActionRun {
-  ActionRun::{ task, outcome: Finished(0), duration_ms: ms, start_ms: 0L }
+  ActionRun::{ task, outcome: Finished(Ran(0)), duration_ms: ms, start_ms: 0L }
 }
 
 ///|
@@ -117,6 +117,86 @@ test "a run with no dependencies has a one-action critical path" {
 }
 
 ///|
+fn run_with(task : String, outcome : ActionOutcome) -> ActionRun {
+  ActionRun::{ task, outcome, duration_ms: 0L, start_ms: 0L }
+}
+
+///|
+fn summary_of(runs : Array[ActionRun], wall_ms : Int64) -> String? {
+  summary_line(ScheduleResult::{ exit_code: 0, runs, wall_ms })
+}
+
+///|
+test "the summary says how much of the run was skipped" {
+  // The per-task `# name (cache hit …)` lines scroll past in a
+  // fifty-task build. The question left afterwards is how much was
+  // actually redone.
+  assert_eq(
+    summary_of(
+      [
+        run_with("a", Finished(LocalHit)),
+        run_with("b", Finished(LocalHit)),
+        run_with("c", Finished(Ran(0))),
+      ],
+      1500L,
+    ),
+    Some("3 task(s) · 2 cached · 1 ran · 1.5s"),
+  )
+}
+
+///|
+test "a fully cached run says nothing had to be rebuilt" {
+  assert_eq(
+    summary_of([run_with("a", Finished(LocalHit))], 3L),
+    Some("1 task(s) · 1 cached · 0 ran · 3ms  (nothing to rebuild)"),
+  )
+  // Not the same claim when something was skipped after a failure:
+  // work was left undone, which is not the same as nothing to do.
+  assert_eq(
+    summary_of(
+      [run_with("a", Finished(LocalHit)), run_with("b", Skipped("a"))],
+      3L,
+    ),
+    Some("2 task(s) · 1 cached · 0 ran · 1 skipped · 3ms"),
+  )
+}
+
+///|
+test "a remote hit is distinguished from a local one" {
+  // Worth separating: a remote hit means the network was involved and
+  // the entry came from somewhere else, which is the difference
+  // between "my cache works" and "CI's cache works".
+  assert_eq(
+    summary_of([run_with("a", Finished(RemoteHit))], 40L),
+    Some("1 task(s) · 1 cached (remote) · 0 ran · 40ms  (nothing to rebuild)"),
+  )
+  assert_eq(
+    summary_of(
+      [run_with("a", Finished(RemoteHit)), run_with("b", Finished(LocalHit))],
+      40L,
+    ),
+    Some("2 task(s) · 2 cached (1 remote) · 0 ran · 40ms  (nothing to rebuild)"),
+  )
+}
+
+///|
+test "umbrella tasks and report modes are not counted as work" {
+  // A deps-only task spawns nothing, so calling it "ran" would
+  // overstate the build. `--dry-run` executed nothing at all, so a
+  // summary of it would be a summary of nothing.
+  assert_eq(
+    summary_of(
+      [run_with("all", Finished(Umbrella)), run_with("a", Finished(Ran(0)))],
+      5L,
+    ),
+    Some("1 task(s) · 1 ran · 5ms"),
+  )
+  assert_eq(summary_of([run_with("a", Finished(Reported))], 5L), None)
+  assert_eq(summary_of([], 5L), None)
+  assert_eq(summary_of([run_with("all", Finished(Umbrella))], 5L), None)
+}
+
+///|
 test "durations read the way a person reads a clock" {
   assert_eq(format_ms(0L), "0ms")
   assert_eq(format_ms(999L), "999ms")
@@ -145,6 +225,9 @@ test "a skipped action is distinguishable from one that ran" {
   // failure the user needs to look at.
   assert_true(Skipped("build") == Skipped("build"))
   assert_false(Skipped("build") == Skipped("test"))
-  assert_false(Skipped("build") == Finished(0))
-  assert_false(Finished(0) == Finished(1))
+  assert_false(Skipped("build") == Finished(Ran(0)))
+  assert_false(Finished(Ran(0)) == Finished(Ran(1)))
+  // A cache hit and a run are both "finished" and both exit 0; only
+  // the outcome tells them apart, which is what the summary counts.
+  assert_false(Finished(LocalHit) == Finished(Ran(0)))
 }

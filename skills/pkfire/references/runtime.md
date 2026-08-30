@@ -112,6 +112,17 @@ Consequences:
 - Set `cache = false` for nondeterministic or side-effect-only work.
 - Changing only a task description does not invalidate cache.
 
+## Run summary
+
+Every `pkf run` ends with one line: total tasks, how many were cache
+hits (remote counted separately), how many ran, how many were skipped
+after a failure, and the wall clock. A fully cached run says
+`(nothing to rebuild)`.
+
+Deps-only umbrella tasks are not counted — they spawn nothing.
+`--quiet` suppresses the line; `--dry-run` and `--print-hash` omit it
+because nothing was executed.
+
 ## Scheduling
 
 `pkf run -j N` runs up to N actions concurrently, `-j auto` one per

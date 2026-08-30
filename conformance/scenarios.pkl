@@ -346,6 +346,23 @@ scenarios {
     }
   }
   new {
+    id = "cache-hit-skips-command"
+    fixture = "examples/cache-hit"
+    // `setup` performs the first run, so the scenario's own run is the
+    // second one. `count` appends to `runs.log`, which it never
+    // declares as an output — so the cache neither stores nor restores
+    // it, and an empty fsDelta is proof the command did not run again.
+    // Reporting a hit is easy; skipping the work is the contract.
+    setup { "\"$PKF_MBT_BIN\" run count" }
+    argv { "run"; "count" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      fsDelta = true
+      mustContain { "cache hit" }
+    }
+  }
+  new {
     id = "clean-dry-run"
     fixture = "examples/cat-io"
     // `--dry-run` used to be accepted and ignored, so this exact

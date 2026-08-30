@@ -2075,6 +2075,32 @@ struct RunOptions {
 }
 
 ///|
+/// How a task finished. The exit code alone cannot tell a run that did
+/// the work from one that skipped it, which is exactly what a reader
+/// wants to know at the end of a build.
+enum TaskOutcome {
+  /// The command ran and exited with this code.
+  Ran(Int)
+  /// A local cache entry matched and was restored; nothing ran.
+  LocalHit
+  /// The remote cache had it; nothing ran.
+  RemoteHit
+  /// A deps-only umbrella task: there was no command to run.
+  Umbrella
+  /// `--dry-run` / `--print-hash`: reported and executed nothing.
+  Reported
+} derive(Eq)
+
+///|
+/// The exit code a `TaskOutcome` implies.
+fn TaskOutcome::code(self : TaskOutcome) -> Int {
+  match self {
+    Ran(code) => code
+    _ => 0
+  }
+}
+
+///|
 fn RunOptions::default() -> RunOptions {
   RunOptions::{
     no_cache: false,
@@ -2174,10 +2200,10 @@ async fn[X] run_task(
   positionals : Array[String],
   opts~ : RunOptions = RunOptions::default(),
   graph~ : ActionGraph? = None,
-) -> Int {
+) -> TaskOutcome {
   if task.cmd.length() == 0 {
     // deps-only umbrella task — nothing to spawn.
-    return 0
+    return Umbrella
   }
   // Inputs, outputs and the command share the same task root. This keeps
   // action-key expansion aligned with affected/watch for workdir tasks.
@@ -2214,7 +2240,7 @@ async fn[X] run_task(
     }
     if opts.print_hash {
       println("\{k}  \{task.name}")
-      return 0
+      return Reported
     }
     // Dry run reports and stops. It must not restore, fetch, or spawn:
     // the whole point is that `pkf run --dry-run deploy` does not
@@ -2233,7 +2259,7 @@ async fn[X] run_task(
       }
       println("pkf: \{task.name}  \{status}  \{k[0:8].to_owned()}")
       println("pkf:   \{task.cmd}")
-      return 0
+      return Reported
     }
     if cacheable {
       // `--refresh` deliberately skips the lookup and falls through to
@@ -2244,13 +2270,13 @@ async fn[X] run_task(
           if !opts.quiet {
             println("pkf: # \{task.name} (cache hit \{k[0:8].to_owned()})")
           }
-          return 0
+          return LocalHit
         }
         if cache_remote_fetch(k, repo_root) {
           if !opts.quiet {
             println("pkf: # \{task.name} (remote cache hit \{k[0:8].to_owned()})")
           }
-          return 0
+          return RemoteHit
         }
       }
       key = Some(k)
@@ -2262,7 +2288,7 @@ async fn[X] run_task(
     }
     println("pkf: \{task.name}  will run (uncached: \{why})")
     println("pkf:   \{task.cmd}")
-    return 0
+    return Reported
   }
   // bash -c "cmd" placeholder for positional args: pkfire passes
   // positionals as `bash -c "cmd" <task-name> <positional...>` so that
@@ -2301,7 +2327,7 @@ async fn[X] run_task(
       None => {
         stop_services(running)
         die("unknown service `\{service_name}` declared by `\{task.name}`")
-        return 2
+        return Ran(2)
       }
     }
     if !service_task.service {
@@ -2309,7 +2335,7 @@ async fn[X] run_task(
       die(
         "task `\{service_name}` is referenced as a service by `\{task.name}` but is not declared `service = true`",
       )
-      return 2
+      return Ran(2)
     }
     try {
       let rs = start_service(group, plan, service_task, params)
@@ -2318,7 +2344,7 @@ async fn[X] run_task(
       err => {
         stop_services(running)
         println("pkf: \{err}")
-        return 2
+        return Ran(2)
       }
     }
   }
@@ -2438,7 +2464,7 @@ async fn[X] run_task(
     None => ()
   }
   if code != 0 {
-    return code
+    return Ran(code)
   }
   // An action that exits 0 without producing a declared output has not
   // done what it said it would. Caching that is how an empty entry gets
@@ -2462,7 +2488,7 @@ async fn[X] run_task(
       "pkf: task `\{task.name}` exited 0 but did not produce its declared output(s): " +
       join_with(missing, ", "),
     )
-    return 1
+    return Ran(1)
   }
   match key {
     Some(k) => {
@@ -2477,7 +2503,7 @@ async fn[X] run_task(
     }
     None => ()
   }
-  code
+  Ran(code)
 }
 
 ///|
@@ -3579,7 +3605,7 @@ async fn[X] watch_cmd(
         Some(m) => m
         None => continue
       }
-      let code = run_task(group, plan, task, repo_root, resolved_params, [])
+      let code = run_task(group, plan, task, repo_root, resolved_params, []).code()
       if code != 0 {
         println(
           "pkf watch: task `\{name}` failed with exit code \{code}; continuing",
@@ -5836,6 +5862,9 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         jobs,
         parsed.keep_going,
       )
+      if !parsed.opts.quiet {
+        report_summary(result)
+      }
       if parsed.opts.timing {
         report_timing(result, graph)
       }
