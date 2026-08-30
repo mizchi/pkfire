@@ -1,0 +1,80 @@
+/// Fixture for configuration transitions.
+///
+/// `targetPlatform` says what a task builds *for*. It used to be read
+/// straight off the task, so it stopped at the task that declared it: a
+/// cross build's dependencies were resolved and keyed for the host, and
+/// two different cross builds shared one entry for a library that
+/// should have been built twice.
+///
+/// `lib` declares no platform, so it is a host build on its own and
+/// part of the arm64 build when reached through `app` — with a
+/// different action key each way. `codegen` pins itself, which is what
+/// a tool that has to run on the build machine needs whatever is being
+/// built. `other-app` wants the same undeclared `lib` for a third
+/// target, which is the case pkfire cannot build yet: one `outputs`
+/// path, two answers.
+///
+/// No `toolchains` here on purpose. The platform reaches the action key
+/// on its own, so this fixture needs nothing on `PATH`; the toolchain
+/// half is `with-toolchains.pkl`, which the CI smoke runs with `bin/`
+/// in front.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
+
+local lib = new Task {
+  name = "lib"
+  cmd = "mkdir -p dist && echo lib > dist/lib.txt"
+  inputs { "src/**" }
+  outputs { "dist/lib.txt" }
+}
+
+local codegen = new Task {
+  name = "codegen"
+  cmd = "mkdir -p dist && echo gen > dist/gen.txt"
+  inputs { "src/**" }
+  outputs { "dist/gen.txt" }
+  targetPlatform = "linux/amd64"
+}
+
+local app = new Task {
+  name = "app"
+  cmd = "mkdir -p dist && cat dist/lib.txt dist/gen.txt > dist/app.txt"
+  inputs { "dist/lib.txt"; "dist/gen.txt" }
+  outputs { "dist/app.txt" }
+  targetPlatform = "linux/arm64"
+  deps { lib; codegen }
+}
+
+local otherApp = new Task {
+  name = "other-app"
+  cmd = "mkdir -p dist && cat dist/lib.txt > dist/other.txt"
+  inputs { "dist/lib.txt" }
+  outputs { "dist/other.txt" }
+  targetPlatform = "linux/riscv64"
+  deps { lib }
+}
+
+/// Compares the key `lib` gets on its own against the one it gets as
+/// part of the arm64 build. Asserted from a task rather than from the
+/// harness because the keys themselves are not worth freezing into a
+/// golden — what matters is that they differ, and that `codegen` keeps
+/// its own whichever way it is reached.
+local checkTransition = new Task {
+  name = "check-transition"
+  cmd =
+    """
+    alone=$(awk '$2 == "lib" { print $1 }' alone.txt)
+    viaapp=$(awk '$2 == "lib" { print $1 }' via-app.txt)
+    test -n "$alone" || { echo "no key for lib on its own"; exit 1; }
+    test -n "$viaapp" || { echo "no key for lib under app"; exit 1; }
+    [ "$alone" != "$viaapp" ] \
+      || { echo "lib keyed the same for a host build and an arm64 build"; exit 1; }
+    gen_alone=$(awk '$2 == "codegen" { print $1 }' gen-alone.txt)
+    gen_viaapp=$(awk '$2 == "codegen" { print $1 }' via-app.txt)
+    [ "$gen_alone" = "$gen_viaapp" ] \
+      || { echo "a task that pins itself was transitioned anyway"; exit 1; }
+    echo transitions reach dependencies
+    """
+  cache = false
+}
+
+tasks { lib; codegen; app; otherApp; checkTransition }

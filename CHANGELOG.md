@@ -12,6 +12,40 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **`targetPlatform` propagates down the graph.** It said what a task
+  builds *for*, and it was read straight off the task — so it stopped at
+  the task that declared it. A cross build's dependencies were resolved
+  and keyed for the *host*, which meant two different cross builds
+  shared one entry for a library that should have been built twice, and
+  a library's `toolchains` resolved to the host compiler inside an arm64
+  build.
+
+  ```pkl
+  local lib = new Task { name = "lib" }                                  // no platform
+  local app = new Task { name = "app"; targetPlatform = "linux/arm64"; deps { lib } }
+  ```
+
+  `pkf run lib` builds `lib` for the machine it runs on; `pkf run app`
+  builds it for `linux/arm64`, with a different action key and the cross
+  compiler selected. This is Bazel's configuration transition in its
+  simplest form: a target's identity is the task *and* the configuration
+  it was reached in.
+
+  Only a declared `targetPlatform` transitions anything — a task without
+  one passes no opinion down, so a `ci` umbrella does not force the
+  execution platform onto everything beneath it — and a task that
+  declares its own is never transitioned by a consumer, which is what a
+  code generator that must run on the build machine needs.
+
+  A task reached in two different declared configurations in one run is
+  **refused by name**, with both platforms and both origins, rather than
+  silently built once and handed to both. Building it twice needs
+  per-configuration output roots, which do not exist yet.
+
+  No schema change: `targetPlatform` is unchanged, only where it
+  reaches. Action keys move for any task that is a dependency of one
+  declaring a `targetPlatform` — those entries were keyed wrong.
+
 - **The cache entry is split into an ActionCache manifest and
   content-addressed blobs.** An entry used to be one gzipped tar per
   action key, which stores every output of every key in full — and

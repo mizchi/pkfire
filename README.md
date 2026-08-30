@@ -991,6 +991,50 @@ differ only in where the result is meant to run are different actions,
 and key differently. Null, the default, means the task builds for the
 machine it runs on.
 
+**It propagates down the graph.** A dependency of a cross build is part
+of that cross build:
+
+```pkl
+local lib = new Task { name = "lib"; /* no targetPlatform */ }
+local app = new Task { name = "app"; targetPlatform = "linux/arm64"; deps { lib } }
+```
+
+`pkf run lib` builds `lib` for the machine it runs on. `pkf run app`
+builds it for `linux/arm64` — same task, different action key, and its
+`toolchains` resolve to the cross compiler too. Without this a cross
+build's dependencies were resolved and keyed for the host, so two
+different cross builds shared one entry for a library that should have
+been built twice.
+
+Only a declared `targetPlatform` propagates. A task that declares none
+passes no opinion down, so a `ci` umbrella over a host task and a cross
+task does not force the host platform onto everything beneath it.
+
+A task that declares its own platform is never transitioned by whoever
+depends on it — which is exactly what a code generator that has to run
+on the build machine needs:
+
+```pkl
+local codegen = new Task { name = "codegen"; targetPlatform = "linux/amd64" }
+```
+
+**One task cannot be built for two targets in the same run yet.** It has
+one set of `outputs`, so both configurations would write the same paths.
+That is refused by name rather than silently built once and handed to
+both:
+
+```
+pkf: task `lib` is needed for two target platforms in one run: linux/riscv64
+  (via `other-app`) and linux/arm64 (via `app`).
+  Both would write the same `outputs`, so pkfire cannot build it twice yet.
+  Either run them separately, or give `lib` its own `targetPlatform`
+  so it pins one configuration regardless of who depends on it.
+```
+
+Building it twice needs per-configuration output roots — Bazel's
+`bazel-out/<config>/…` — which pkfire does not have. Until it does, the
+refusal is the honest answer.
+
 It also *selects the toolchain*, which is what makes `toolchains` a
 resolver rather than a lookup. One declaration:
 

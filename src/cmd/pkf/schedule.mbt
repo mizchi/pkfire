@@ -166,6 +166,10 @@ async fn[X] run_action_graph(
   opts : RunOptions,
   jobs : Int,
   keep_going : Bool,
+  // Configuration per task, resolved over the whole run set before
+  // anything starts. Passed in rather than derived here so the graph
+  // that decided it is the one the run executes.
+  configs : Map[String, Configuration],
 ) -> ScheduleResult {
   let started = now_ms()
   let runs : Array[ActionRun] = []
@@ -283,6 +287,7 @@ async fn[X] run_action_graph(
           task_positionals,
           opts~,
           graph=Some(graph),
+          config=Some(config_of(configs, name)),
           attempts~,
         )
         inbox.push(

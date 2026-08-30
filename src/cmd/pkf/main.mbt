@@ -2313,6 +2313,11 @@ fn action_for_task(
   // in the async caller — and a call site that quietly passed nothing
   // would compute a key the runner never looks up.
   toolchains~ : Array[(String, String)],
+  // The configuration this task is reached in. `None` falls back to
+  // what the task itself declares, so a caller without a run set (a
+  // bare `describe`) behaves as it always did; the runner passes the
+  // resolved one, which is what the key must reflect.
+  config~ : Configuration? = None,
   graph~ : ActionGraph? = None,
   repo_root~ : String = ".",
 ) -> ActionDescriptor {
@@ -2341,6 +2346,7 @@ fn action_for_task(
     consumed_artifacts=consumed,
     providers~,
     toolchains~,
+    config~,
   )
 }
 
@@ -2390,6 +2396,11 @@ async fn[X] run_task(
   positionals : Array[String],
   opts~ : RunOptions = RunOptions::default(),
   graph~ : ActionGraph? = None,
+  // The configuration this task is reached in. The runner resolves it
+  // over the whole run set — a dependency of a cross build inherits the
+  // target being built — and it must reach both the toolchain resolver
+  // and the action key, or the two would disagree about what was built.
+  config~ : Configuration? = None,
   // How many attempts the command took, written back for the caller's
   // run record. An out-parameter rather than a wider return type: every
   // early exit above returns before a command is ever spawned, and
@@ -2451,7 +2462,8 @@ async fn[X] run_task(
       params,
       positionals,
       opts,
-      toolchains=toolchain_key_fields(task, task.shell),
+      toolchains=toolchain_key_fields(task, task.shell, config~),
+      config~,
       graph~,
       repo_root~,
     )
@@ -5917,6 +5929,12 @@ async fn explain_cmd(
   // that run looks up — artifacts consumed from its dependencies
   // included.
   let graph = build_action_graph(plan, repo_root, [task_name])
+  // Resolved over this task's own run set, so `pkf explain X` reports
+  // the key `pkf run X` looks up. Explaining a task that a *different*
+  // run reaches in another configuration reports that run's key only if
+  // you explain the target that run asked for.
+  let (configs, _) = resolve_configurations(plan, graph)
+  let config = Some(config_of(configs, task_name))
   let action = action_for_task(
     plan,
     task,
@@ -5924,7 +5942,8 @@ async fn explain_cmd(
     Map([], capacity=0),
     [],
     RunOptions::default(),
-    toolchains=toolchain_key_fields(task, task.shell),
+    toolchains=toolchain_key_fields(task, task.shell, config~),
+    config~,
     graph=Some(graph),
     repo_root~,
   )
@@ -6497,6 +6516,19 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       } else {
         { ..parsed.opts, stream_output: true }
       }
+      // What each task builds *for*, propagated down the graph before
+      // anything runs. Refused rather than resolved when one task is
+      // wanted in two configurations at once: both would write the same
+      // `outputs`, and picking either silently gives one consumer the
+      // other's artifact.
+      let (configs, conflict) = resolve_configurations(plan, graph)
+      match conflict {
+        Some(c) => {
+          die(config_conflict_message(c))
+          return 2
+        }
+        None => ()
+      }
       let result = run_action_graph(
         group,
         plan,
@@ -6508,6 +6540,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         opts,
         jobs,
         parsed.keep_going,
+        configs,
       )
       if !parsed.opts.quiet {
         report_summary(result)

@@ -506,6 +506,56 @@ scenarios {
     }
   }
   new {
+    id = "a-transition-reaches-dependencies"
+    fixture = "examples/transitions"
+    // `lib` declares no platform. On its own it is a host build; under
+    // `app` it is part of an arm64 build and must key as one, or two
+    // different cross builds share an entry that describes neither.
+    // `codegen` pins itself and must keep its own key either way.
+    setup {
+      "\"$PKF_MBT_BIN\" run lib --print-hash > alone.txt"
+      "\"$PKF_MBT_BIN\" run codegen --print-hash > gen-alone.txt"
+      "\"$PKF_MBT_BIN\" run app --print-hash > via-app.txt"
+    }
+    argv { "run"; "check-transition" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "transitions reach dependencies" }
+    }
+  }
+  new {
+    id = "one-task-for-two-targets-is-refused"
+    fixture = "examples/transitions"
+    // Both apps want the undeclared `lib`, for different targets. There
+    // is one `dist/lib.txt`, so building it once and handing it to both
+    // is wrong for one of them — which is what happened before. Refused
+    // by name, with the two ways out.
+    argv { "run"; "app"; "other-app" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr {
+        "`lib` is needed for two target platforms"
+        "linux/arm64"
+        "linux/riscv64"
+        "targetPlatform"
+      }
+    }
+  }
+  new {
+    id = "each-target-alone-still-builds"
+    fixture = "examples/transitions"
+    // The refusal is about one run, not about the Taskfile: running
+    // them separately is the workaround the message names, so it has to
+    // work.
+    setup { "\"$PKF_MBT_BIN\" run app" }
+    argv { "run"; "other-app" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; fsDelta = true }
+  }
+  new {
     id = "reserved-output-prefix-is-refused"
     fixture = "examples/reserved-output"
     // `.pkf-meta/` is where an entry keeps the captured logs. A task

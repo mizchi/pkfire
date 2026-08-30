@@ -285,6 +285,11 @@ fn lower_task_to_action(
   consumed_artifacts~ : Array[(String, String)] = [],
   providers~ : Array[(String, String)] = [],
   toolchains~ : Array[(String, String)] = [],
+  // What this task builds *for* in this run, which is not always what
+  // it declares: a dependency of a cross build inherits the target
+  // being built. `None` falls back to the declaration, which is what a
+  // caller with no run set has to do. See `configuration.mbt`.
+  config~ : Configuration? = None,
 ) -> ActionDescriptor {
   // argv: exactly what run_task hands to the shell, so the key sees the
   // real command line rather than a reconstruction of it.
@@ -375,7 +380,7 @@ fn lower_task_to_action(
     outputs,
     working_directory: normalize_workdir(task.workdir),
     execution_platform: exec_platform(),
-    target_platform: task.target_platform.unwrap_or(""),
+    target_platform: config_or_declared(config, task).target_platform,
     execution_properties,
   }
 }

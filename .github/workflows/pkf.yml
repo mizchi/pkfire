@@ -239,6 +239,39 @@ jobs:
           [ ! -f attempts.log ] || { echo "a failed attempt leaked into the workspace"; exit 1; }
           rm -f flaky.out flaky.err doomed.err once.err box.err once.log run.jsonl ok.txt
 
+      # A transition is only worth anything if it reaches toolchain
+      # *resolution*. `lib` declares no platform, so before this it
+      # resolved `cc` to the host compiler even inside an arm64 build —
+      # and two different cross builds shared that one entry.
+      - name: Smoke - a transition reaches the dependency's toolchain
+        working-directory: examples/transitions
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-transitions-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          export PATH="$PWD/bin:$PATH"
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          # On its own, `lib` is a host build.
+          "$BIN" explain -f with-toolchains.pkl lib | grep -q 'cc  cc (host)' \
+            || { echo "lib did not resolve the host compiler on its own"; exit 1; }
+          # Reached through the arm64 app, it selects the cross compiler
+          # and records the target it was built for.
+          "$BIN" run -f with-toolchains.pkl app --dry-run --explain-cache > box.txt
+          grep -q 'toolchain.cc.selected=aarch64-linux-gnu-gcc' box.txt \
+            || { echo "the transition did not reach toolchain resolution"; cat box.txt; exit 1; }
+          [ "$(grep -c 'target:     linux/arm64' box.txt)" = "2" ] \
+            || { echo "the target platform did not reach both actions"; cat box.txt; exit 1; }
+          # And the key moves with it, which is the whole point: a host
+          # build of `lib` and an arm64 build of `lib` are not the same
+          # entry.
+          alone=$("$BIN" run -f with-toolchains.pkl lib --print-hash | awk '$2 == "lib" { print $1 }')
+          via=$("$BIN" run -f with-toolchains.pkl app --print-hash | awk '$2 == "lib" { print $1 }')
+          [ "$alone" != "$via" ] \
+            || { echo "lib keyed the same for a host build and an arm64 build"; exit 1; }
+          rm -f box.txt
+          rm -rf dist
+
       # One `cc` declaration, two targets, two compilers, two keys.
       # This is what makes a toolchain a resolver rather than a lookup.
       - name: Smoke - the target platform selects the toolchain

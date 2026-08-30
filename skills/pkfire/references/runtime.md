@@ -252,6 +252,45 @@ Resolutions are memoized per process by (name, versionCmd, hashBinary).
 observed `executionPlatform`; null means "builds for the machine it
 runs on".
 
+## Configuration transitions
+
+`targetPlatform` propagates down the graph before a run starts, over
+the same edges the action graph has — declared `deps` and the artifact
+edges derived from what a task reads. A dependency of a cross build is
+part of that cross build: it keys for the target, and its `toolchains`
+resolve for the target.
+
+- Only a **declared** `targetPlatform` transitions anything. A task
+  without one passes no opinion down, so an umbrella over a host task
+  and a cross task does not force the execution platform onto shared
+  dependencies.
+- A task that declares its own is **never transitioned** by a consumer,
+  and re-originates the transition for everything below it. That is the
+  host-tool-inside-a-cross-build case.
+- A task with nothing above it and no declaration builds for the
+  execution platform.
+- A task named on the command line alongside a cross build that needs
+  it is built the way that build needs it: there is one `outputs` path
+  and only one answer that satisfies both. On its own it is a host
+  build, as before.
+
+A task reached in **two different declared configurations in one run**
+is refused before anything runs, naming both platforms and the task
+that originated each. Both would write the same `outputs`; building it
+twice needs per-configuration output roots, which do not exist yet. The
+two ways out are running the targets separately or giving the shared
+task its own `targetPlatform`.
+
+Callers with no run set (`describe`) fall back to the task's own
+declaration. `pkf explain X` resolves over the run set rooted at `X`,
+so it reports the key `pkf run X` looks up; a task that a *different*
+run reaches in another configuration keys differently there, and
+`pkf run <that target> --print-hash` is what shows it.
+
+Not a schema change: `targetPlatform` is unchanged, only where it
+reaches. Action keys move for any task that is a dependency of one
+declaring a `targetPlatform` — they were keyed wrong before.
+
 ## Steps
 
 A task with `steps` is lowered into one action per step plus a
