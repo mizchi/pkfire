@@ -1,4 +1,4 @@
-/// Fixture exercising the 5 rendered-task lint rules, one per task.
+/// Fixture exercising every rendered-task lint rule, plus one cross-task finding.
 amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
 
 // noop-task: neither cmd nor deps.

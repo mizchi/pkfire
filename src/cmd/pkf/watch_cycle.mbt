@@ -874,7 +874,18 @@ fn path_relative_to(root : String, path : String) -> String? {
 }
 
 ///|
-fn task_watch_input_patterns(repo_root : String, task : Task) -> Array[String] {
+/// Re-root one of a task's declared patterns from its `workdir` to the
+/// repo root. `None` when the pattern resolves outside the repo, which
+/// nothing in the graph can match.
+///
+/// Every consumer of a task's patterns — the watcher, the cycle
+/// analyzer, artifact matching — has to agree on this normalization or
+/// two patterns that name the same file compare unequal.
+fn repo_relative_pattern(
+  repo_root : String,
+  task : Task,
+  pattern : String,
+) -> String? {
   let cwd = match @env.current_dir() {
     Some(dir) => dir
     None => repo_root
@@ -884,18 +895,23 @@ fn task_watch_input_patterns(repo_root : String, task : Task) -> Array[String] {
     Some(workdir) => absolute_lexical_path(workdir, absolute_repo)
     None => absolute_repo
   }
+  match path_relative_to(absolute_repo, absolute_lexical_path(pattern, task_root)) {
+    Some(relative) => Some(if relative.length() == 0 { "**" } else { relative })
+    None => None
+  }
+}
+
+///|
+fn task_watch_input_patterns(repo_root : String, task : Task) -> Array[String] {
   let patterns : Array[String] = []
   let seen : Map[String, Bool] = Map([], capacity=task.inputs.length())
   for input in task.inputs {
-    let absolute_input = absolute_lexical_path(input, task_root)
-    match path_relative_to(absolute_repo, absolute_input) {
-      Some(relative) => {
-        let pattern = if relative.length() == 0 { "**" } else { relative }
+    match repo_relative_pattern(repo_root, task, input) {
+      Some(pattern) =>
         if !seen.contains(pattern) {
           seen[pattern] = true
           patterns.push(pattern)
         }
-      }
       None => ()
     }
   }

@@ -39,6 +39,15 @@
     },
     {
       "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
+      "line": 24,
+      "level": "warning",
+      "kind": "undeclared-artifact-dep",
+      "task": "check",
+      "message": "task \"check\" reads \"**/*.txt\", which task \"generate\" declares as output \"out.txt\" (e.g. out.txt), but does not depend on it",
+      "suggestion": "add deps { generate } so `pkf run check` builds it first, or narrow the patterns if the overlap is accidental"
+    },
+    {
+      "path": "/private/var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-lint-rules-1257225885/work/Taskfile.pkl",
       "line": 32,
       "level": "warning",
       "kind": "build-without-outputs",

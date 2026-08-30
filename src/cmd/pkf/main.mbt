@@ -2034,10 +2034,26 @@ fn action_for_task(
   params : Map[String, String],
   positionals : Array[String],
   opts : RunOptions,
+  graph~ : ActionGraph? = None,
+  repo_root~ : String = ".",
 ) -> ActionDescriptor {
   let input_hashes = hash_task_inputs(task_cwd, task.inputs)
+  // Files produced by this action's dependencies are hashed too, so a
+  // producer whose output changed cannot leave this action hit. They
+  // are only knowable from the graph, so a caller without one (a bare
+  // `describe`) keys on declared inputs alone, exactly as before.
+  let consumed = match graph {
+    Some(g) => consumed_artifact_hashes(g, repo_root, task.name, input_hashes)
+    None => []
+  }
   lower_task_to_action(
-    plan, task, input_hashes, params, positionals, opts.profile,
+    plan,
+    task,
+    input_hashes,
+    params,
+    positionals,
+    opts.profile,
+    consumed_artifacts=consumed,
   )
 }
 
@@ -2086,6 +2102,7 @@ async fn[X] run_task(
   params : Map[String, String],
   positionals : Array[String],
   opts~ : RunOptions = RunOptions::default(),
+  graph~ : ActionGraph? = None,
 ) -> Int {
   if task.cmd.length() == 0 {
     // deps-only umbrella task — nothing to spawn.
@@ -2117,7 +2134,7 @@ async fn[X] run_task(
   let mut key : String? = None
   if cacheable || opts.print_hash || opts.explain_cache || opts.dry_run {
     let action = action_for_task(
-      plan, task, task_cwd, params, positionals, opts,
+      plan, task, task_cwd, params, positionals, opts, graph~, repo_root~,
     )
     let k = action_key_of(action)
     if opts.explain_cache {
@@ -3851,6 +3868,33 @@ struct LintFinding {
 /// Build rendered-task lint rules over `plan.tasks`, iterating task
 /// names in sorted order. `line_of` maps a task name to its source line
 /// (from the local decl scan), defaulting to 1. Mirrors Go's lintRenderedTasks.
+/// Whether `producer` is ordered before `consumer` by declared `deps`
+/// alone — directly or through a chain. A derived artifact edge that
+/// duplicates an existing chain is not worth reporting.
+fn declared_deps_reach(plan : Plan, consumer : String, producer : String) -> Bool {
+  let seen : Map[String, Bool] = Map([], capacity=plan.tasks.length())
+  let stack : Array[String] = [consumer]
+  while stack.length() > 0 {
+    let name = stack.pop().unwrap()
+    if seen.contains(name) {
+      continue
+    }
+    seen[name] = true
+    match plan.tasks.get(name) {
+      Some(task) =>
+        for dep in task.deps {
+          if dep == producer {
+            return true
+          }
+          stack.push(dep)
+        }
+      None => ()
+    }
+  }
+  false
+}
+
+///|
 fn lint_rendered_tasks(
   taskfile : String,
   plan : Plan,
@@ -3953,6 +3997,40 @@ fn lint_rendered_tasks(
         "declare the artifact paths in outputs so cache hits can restore them, or set cache = false if the command should always run",
         false,
       )
+    }
+  }
+  // Rule 6: undeclared-artifact-dep. Analysis over the whole Taskfile,
+  // not a run set: a consumer whose inputs reach into another task's
+  // declared outputs depends on that task, and if no `deps` chain says
+  // so, running the consumer alone reads whatever is on disk — the
+  // previous build's output, or nothing at all. The runner orders the
+  // two whenever both are in a run, so this is under-specification
+  // rather than breakage, which is why it is a warning.
+  let artifact_graph = build_action_graph(plan, taskfile_dir(taskfile), names)
+  for name in names {
+    let line = match line_of.get(name) {
+      Some(l) if l != 0 => l
+      _ => 1
+    }
+    for edge in inferred_edges_of(artifact_graph, name) {
+      if declared_deps_reach(plan, name, edge.producer) {
+        continue
+      }
+      match edge.reason {
+        ConsumedArtifact(input, output, witness) =>
+          mk(
+            line,
+            "warning",
+            "undeclared-artifact-dep",
+            name,
+            "task \"\{name}\" reads \"\{input}\", which task \"\{edge.producer}\" " +
+            "declares as output \"\{output}\" (e.g. \{witness}), but does not depend on it",
+            "add deps { \{edge.producer} } so `pkf run \{name}` builds it first, " +
+            "or narrow the patterns if the overlap is accidental",
+            false,
+          )
+        DeclaredDep => ()
+      }
     }
   }
   // Static watch-loop rules. The glob product solver returns a concrete
@@ -4980,6 +5058,12 @@ async fn explain_cmd(
   // printed here is the key the runner will look up. Inputs are hashed
   // for real: `explain` exists to answer "why did this miss?", and an
   // input digest is the usual answer.
+  //
+  // The graph is built for this task alone, which is the same graph a
+  // `pkf run <task>` would build, so the key printed here is the key
+  // that run looks up — artifacts consumed from its dependencies
+  // included.
+  let graph = build_action_graph(plan, repo_root, [task_name])
   let action = action_for_task(
     plan,
     task,
@@ -4987,6 +5071,8 @@ async fn explain_cmd(
     Map([], capacity=0),
     [],
     RunOptions::default(),
+    graph=Some(graph),
+    repo_root~,
   )
   let action_key = action_key_of(action)
   // Reverse deps: O(n*m) scan over all tasks.
@@ -5038,6 +5124,60 @@ async fn explain_cmd(
     }
     println("dependents:  " + joined)
   }
+  // Files hashed into the key that the task never declared: the
+  // outputs of everything it depends on. Listing them individually
+  // would run to thousands of lines for a real build, so this reports
+  // the count and who produced them — enough to explain a key that
+  // moved without any declared input changing.
+  if action.consumed_artifacts.length() > 0 {
+    let producers : Array[String] = []
+    let seen : Map[String, Bool] = Map([], capacity=4)
+    match graph.nodes.get(task_name) {
+      Some(node) =>
+        for edge in node.edges {
+          if !seen.contains(edge.producer) {
+            seen[edge.producer] = true
+            producers.push(edge.producer)
+          }
+        }
+      None => ()
+    }
+    producers.sort_by(fn(a, b) { lex_cmp(a, b) })
+    let joined = {
+      let mut acc = ""
+      for i, p in producers {
+        if i > 0 {
+          acc = acc + ", "
+        }
+        acc = acc + p
+      }
+      acc
+    }
+    println(
+      "artifacts:   \{action.consumed_artifacts.length()} file(s) from " +
+      joined,
+    )
+  }
+  // Derived edges only. Declared deps are on the line above and in the
+  // Taskfile; these are the ones that exist because of what the task
+  // reads, and nothing else would tell the reader they are there.
+  let inferred = inferred_edges_of(graph, task_name)
+  if inferred.length() > 0 {
+    println("")
+    println("artifact deps (\{inferred.length()}):")
+    for edge in inferred {
+      match edge.reason {
+        ConsumedArtifact(input, output, witness) => {
+          println("  " + edge.producer)
+          println(
+            "    reads `" + input + "`, produced by `" + output + "` (e.g. " +
+            witness + ")",
+          )
+        }
+        DeclaredDep => ()
+      }
+    }
+  }
   println("")
   println("cmd:")
   println("  " + task.cmd)
@@ -5082,7 +5222,29 @@ async fn explain_cmd(
     println("  (none)")
   } else {
     for pat in task.inputs {
-      println("  " + pat)
+      // A pattern that reaches into another task's declared outputs is
+      // a generated artifact, not a source file. Saying which task
+      // writes it turns "why does this rebuild?" into a one-line
+      // answer.
+      let producers = match repo_relative_pattern(repo_root, task, pat) {
+        Some(rel) => producers_of_input(graph, task_name, rel)
+        None => []
+      }
+      if producers.length() == 0 {
+        println("  " + pat)
+      } else {
+        let joined = {
+          let mut acc = ""
+          for i, p in producers {
+            if i > 0 {
+              acc = acc + ", "
+            }
+            acc = acc + "`" + p + "`"
+          }
+          acc
+        }
+        println("  " + pat + "  <- produced by " + joined)
+      }
     }
   }
   0
@@ -5387,19 +5549,29 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
           }
         }
       }
-      // Topological union across every requested target, deduplicated
-      // while preserving dependency order.
+      // Analysis: lower the requested targets into an action graph and
+      // execute that, rather than walking `deps` directly. The graph
+      // carries the declared edges plus the ones derived from
+      // artifacts — a task that reads what another task declares as
+      // output runs after it, whether or not `deps` says so.
+      //
+      // `topo_sort_for` still runs first, per target, because it is
+      // what reports an unknown task or a declared-deps cycle with the
+      // message every other command uses.
       let repo_root = taskfile_dir(taskfile)
-      let order : Array[String] = []
-      let queued : Map[String, Bool] = Map([], capacity=8)
       for target in targets {
-        for name in topo_sort_for(target, plan) {
-          if !queued.contains(name) {
-            queued[name] = true
-            order.push(name)
-          }
-        }
+        let _ = topo_sort_for(target, plan)
+
       }
+      let graph = build_action_graph(plan, repo_root, targets)
+      match graph.cycle {
+        Some(message) => {
+          die(message)
+          return 2
+        }
+        None => ()
+      }
+      let order = graph.order
       let started = now_sec()
       let timings : Array[(String, Int64)] = []
       let mut exit_code = 0
@@ -5424,6 +5596,7 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
           resolved_params,
           positionals,
           opts=parsed.opts,
+          graph=Some(graph),
         )
         timings.push((name, now_sec() - task_started))
         if code != 0 {

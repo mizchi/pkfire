@@ -165,6 +165,18 @@ scenarios {
     contract = new { json = true; exit = true; jsonIgnorePaths { "path" } }
   }
   new {
+    id = "artifact-order"
+    fixture = "examples/artifact-order"
+    // Consumer first, on purpose: the only thing that can put `gen`
+    // ahead of `consume` is the edge analysis derives from the fact
+    // that `consume` reads what `gen` declares as output. Lose that
+    // edge and `out.txt` does not exist yet, so the substring below
+    // is `consume read` with nothing after it.
+    argv { "run"; "consume"; "gen" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; mustContain { "consume read artifact" } }
+  }
+  new {
     id = "lint-string-safe"
     fixture = "examples/lint-string-safe"
     argv { "lint"; "--json" }

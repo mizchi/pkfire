@@ -18,14 +18,17 @@ do not shell out to `pkl eval`.
 ## DAG execution
 
 `run <task>` performs a depth-first topological sort over the target's
-transitive `deps`:
+transitive `deps`, then over the artifact edges analysis derives on
+top of them (see "Action graph"):
 
 - dependencies execute before their dependent;
+- a task executes after the tasks producing the files it reads;
 - a shared dependency executes once;
 - cycles fail before execution;
 - unknown tasks fail with nearby-name suggestions;
 - the plan is sequential;
-- the first non-zero command ends the run with that exit code;
+- the first non-zero command ends the run with that exit code, unless
+  `--keep-going`;
 - a task with an empty rendered command succeeds without spawning.
 
 Only the explicit target receives named CLI values and tail arguments.
@@ -65,36 +68,65 @@ event; restart watch after changing task definitions.
 
 ## Action key
 
-For a cacheable task, pkf computes SHA-256 over newline-delimited
-records in this exact order:
+For a cacheable task, pkf lowers the task into an *action descriptor*
+and takes SHA-256 over its canonical serialization. Every field of the
+descriptor is part of the key; there is no separate list of hashed
+values to keep in sync with it.
 
 ```text
-cmd:<cmd>
-shell:<shell>
-shell-flag:<index>:<flag>
-env:<sorted-key>=<value>
-tool:<sorted-key>=<value>
-in:<sorted-relative-path>:<file-sha256>
-param:<sorted-key>=<value>
-arg:<index>:<value>
+mnemonic              always "SpawnAction" today
+executable            the shell
+argv                  shell flags, cmd, forwarded positionals
+env                   defaults.env + task.env + params, merged and sorted
+inheritEnv            the flag itself
+inputs                (path relative to the action root, file sha256)
+consumedArtifacts     (repo-relative path, file sha256) for files
+                      produced by tasks this one depends on
+outputs               declared output patterns, sorted
+workingDirectory      normalized `workdir`
+executionPlatform     <os>/<arch>
+executionProperties   tool versions, param values, --profile
 ```
+
+The serialization is length-prefixed, so text inside a `cmd` cannot
+forge a neighbouring field. `pkf run --explain-cache <task>` prints
+the descriptor; a miss is always one of its lines differing from last
+time.
 
 The key excludes:
 
 - the Taskfile source or canonical Pkl module;
-- dependency action keys;
-- `defaults.env`;
-- ambient environment variables;
-- `workdir`, `inheritEnv`, description, visibility, and service metadata;
-- output paths and prior output contents.
+- dependency action keys (the dependency's *outputs* are hashed
+  instead, as `consumedArtifacts`);
+- ambient environment variables, when `inheritEnv = true` — the flag
+  is hashed, its effect is not;
+- description, visibility, and service metadata.
 
 Consequences:
 
-- Include a dependency's artifact in the consumer's `inputs` when it
-  affects the consumer's output.
+- A dependency's outputs already reach the consumer's key; listing
+  them in `inputs` as well is not required for correctness, only for
+  affected/watch matching.
 - Copy output-affecting host variables into task `env`.
 - Set `cache = false` for nondeterministic or side-effect-only work.
 - Changing only a task description does not invalidate cache.
+
+## Action graph
+
+`pkf run` lowers the requested targets into an action graph before
+executing anything. Nodes are actions (one per task today); edges come
+from declared `deps` and from artifacts — a task whose `inputs` reach
+into another task's declared `outputs` is scheduled after it, and that
+producer's outputs are hashed into its key.
+
+Inference orders and keys the tasks a run already contains; it never
+adds a task to the run. `pkf run consumer` executes only `consumer`
+even when another task produces what it reads. `pkf lint` reports that
+case as `undeclared-artifact-dep`.
+
+A cycle over declared and derived edges is reported before any task
+runs, naming each edge's reason. A task does not consume its own
+outputs, so a formatter that rewrites what it reads is not a cycle.
 
 ## Local cache
 

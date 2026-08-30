@@ -28,7 +28,7 @@
 /// Bump when the canonical serialization changes shape. Every existing
 /// cache entry is invalidated by a bump, which is the intent: a stale
 /// entry written under a different set of hashed fields is not a hit.
-const ACTION_IR_VERSION : String = "pkfire-action-v1"
+const ACTION_IR_VERSION : String = "pkfire-action-v2"
 
 ///|
 /// One spawned process, fully described.
@@ -55,6 +55,17 @@ struct ActionDescriptor {
   inherit_env : Bool
   /// Declared inputs as (path relative to the action root, hex digest).
   inputs : Array[(String, String)]
+  /// Files this action reads that another action in the graph
+  /// produces, as (repo-relative path, hex digest), sorted.
+  ///
+  /// Separate from `inputs` because their provenance differs and so
+  /// does their root: these are results, not sources, and they are
+  /// recorded relative to the repo rather than to this action's
+  /// working directory. Without them a task that declares
+  /// `deps { build }` and no matching `inputs` line has a key blind to
+  /// everything `build` wrote, and stays hit while its input changes
+  /// underneath it.
+  consumed_artifacts : Array[(String, String)]
   /// Declared output patterns, sorted. Two actions that run the same
   /// command but declare different outputs produce different cache
   /// entries and must not share a key.
@@ -116,6 +127,13 @@ fn canonical_form(a : ActionDescriptor) -> Bytes {
     canon_field(buf, "input.path", pair.0)
     canon_field(buf, "input.digest", pair.1)
   }
+  canon_field(
+    buf, "artifacts.len", a.consumed_artifacts.length().to_string(),
+  )
+  for pair in a.consumed_artifacts {
+    canon_field(buf, "artifact.path", pair.0)
+    canon_field(buf, "artifact.digest", pair.1)
+  }
   canon_field(buf, "outputs.len", a.outputs.length().to_string())
   for out in a.outputs {
     canon_field(buf, "output", out)
@@ -166,6 +184,14 @@ fn describe_action(a : ActionDescriptor) -> String {
   sb.write_string("  inputs (\{a.inputs.length()}):\n")
   for pair in a.inputs {
     sb.write_string("    " + pair.1 + "  " + pair.0 + "\n")
+  }
+  if a.consumed_artifacts.length() > 0 {
+    sb.write_string(
+      "  consumed artifacts (\{a.consumed_artifacts.length()}):\n",
+    )
+    for pair in a.consumed_artifacts {
+      sb.write_string("    " + pair.1 + "  " + pair.0 + "\n")
+    }
   }
   // Trailing newline trimmed: callers `println` this.
   let out = sb.to_string()
@@ -232,6 +258,7 @@ fn lower_task_to_action(
   params : Map[String, String],
   positionals : Array[String],
   profile : String,
+  consumed_artifacts~ : Array[(String, String)] = [],
 ) -> ActionDescriptor {
   // argv: exactly what run_task hands to the shell, so the key sees the
   // real command line rather than a reconstruction of it.
@@ -296,6 +323,7 @@ fn lower_task_to_action(
     env,
     inherit_env: task.inherit_env,
     inputs: input_hashes,
+    consumed_artifacts,
     outputs,
     working_directory: normalize_workdir(task.workdir),
     execution_platform: exec_platform(),
