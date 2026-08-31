@@ -748,6 +748,37 @@ scenarios {
     contract = new { exit = true; stdoutNonEmpty = true; mustContain { "cache" } }
   }
   new {
+    // The vacuum reports its limits and what it did before it does it,
+    // so a dry run is a safe way to pin that surface: nothing on disk
+    // changes, and the numbers still have to line up.
+    id = "cache-vacuum-dry-run"
+    fixture = "examples/basic"
+    argv { "cache"; "vacuum"; "--dry-run" }
+    // Fixture-local, so the report is about this run's cache and not
+    // about whatever the machine happens to have in `~/.cache`.
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      fsDelta = true
+      mustContain {
+        "size limit:"
+        "age limit:"
+        "before:"
+        "would remove:"
+      }
+    }
+  }
+  new {
+    id = "cache-vacuum-unknown-flag"
+    fixture = "examples/basic"
+    argv { "cache"; "vacuum"; "--older-than=30d" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContainStderr { "unknown flag `--older-than=30d`" }
+    }
+  }
+  new {
     id = "pkl-cache-warm-structural"
     fixture = "examples/basic"
     argv { "pkl-cache"; "warm" }

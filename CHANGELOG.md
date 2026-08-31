@@ -10,6 +10,51 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Added
+
+- **`pkf cache vacuum` holds the cache under a size ceiling, and runs on
+  its own.** `pkf cache prune` has always existed, but it is a policy
+  someone has to remember to apply — so a cache left alone grows until
+  someone notices the disk. A 1.5 GB cache on a developer machine is what
+  prompted this.
+
+  The vacuum keeps the cache under `PKFIRE_MBT_CACHE_MAX_BYTES` (default
+  2 GB) and drops entries unused longer than `PKFIRE_MBT_CACHE_MAX_AGE`
+  (default 30d). A build runs one afterwards — never before, so the
+  entries the build just wrote are the newest and are never evicted — at
+  most once per `PKFIRE_MBT_CACHE_GC_INTERVAL` (default 24h). Setting any
+  of the three to `0` disables that dimension; setting the interval to
+  `0` leaves `pkf cache vacuum` as the only way to run one.
+
+  The size pass accounts for blob sharing: a doomed entry's blobs are
+  charged as freed only once no surviving entry names them, so three
+  entries sharing one large blob free nothing until the last of them
+  goes, and the pass keeps evicting until the ceiling is actually met.
+
+### Fixed
+
+- **Cache eviction ordered by write time, not by last use.** Nothing
+  recorded that an entry had been served, so `pkf cache prune
+  --older-than=30d` dropped an entry a build had hit that morning as
+  readily as one nothing had touched in a year — the entries a daily
+  build depends on being exactly the ones it would drop. A hit now
+  re-stamps the entry's manifest (at most hourly, so a repeated build
+  costs one stat per entry rather than one write), and both `prune` and
+  `vacuum` order by that.
+
+- **`pkf doctor` reported a split-layout cache as empty.** It counted
+  only the pre-split `cas/` tree, so the warning that exists to catch a
+  cache growing without bound never fired for any cache written since
+  the ActionCache/CAS split. It counts blobs and action-cache entries
+  now, and says so when the cache is over its ceiling.
+
+- **On Windows, `pkf cache prune` swept the entire cache.**
+  `mizchi_pkf_mtime_sec` returned 0 unconditionally there, which made
+  every entry look like it was written at the epoch. It reads `st_mtime`
+  via `_stat` now, as the POSIX branch always did. An entry whose
+  timestamp cannot be read is treated as unknown and never evicted,
+  rather than as one written at the epoch.
+
 ### Fixed
 
 - **Every build invalidated the Pkl evaluation cache.** The cache

@@ -184,6 +184,70 @@ jobs:
           printf 'one\n' > src/changing.txt
           rm -rf dist
 
+      # The cache grows without bound unless something sweeps it, and
+      # the sweep has to keep what is still in use: ordering by write
+      # time evicts exactly the entries a daily build depends on.
+      - name: Smoke - the vacuum evicts by last use and runs on its own
+        working-directory: examples/cas-share
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-vacuum-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          for v in one two three; do
+            printf '%s\n' "$v" > src/changing.txt
+            "$BIN" run build > /dev/null
+          done
+          entries=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | wc -l | tr -d ' ')
+          [ "$entries" = "3" ] || { echo "expected 3 entries, got $entries"; exit 1; }
+
+          # `touch -d` takes a relative time on GNU and an ISO stamp on
+          # BSD, so compute the timestamps and use the portable `-t`.
+          old_stamp=$(date -d '40 days ago' +%Y%m%d%H%M 2>/dev/null \
+            || date -v-40d +%Y%m%d%H%M)
+          stale_stamp=$(date -d '2 days ago' +%Y%m%d%H%M 2>/dev/null \
+            || date -v-2d +%Y%m%d%H%M)
+
+          # Age every entry past the limit, then hit the first one again.
+          # Only that entry should survive an age sweep.
+          find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json \
+            -exec touch -t "$old_stamp" {} +
+          printf 'one\n' > src/changing.txt
+          rm -rf dist
+          "$BIN" run build | grep -q 'cache hit' \
+            || { echo "the aged entry stopped hitting"; exit 1; }
+          "$BIN" cache vacuum --max-age 30d --max-bytes 0 > vacuum.out
+          cat vacuum.out
+          left=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | wc -l | tr -d ' ')
+          [ "$left" = "1" ] || { echo "expected 1 entry after the sweep, got $left"; exit 1; }
+          # And it is the one that was used, not the one written last.
+          rm -rf dist
+          "$BIN" run build | grep -q 'cache hit' \
+            || { echo "the vacuum evicted the entry that was still in use"; exit 1; }
+
+          # The automatic sweep: due once the stamp is stale, and not
+          # again on the build after it.
+          touch -t "$stale_stamp" "$PKFIRE_MBT_CACHE_DIR/gc-stamp"
+          printf 'four\n' > src/changing.txt
+          PKFIRE_MBT_CACHE_MAX_BYTES=1 "$BIN" run build 2>&1 \
+            | grep -q 'cache vacuum removed' \
+            || { echo "the automatic vacuum did not run when it was due"; exit 1; }
+          printf 'five\n' > src/changing.txt
+          if PKFIRE_MBT_CACHE_MAX_BYTES=1 "$BIN" run build 2>&1 \
+            | grep -q 'cache vacuum removed'; then
+            echo "the automatic vacuum ran twice inside its interval"; exit 1
+          fi
+          # Turning it off keeps it off even with the stamp stale.
+          touch -t "$stale_stamp" "$PKFIRE_MBT_CACHE_DIR/gc-stamp"
+          printf 'six\n' > src/changing.txt
+          if PKFIRE_MBT_CACHE_GC_INTERVAL=0 PKFIRE_MBT_CACHE_MAX_BYTES=1 \
+            "$BIN" run build 2>&1 | grep -q 'cache vacuum removed'; then
+            echo "PKFIRE_MBT_CACHE_GC_INTERVAL=0 did not disable the sweep"; exit 1
+          fi
+          printf 'one\n' > src/changing.txt
+          rm -rf dist vacuum.out
+
       # Three things at once: a flaky task recovers, a broken one still
       # fails with its own exit code, and a task that did not ask for a
       # retry gets exactly one attempt. The last is the guard against a

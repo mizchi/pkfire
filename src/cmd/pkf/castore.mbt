@@ -469,6 +469,12 @@ async fn ac_restore(
     }
     None => ()
   }
+  // The manifest's mtime is what eviction orders by, so a hit has to
+  // say so; otherwise the entries a build depends on every day are
+  // exactly the ones that look stale enough to drop. Recorded only
+  // after the entry is found well-formed: a rejected entry is a miss,
+  // and looking it up must not keep it alive forever.
+  touch_mtime_if_stale(join_path(ac_dir(key), AC_RESULT_FILE))
   match logs {
     Some(sink) => {
       if result.stdout_digest.length() > 0 {
@@ -776,4 +782,196 @@ fn sweep_blobs(
     }
   })
   (count, bytes)
+}
+
+// ---------------------------------------------------------------------------
+// Vacuum
+//
+// `prune` answers "drop everything older than X". That is a policy a
+// person has to remember to apply, and nobody does — a cache left alone
+// grows until someone notices the disk. The vacuum is the same sweep
+// made automatic: a size ceiling the cache is held under, plus an age
+// beyond which an unused entry is not worth keeping.
+//
+// Eviction orders by last use, not by when the entry was written (see
+// `touch_mtime_if_stale`). Ordering by write time evicts exactly the
+// entries a daily build depends on, which turns a cleanup into a
+// slowdown.
+// ---------------------------------------------------------------------------
+
+///|
+/// One cache entry as the vacuum sees it.
+struct VacuumEntry {
+  key : String
+  dir : String
+  /// Last use, seconds since epoch. Zero means the stat failed, which
+  /// is not evidence of age — such an entry is never evicted.
+  mtime : Int64
+  /// Bytes this entry owns outright. Non-zero only for pre-split
+  /// entries: a split entry's bytes live in blobs it shares.
+  own_bytes : Int64
+}
+
+///|
+/// What one vacuum pass did.
+struct VacuumReport {
+  entries_removed : Int
+  blobs_removed : Int
+  bytes_freed : Int64
+  bytes_before : Int64
+}
+
+///|
+/// Every entry in both layouts, with its last use.
+fn vacuum_entries(cas_dir : String) -> Array[VacuumEntry] {
+  let entries : Array[VacuumEntry] = []
+  walk_ac_entries(fn(key, dir, mtime) {
+    entries.push({ key, dir, mtime, own_bytes: 0L })
+  })
+  walk_cas_entries(cas_dir, fn(key, dir, size, mtime) {
+    entries.push({ key, dir, mtime, own_bytes: size })
+  })
+  entries
+}
+
+///|
+/// Hold the cache under `max_bytes`, dropping entries unused for
+/// `max_age_sec` first. Either limit is disabled by passing zero.
+///
+/// Removing an entry frees only the blobs no surviving entry names, so
+/// the size pass simulates the sweep: every digest carries a count of
+/// the entries naming it, and a doomed entry's digests free their bytes
+/// only when that count reaches zero. What gets reported is what the
+/// sweep afterwards actually deleted.
+fn cache_vacuum(
+  cas_dir : String,
+  max_bytes~ : Int64,
+  max_age_sec~ : Int64,
+  dry_run~ : Bool = false,
+) -> VacuumReport {
+  let blob_sizes : Map[String, Int64] = Map([], capacity=64)
+  let mut blob_bytes = 0L
+  walk_blobs(fn(digest, _, size) {
+    blob_sizes[digest] = size
+    blob_bytes = blob_bytes + size
+  })
+  let entries = vacuum_entries(cas_dir)
+  let mut legacy_bytes = 0L
+  for entry in entries {
+    legacy_bytes = legacy_bytes + entry.own_bytes
+  }
+  let bytes_before = blob_bytes + legacy_bytes
+
+  // digest -> how many entries still name it, and each entry's digests,
+  // so the simulation below does not re-read every manifest per step.
+  let refs : Map[String, Int] = Map([], capacity=64)
+  // Keyed by directory, not by action key: a key that exists in both
+  // layouts is two entries, and charging one key's digests twice would
+  // free blobs the survivors still name.
+  let entry_digests : Map[String, Array[String]] = Map([], capacity=64)
+  for entry in entries {
+    if entry.own_bytes > 0L {
+      continue
+    }
+    let digests : Array[String] = []
+    match ac_load(entry.key) {
+      Some(result) => {
+        let note = fn(digest : String) {
+          if digest.length() > 0 {
+            digests.push(digest)
+            refs[digest] = refs.get(digest).unwrap_or(0) + 1
+          }
+        }
+        for out in result.outputs {
+          note(out.digest)
+        }
+        note(result.stdout_digest)
+        note(result.stderr_digest)
+      }
+      // An unreadable manifest names nothing this pass can see. It is
+      // already a miss at lookup, so it holds no references from both
+      // directions.
+      None => ()
+    }
+    entry_digests[entry.dir] = digests
+  }
+  // `doomed` is keyed by action key because that is what the blob sweep
+  // takes; `evicted` is keyed by directory so an entry is charged once.
+  let doomed : Map[String, Bool] = Map([], capacity=16)
+  let evicted : Map[String, Bool] = Map([], capacity=16)
+  let mut projected = bytes_before
+  // Charge an entry's bytes against the projection: what it owns
+  // outright, plus every blob it was the last entry to name.
+  let evict = fn(entry : VacuumEntry) {
+    if evicted.contains(entry.dir) {
+      return
+    }
+    evicted[entry.dir] = true
+    doomed[entry.key] = true
+    projected = projected - entry.own_bytes
+    for digest in entry_digests.get(entry.dir).unwrap_or([]) {
+      let left = refs.get(digest).unwrap_or(0) - 1
+      refs[digest] = left
+      if left <= 0 {
+        projected = projected - blob_sizes.get(digest).unwrap_or(0L)
+      }
+    }
+  }
+  let now = now_sec()
+  if max_age_sec > 0L {
+    for entry in entries {
+      if entry.mtime == 0L {
+        continue
+      }
+      if now - entry.mtime >= max_age_sec {
+        evict(entry)
+      }
+    }
+  }
+  if max_bytes > 0L && projected > max_bytes {
+    // Oldest use first. An entry whose stat failed sorts last and is
+    // skipped below: nothing is dropped on the strength of a timestamp
+    // that could not be read.
+    let survivors : Array[VacuumEntry] = []
+    for entry in entries {
+      if !evicted.contains(entry.dir) && entry.mtime > 0L {
+        survivors.push(entry)
+      }
+    }
+    survivors.sort_by(fn(a, b) { a.mtime.compare(b.mtime) })
+    for entry in survivors {
+      if projected <= max_bytes {
+        break
+      }
+      evict(entry)
+    }
+  }
+  if !dry_run {
+    for entry in entries {
+      if evicted.contains(entry.dir) {
+        rm_rf(entry.dir)
+      }
+    }
+  }
+  // Entries own no bytes once split, so the honest freed number is what
+  // the blob sweep deleted plus what the pre-split entries carried. A
+  // dry run still has everything on disk, so it asks what would be
+  // unreferenced once `doomed` were gone.
+  let (blobs_removed, swept_bytes) = if dry_run {
+    sweep_blobs(skip=doomed, dry_run=true)
+  } else {
+    sweep_blobs()
+  }
+  let mut own_freed = 0L
+  for entry in entries {
+    if evicted.contains(entry.dir) {
+      own_freed = own_freed + entry.own_bytes
+    }
+  }
+  {
+    entries_removed: evicted.length(),
+    blobs_removed,
+    bytes_freed: swept_bytes + own_freed,
+    bytes_before,
+  }
 }

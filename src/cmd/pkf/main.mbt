@@ -997,6 +997,50 @@ extern "C" fn file_mtime_sec(path : Bytes) -> Int64 = "mizchi_pkf_mtime_sec"
 extern "C" fn file_size_bytes(path : Bytes) -> Int64 = "mizchi_pkf_file_size"
 
 ///|
+/// FFI: utimensat(2) → set a file's mtime, or stamp it with the current
+/// time when `secs` is negative. 0 on success, -1 on failure.
+#borrow(path)
+extern "C" fn set_mtime_sec_ffi(path : Bytes, secs : Int64) -> Int = "mizchi_pkf_set_mtime_sec"
+
+///|
+/// Set `path`'s mtime. Failure is silent: this is bookkeeping for
+/// eviction order, and a cache that cannot record a hit should still
+/// serve it.
+fn set_mtime_sec(path : String, secs : Int64) -> Unit {
+  let _ = set_mtime_sec_ffi(@utf8.encode(path + "\u{00}"), secs)
+
+}
+
+///|
+/// Stamp `path`'s mtime with the current time.
+fn touch_mtime(path : String) -> Unit {
+  set_mtime_sec(path, -1L)
+}
+
+///|
+/// How stale a cache entry's recorded last use may be before a hit
+/// rewrites it. Eviction reasons in days, so recording to the hour is
+/// precise enough, and a repeated build then costs one stat per entry
+/// instead of one write.
+const CACHE_TOUCH_GRANULARITY_SEC : Int64 = 3600L
+
+///|
+/// Record that a cache entry was just served, so eviction can order by
+/// last use rather than by when the entry happened to be written.
+fn touch_mtime_if_stale(path : String) -> Unit {
+  let mtime = file_mtime_sec(@utf8.encode(path + "\u{00}"))
+  // A stat that failed reports 0, which is not evidence the entry is
+  // old — leave the timestamp alone rather than inventing one.
+  if mtime == 0L {
+    return
+  }
+  if now_sec() - mtime < CACHE_TOUCH_GRANULARITY_SEC {
+    return
+  }
+  touch_mtime(path)
+}
+
+///|
 /// FFI: time(2) → current wall-clock time as seconds since epoch.
 extern "C" fn now_sec() -> Int64 = "mizchi_pkf_now_sec"
 
@@ -1491,6 +1535,106 @@ fn cache_warn_entries() -> Int {
 }
 
 ///|
+/// Size the cache is held under by `pkf cache vacuum` and the automatic
+/// sweep. Zero disables the size limit.
+///
+/// The default is deliberately well above `cache_warn_bytes`: the warning
+/// is advice, this is the ceiling, and a ceiling that fires before the
+/// advice does would make the advice unreachable.
+fn cache_max_bytes() -> Int64 {
+  match @env.get_env_var("PKFIRE_MBT_CACHE_MAX_BYTES") {
+    Some(v) => parse_int64_or(v, CACHE_DEFAULT_MAX_BYTES)
+    None => CACHE_DEFAULT_MAX_BYTES
+  }
+}
+
+///|
+const CACHE_DEFAULT_MAX_BYTES : Int64 = 2000L * 1000L * 1000L
+
+///|
+/// How long an entry may go unused before the vacuum drops it, whether
+/// or not the cache is over its size limit. Zero disables the age limit.
+fn cache_max_age_sec() -> Int64 {
+  match @env.get_env_var("PKFIRE_MBT_CACHE_MAX_AGE") {
+    Some(v) => if v == "0" { 0L } else { parse_duration_to_sec(v) }
+    None => 30L * 86400L
+  }
+}
+
+///|
+/// How long the automatic sweep waits between passes. Zero turns the
+/// automatic sweep off, leaving `pkf cache vacuum` as the only way to
+/// run one.
+///
+/// Walking the whole cache costs one stat per entry and one manifest
+/// read per split entry, which is not something to pay on every build.
+/// Once a day keeps the ceiling honest without showing up in build
+/// times.
+fn cache_gc_interval_sec() -> Int64 {
+  match @env.get_env_var("PKFIRE_MBT_CACHE_GC_INTERVAL") {
+    Some(v) => if v == "0" { 0L } else { parse_duration_to_sec(v) }
+    None => 86400L
+  }
+}
+
+///|
+/// Where the automatic sweep records that it ran. The file's mtime is
+/// the timestamp; its contents are never read.
+fn cache_gc_stamp_path() -> String {
+  join_path(cache_root(), "gc-stamp")
+}
+
+///|
+/// Run the automatic sweep if it is due, and say nothing when it is not.
+///
+/// Called after a build rather than before: the entries the build just
+/// wrote are the newest, so sweeping afterwards never evicts what the
+/// next run is about to ask for. Failure is silent — a cache that
+/// cannot be tidied should not fail a build that already succeeded.
+fn maybe_vacuum_cache() -> Unit {
+  let interval = cache_gc_interval_sec()
+  if interval <= 0L {
+    return
+  }
+  let max_bytes = cache_max_bytes()
+  let max_age_sec = cache_max_age_sec()
+  if max_bytes <= 0L && max_age_sec <= 0L {
+    return
+  }
+  let root = cache_root()
+  if !@fs.path_exists(root) {
+    return
+  }
+  let stamp = cache_gc_stamp_path()
+  let last = file_mtime_sec(@utf8.encode(stamp + "\u{00}"))
+  if last > 0L && now_sec() - last < interval {
+    return
+  }
+  // Stamp first. A sweep that dies partway through should not be
+  // retried by every subsequent build in the same day; the next one is
+  // a day away and picks up whatever this pass left.
+  @fs.write_bytes_to_file(stamp, @utf8.encode(now_sec().to_string())) catch {
+    _ => return
+  }
+  let report = cache_vacuum(
+    join_path(root, "cas"),
+    max_bytes~,
+    max_age_sec~,
+    dry_run=false,
+  )
+  // Silence when there was nothing to do. A line every day saying the
+  // cache is fine is a line people learn to skip past.
+  if report.entries_removed == 0 && report.blobs_removed == 0 {
+    return
+  }
+  eprintln(
+    "pkf: cache vacuum removed \{report.entries_removed} entries and " +
+    "\{report.blobs_removed} blob(s) (\{human_bytes(report.bytes_freed)} freed, " +
+    "was \{human_bytes(report.bytes_before)})",
+  )
+}
+
+///|
 /// Parse a non-negative decimal integer, falling back to `default` on
 /// anything else. A malformed threshold should not break `doctor`.
 fn parse_int64_or(text : String, default : Int64) -> Int64 {
@@ -1716,9 +1860,12 @@ async fn cache_restore(
     Some(ok) => return ok
     None => ()
   }
-  let gz = @fs.read_file_to_bytes(legacy_entry_path(key)) catch {
-    _ => return false
-  }
+  let legacy = legacy_entry_path(key)
+  let gz = @fs.read_file_to_bytes(legacy) catch { _ => return false }
+  // A pre-split entry records its last use the same way a split one
+  // does, so eviction does not favour whichever layout an entry
+  // happens to be in.
+  touch_mtime_if_stale(legacy)
   let tar = @zlib.gzip_decompress(gz) catch { _ => return false }
   let entries = match tar_iter(tar) {
     TarOk(es) => es
@@ -5865,15 +6012,28 @@ async fn doctor_cmd(
   } else {
     let mut entries = 0
     let mut total : Int64 = 0L
+    // Both layouts. Counting only the pre-split `cas/` tree reported a
+    // split-layout cache as empty no matter how large it grew, so the
+    // warning that exists to catch exactly that never fired.
+    walk_blobs(fn(_, _, size) { total = total + size })
+    walk_ac_entries(fn(_, _, _) { entries = entries + 1 })
     walk_cas_entries(join_path(cache_dir, "cas"), fn(_, _, size, _) {
       entries = entries + 1
       total = total + size
     })
     let summary = "\{cache_dir} (\{human_bytes(total)} across \{entries} entries)"
-    if total >= cache_warn_bytes() || entries >= cache_warn_entries() {
+    let ceiling = cache_max_bytes()
+    if ceiling > 0L && total > ceiling {
       (
         "WARN",
-        summary + "\n" + "consider `pkf cache prune --older-than=30d` or `pkf cache clear`",
+        summary +
+        "\n" +
+        "over the \{human_bytes(ceiling)} ceiling — run `pkf cache vacuum` (or wait for the daily sweep)",
+      )
+    } else if total >= cache_warn_bytes() || entries >= cache_warn_entries() {
+      (
+        "WARN",
+        summary + "\n" + "consider `pkf cache vacuum` or `pkf cache clear`",
       )
     } else {
       ("OK", summary)
@@ -6644,6 +6804,10 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       if parsed.execution_log != "" {
         write_execution_log(parsed.execution_log, result, graph)
       }
+      // After the build, not before: the entries this run just wrote are
+      // the newest, so a sweep here never evicts what the next run is
+      // about to ask for.
+      maybe_vacuum_cache()
       result.exit_code
     }
     "describe" => {
@@ -7760,6 +7924,63 @@ fn cache_prune_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
 }
 
 ///|
+fn cache_vacuum_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
+  let mut max_bytes = cache_max_bytes()
+  let mut max_age_sec = cache_max_age_sec()
+  let mut dry_run = false
+  let mut i = 0
+  while i < args.length() {
+    let arg = args[i]
+    if arg == "--dry-run" {
+      dry_run = true
+    } else if arg.has_prefix("--max-bytes=") {
+      max_bytes = parse_int64_or(arg[12:arg.length()].to_owned(), max_bytes)
+    } else if arg == "--max-bytes" && i + 1 < args.length() {
+      max_bytes = parse_int64_or(args[i + 1], max_bytes)
+      i = i + 1
+    } else if arg.has_prefix("--max-age=") {
+      let v = arg[10:arg.length()].to_owned()
+      max_age_sec = if v == "0" { 0L } else { parse_duration_to_sec(v) }
+    } else if arg == "--max-age" && i + 1 < args.length() {
+      let v = args[i + 1]
+      max_age_sec = if v == "0" { 0L } else { parse_duration_to_sec(v) }
+      i = i + 1
+    } else {
+      die("pkf cache vacuum: unknown flag `\{arg}`")
+      return 2
+    }
+    i = i + 1
+  }
+  let report = cache_vacuum(cas_dir, max_bytes~, max_age_sec~, dry_run~)
+  let ceiling = if max_bytes > 0L { human_bytes(max_bytes) } else { "none" }
+  let age = if max_age_sec > 0L {
+    format_duration_sec(max_age_sec)
+  } else {
+    "none"
+  }
+  println("cache dir:  \{cache_root()}")
+  println("size limit: \{ceiling}")
+  println("age limit:  \{age}")
+  println("before:     \{human_bytes(report.bytes_before)}")
+  let verb = if dry_run { "would remove" } else { "removed" }
+  println(
+    "\{verb}:    \{report.entries_removed} entries, \{report.blobs_removed} blob(s) (\{human_bytes(report.bytes_freed)})",
+  )
+  if !dry_run {
+    println("after:      \{human_bytes(report.bytes_before - report.bytes_freed)}")
+    // Stamp the automatic sweep too: a vacuum the user just ran by hand
+    // is one the next build does not need to repeat.
+    @fs.write_bytes_to_file(
+      cache_gc_stamp_path(),
+      @utf8.encode(now_sec().to_string()),
+    ) catch {
+      _ => ()
+    }
+  }
+  0
+}
+
+///|
 fn cache_rm_cmd(cas_dir : String, keys : Array[String]) -> Int {
   if keys.length() == 0 {
     eprintln("pkf: usage: pkf cache rm <action-key-hex>")
@@ -7895,6 +8116,29 @@ fn cache_cmd(args : Array[String]) -> Int {
     )
     println("  rm <action-key-hex>...                remove specific entries")
     println("  clear [--yes]                         remove every entry")
+    println(
+      "  vacuum [--max-bytes N] [--max-age DUR] [--dry-run]",
+    )
+    println(
+      "                                        hold the cache under a size ceiling, dropping",
+    )
+    println(
+      "                                        least-recently-used entries (runs automatically",
+    )
+    println(
+      "                                        once a day after a build)",
+    )
+    println("")
+    println("environment:")
+    println(
+      "  PKFIRE_MBT_CACHE_MAX_BYTES     size ceiling for vacuum (default 2000000000, 0 disables)",
+    )
+    println(
+      "  PKFIRE_MBT_CACHE_MAX_AGE       drop entries unused this long (default 30d, 0 disables)",
+    )
+    println(
+      "  PKFIRE_MBT_CACHE_GC_INTERVAL   how often the automatic vacuum runs (default 24h, 0 disables)",
+    )
     return 0
   }
   let sub = args[0]
@@ -7910,8 +8154,11 @@ fn cache_cmd(args : Array[String]) -> Int {
       cache_rm_cmd(cas_dir, keys)
     }
     "clear" => cache_clear_cmd(cas_dir, args[1:])
+    "vacuum" => cache_vacuum_cmd(cas_dir, args[1:])
     other => {
-      die("unknown cache subcommand \"\{other}\" (want stats|prune|rm|clear)")
+      die(
+        "unknown cache subcommand \"\{other}\" (want stats|prune|rm|clear|vacuum)",
+      )
       1
     }
   }

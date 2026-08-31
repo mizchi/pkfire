@@ -372,3 +372,188 @@ test "a truncated archive is a miss, not a partial ingest" {
   })
   rm_rf(dir)
 }
+
+///|
+/// Age an entry's manifest by rewriting its mtime, so an eviction test
+/// does not have to wait for a real day to pass.
+fn age_entry(key : String, seconds_ago : Int64) -> Unit {
+  let path = join_path(ac_dir(key), AC_RESULT_FILE)
+  set_mtime_sec(path, now_sec() - seconds_ago)
+}
+
+///|
+test "the vacuum keeps a blob a surviving entry still names" {
+  // The case the size accounting exists for: several entries share one
+  // large blob. Dropping some of them frees only their unique bytes,
+  // and the survivor has to keep restoring.
+  let dir = scratch("vacuum-shared")
+  with_cache_root(dir, () => {
+    let shared = @utf8.encode("s".repeat(4096))
+    let shared_d = blob_put(shared).unwrap()
+    let keys = ["a1", "b2", "c3"]
+    for i, prefix in keys {
+      let key = prefix + "0".repeat(62)
+      let unique = @utf8.encode("u\{i}")
+      let unique_d = blob_put(unique).unwrap()
+      assert_true(
+        ac_store(
+          key,
+          result_of([
+            file_out("shared.bin", shared_d, shared.length().to_int64()),
+            file_out("uniq.txt", unique_d, unique.length().to_int64()),
+          ]),
+        ),
+      )
+    }
+    // Two of the three go stale; the third stays in use.
+    age_entry("a1" + "0".repeat(62), 40L * 86400L)
+    age_entry("b2" + "0".repeat(62), 40L * 86400L)
+    let report = cache_vacuum(
+      join_path(dir, "cas"),
+      max_bytes=0L,
+      max_age_sec=30L * 86400L,
+    )
+    assert_eq(report.entries_removed, 2)
+    // Only the two unique blobs go: the shared one is still named.
+    assert_eq(report.blobs_removed, 2)
+    assert_true(blob_exists(shared_d))
+    assert_true(ac_load("c3" + "0".repeat(62)) is Some(_))
+    assert_true(ac_load("a1" + "0".repeat(62)) is None)
+  })
+  rm_rf(dir)
+}
+
+///|
+test "the vacuum evicts least-recently-used first, down to the ceiling" {
+  let dir = scratch("vacuum-lru")
+  with_cache_root(dir, () => {
+    // Three entries, each owning its own 4 KiB blob, aged oldest to
+    // newest. A ceiling that fits one leaves the newest.
+    let keys = ["a1", "b2", "c3"]
+    for i, prefix in keys {
+      let key = prefix + "0".repeat(62)
+      let content = @utf8.encode(i.to_string().repeat(4096))
+      let digest = blob_put(content).unwrap()
+      assert_true(
+        ac_store(
+          key,
+          result_of([
+            file_out("out.bin", digest, content.length().to_int64()),
+          ]),
+        ),
+      )
+    }
+    age_entry("a1" + "0".repeat(62), 3L * 86400L)
+    age_entry("b2" + "0".repeat(62), 2L * 86400L)
+    age_entry("c3" + "0".repeat(62), 1L * 86400L)
+    let report = cache_vacuum(
+      join_path(dir, "cas"),
+      max_bytes=5000L,
+      max_age_sec=0L,
+    )
+    assert_eq(report.entries_removed, 2)
+    // The one still in use is the one that survives.
+    assert_true(ac_load("c3" + "0".repeat(62)) is Some(_))
+    assert_true(ac_load("a1" + "0".repeat(62)) is None)
+    assert_true(ac_load("b2" + "0".repeat(62)) is None)
+  })
+  rm_rf(dir)
+}
+
+///|
+test "a dry-run vacuum reports what a real one would remove, and removes nothing" {
+  let dir = scratch("vacuum-dry")
+  with_cache_root(dir, () => {
+    let content = @utf8.encode("x".repeat(2048))
+    let digest = blob_put(content).unwrap()
+    let key = "d4" + "0".repeat(62)
+    assert_true(
+      ac_store(
+        key,
+        result_of([file_out("out.bin", digest, content.length().to_int64())]),
+      ),
+    )
+    age_entry(key, 40L * 86400L)
+    let dry = cache_vacuum(
+      join_path(dir, "cas"),
+      max_bytes=0L,
+      max_age_sec=30L * 86400L,
+      dry_run=true,
+    )
+    assert_eq(dry.entries_removed, 1)
+    assert_eq(dry.blobs_removed, 1)
+    assert_true(ac_load(key) is Some(_))
+    assert_true(blob_exists(digest))
+    let real = cache_vacuum(
+      join_path(dir, "cas"),
+      max_bytes=0L,
+      max_age_sec=30L * 86400L,
+    )
+    assert_eq(real.entries_removed, dry.entries_removed)
+    assert_eq(real.blobs_removed, dry.blobs_removed)
+    assert_eq(real.bytes_freed, dry.bytes_freed)
+    assert_true(ac_load(key) is None)
+  })
+  rm_rf(dir)
+}
+
+///|
+test "an entry whose timestamp cannot be read is never evicted on age" {
+  // `file_mtime_sec` reports 0 for a stat that failed, and on Windows it
+  // used to report 0 for everything. Treating that as "written at the
+  // epoch" is what made a prune sweep the whole cache; it has to read as
+  // "unknown" instead.
+  let dir = scratch("vacuum-unknown-mtime")
+  with_cache_root(dir, () => {
+    let content = @utf8.encode("y".repeat(2048))
+    let digest = blob_put(content).unwrap()
+    let key = "e5" + "0".repeat(62)
+    assert_true(
+      ac_store(
+        key,
+        result_of([file_out("out.bin", digest, content.length().to_int64())]),
+      ),
+    )
+    set_mtime_sec(join_path(ac_dir(key), AC_RESULT_FILE), 0L)
+    let report = cache_vacuum(
+      join_path(dir, "cas"),
+      max_bytes=1L,
+      max_age_sec=1L,
+    )
+    assert_eq(report.entries_removed, 0)
+    assert_true(ac_load(key) is Some(_))
+  })
+  rm_rf(dir)
+}
+
+///|
+test "a hit records the entry as used" {
+  let dir = scratch("vacuum-touch")
+  with_cache_root(dir, () => {
+    let content = @utf8.encode("z".repeat(1024))
+    let digest = blob_put(content).unwrap()
+    let key = "f6" + "0".repeat(62)
+    assert_true(
+      ac_store(
+        key,
+        result_of([file_out("out.bin", digest, content.length().to_int64())]),
+      ),
+    )
+    let manifest = join_path(ac_dir(key), AC_RESULT_FILE)
+    age_entry(key, 40L * 86400L)
+    let before = file_mtime_sec(@utf8.encode(manifest + "\u{00}"))
+    let root = join_path(dir, "restore")
+    mkdir_p(root)
+    assert_eq(ac_restore(key, root), Some(true))
+    let after = file_mtime_sec(@utf8.encode(manifest + "\u{00}"))
+    assert_true(after > before)
+    // And the entry now outlives an age sweep it would have failed.
+    let report = cache_vacuum(
+      join_path(dir, "cas"),
+      max_bytes=0L,
+      max_age_sec=30L * 86400L,
+    )
+    assert_eq(report.entries_removed, 0)
+  })
+  rm_rf(dir)
+}
