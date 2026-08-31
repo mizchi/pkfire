@@ -496,6 +496,32 @@ pre-split archives; the Pkl evaluation cache under the same root is left
 alone. `pkf cache stats` reports entries, blob count, bytes on disk, and
 how much the sharing saved.
 
+### Vacuum
+
+`prune` is a policy someone has to remember to apply, so a cache left
+alone grows until someone notices the disk. `pkf cache vacuum` is the
+same sweep made automatic: it holds the cache under
+`PKFIRE_MBT_CACHE_MAX_BYTES` (default 2 GB) and drops entries unused
+longer than `PKFIRE_MBT_CACHE_MAX_AGE` (default 30d). A build runs one
+afterwards — never before, so the entries the build just wrote are the
+newest and are never evicted — at most once per
+`PKFIRE_MBT_CACHE_GC_INTERVAL` (default 24h). Setting any of the three
+to `0` disables that dimension; setting the interval to `0` disables the
+automatic sweep entirely.
+
+Eviction orders by **last use**, not by when the entry was written. A
+cache hit re-stamps the entry's manifest, at most once an hour, so the
+entries a daily build depends on are the last to be dropped; ordering by
+write time would evict exactly those and turn a cleanup into a slowdown.
+An entry whose timestamp cannot be read (a failed `stat`) is treated as
+unknown and never evicted, rather than as one written at the epoch.
+
+The size pass accounts for sharing. Every digest carries a count of the
+entries naming it, and a doomed entry's blobs are only charged as freed
+once that count reaches zero — so three entries sharing one large blob
+free nothing until the last of them goes, and the pass keeps evicting
+until the ceiling is actually met.
+
 Capture uses pipes, so a cached task's command does not see a terminal
 and colour-on-tty detection turns colour off. Uncacheable tasks
 (`cache = false`, empty `inputs`, `--no-cache`) are unaffected, and

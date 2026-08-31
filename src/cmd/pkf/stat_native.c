@@ -4,6 +4,9 @@
 
 #ifdef _WIN32
 
+#include <sys/stat.h>
+#include <sys/utime.h>
+
 /*
  * Windows' _stat doesn't preserve unix mode bits in any meaningful way
  * (the file system has no unix ownership/perm bits). Return -1 so the
@@ -15,16 +18,44 @@ MOONBIT_FFI_EXPORT int32_t mizchi_pkf_stat_mode(char *path) {
   return -1;
 }
 
-/* mtime: not available on Windows in a simple way — return 0. */
+/*
+ * mtime as seconds since epoch, 0 on failure.
+ *
+ * This used to return 0 unconditionally, which made every cache entry
+ * look like it was written at the epoch — `pkf cache prune` then swept
+ * the whole cache on every invocation. `_stat` carries st_mtime the same
+ * way the POSIX one does, and it is already used by lstat_kind below.
+ */
 MOONBIT_FFI_EXPORT int64_t mizchi_pkf_mtime_sec(char *path) {
-  (void)path;
-  return 0;
+  struct _stat st;
+  if (_stat(path, &st) != 0) {
+    return 0;
+  }
+  return (int64_t)st.st_mtime;
 }
 
-/* file size: not available on Windows in a simple way — return -1. */
+/* file size in bytes, -1 on failure. */
 MOONBIT_FFI_EXPORT int64_t mizchi_pkf_file_size(char *path) {
-  (void)path;
-  return -1;
+  struct _stat st;
+  if (_stat(path, &st) != 0) {
+    return -1;
+  }
+  return (int64_t)st.st_size;
+}
+
+/*
+ * Set a file's mtime, or stamp it with the current time when `secs` is
+ * negative: 0 on success, -1 on failure.
+ */
+MOONBIT_FFI_EXPORT int32_t mizchi_pkf_set_mtime_sec(char *path,
+                                                    int64_t secs) {
+  if (secs < 0) {
+    return _utime(path, NULL) == 0 ? 0 : -1;
+  }
+  struct _utimbuf tb;
+  tb.actime = (time_t)secs;
+  tb.modtime = (time_t)secs;
+  return _utime(path, &tb) == 0 ? 0 : -1;
 }
 
 /* current time in seconds since epoch. */
@@ -52,6 +83,7 @@ MOONBIT_FFI_EXPORT moonbit_bytes_t mizchi_pkf_readlink(char *path) {
 
 #else
 
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -98,6 +130,28 @@ MOONBIT_FFI_EXPORT int64_t mizchi_pkf_file_size(char *path) {
  */
 MOONBIT_FFI_EXPORT int64_t mizchi_pkf_now_sec(void) {
   return (int64_t)time(NULL);
+}
+
+/*
+ * Set a file's mtime, or stamp it with the current time when `secs` is
+ * negative: 0 on success, -1 on failure.
+ *
+ * Stamping is how a cache hit records that the entry is still in use, so
+ * eviction can order by last use rather than by when the entry happened
+ * to be written. Setting an explicit time is how a test ages an entry
+ * without waiting a day for one.
+ */
+MOONBIT_FFI_EXPORT int32_t mizchi_pkf_set_mtime_sec(char *path,
+                                                    int64_t secs) {
+  if (secs < 0) {
+    return utimensat(AT_FDCWD, path, NULL, 0) == 0 ? 0 : -1;
+  }
+  struct timespec times[2];
+  times[0].tv_sec = 0;
+  times[0].tv_nsec = UTIME_OMIT;
+  times[1].tv_sec = (time_t)secs;
+  times[1].tv_nsec = 0;
+  return utimensat(AT_FDCWD, path, times, 0) == 0 ? 0 : -1;
 }
 
 /*

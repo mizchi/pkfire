@@ -98,6 +98,17 @@ reported findings and changed nothing.
 | `cache prune` | `--older-than DUR`, `--dry-run` | Remove old entries, then sweep blobs no remaining entry names; duration accepts `d`, `h`, `m`, or `s`. |
 | `cache rm` | one or more full keys or unique prefixes | Remove matching entries, then sweep unreferenced blobs. |
 | `cache clear` | `--yes` | Remove every entry, blob, and pre-split archive; leaves the Pkl evaluation cache. Refuses without confirmation. |
+| `cache vacuum` | `--max-bytes N`, `--max-age DUR`, `--dry-run` | Hold the cache under a size ceiling, dropping least-recently-used entries; also drops entries unused past `--max-age`. Runs automatically once a day after a build. |
+
+`vacuum` orders by last use, not by when an entry was written: a cache hit
+re-stamps the entry (at most hourly), so the entries a daily build depends on
+are the last to go. `prune` remains the "drop everything older than X" hammer.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `PKFIRE_MBT_CACHE_MAX_BYTES` | `2000000000` | Size ceiling the vacuum holds the cache under. `0` disables the size limit. |
+| `PKFIRE_MBT_CACHE_MAX_AGE` | `30d` | Drop entries unused this long, whether or not the cache is over its ceiling. `0` disables the age limit. |
+| `PKFIRE_MBT_CACHE_GC_INTERVAL` | `24h` | How often the automatic vacuum runs after a build. `0` disables it, leaving `pkf cache vacuum` as the only way to run one. |
 
 ## Recommended inspection sequence
 
