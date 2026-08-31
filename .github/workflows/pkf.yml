@@ -239,6 +239,46 @@ jobs:
           [ ! -f attempts.log ] || { echo "a failed attempt leaked into the workspace"; exit 1; }
           rm -f flaky.out flaky.err doomed.err once.err box.err once.log run.jsonl ok.txt
 
+      # The Pkl evaluation cache has to survive a build. It records a
+      # digest of each module directory so a new module matching a glob
+      # import invalidates it — but the entry point's directory is the
+      # project root, and with the documented
+      # `PKFIRE_MBT_CACHE_DIR=.pkf-cache` layout a build writes into it.
+      # Hashing the whole listing meant every build invalidated the plan
+      # it had just cached. Asserted on the entry's bytes rather than on
+      # a stopwatch, so the check does not depend on machine speed.
+      - name: Smoke - a build does not invalidate the evaluation cache
+        working-directory: examples/cache-hit
+        env:
+          PKFIRE_MBT_CACHE_DIR: .pkf-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf .pkf-cache runs.log out.log said.txt
+          # Warm the evaluation cache.
+          "$BIN" list > /dev/null
+          "$BIN" list > /dev/null
+          entry=$(find .pkf-cache/eval -type f | head -1)
+          [ -n "$entry" ] || { echo "the evaluation cache stored nothing"; exit 1; }
+          before=$(sha256sum "$entry" | awk '{print $1}')
+
+          # A build writes action-cache entries and blobs into the same
+          # directory tree the Taskfile lives in.
+          "$BIN" run count > /dev/null
+          "$BIN" list > /dev/null
+          after=$(sha256sum "$entry" | awk '{print $1}')
+          [ "$before" = "$after" ] \
+            || { echo "a build invalidated the evaluation cache"; exit 1; }
+
+          # And the digest still does its job: a new module invalidates.
+          echo 'x = 1' > extra.pkl
+          "$BIN" list > /dev/null
+          rewritten=$(sha256sum "$entry" | awk '{print $1}')
+          [ "$before" != "$rewritten" ] \
+            || { echo "a new module did not invalidate the evaluation cache"; exit 1; }
+          rm -f extra.pkl runs.log out.log said.txt
+          rm -rf .pkf-cache
+
       # The remote cache against a backend that reads bodies by
       # `Content-Length` only, the way an object store does. Uploads
       # used to go out chunked with no length, so such a backend stored

@@ -12,6 +12,24 @@ Action version all move together — there is one tag per release
 
 ### Fixed
 
+- **Every build invalidated the Pkl evaluation cache.** The cache
+  records a digest of each module directory so a new module matching a
+  glob import (`import* "rules/*.pkl"`) invalidates the entry. It hashed
+  the *whole* listing — and the entry point's directory is the project
+  root, where the documented `PKFIRE_MBT_CACHE_DIR=.pkf-cache` layout
+  puts the cache. So writing an action-cache entry changed the listing
+  and the next run re-evaluated the Taskfile from scratch, every time.
+
+  Measured on a Taskfile with a 14-deep `deps` chain: a warm `pkf list`
+  took 5 ms, and 2917 ms immediately after a build. Now 5 ms in both
+  cases.
+
+  Only names a module glob could match (`*.pkl`) are hashed now, so a
+  new module still invalidates while a build output, a cache directory
+  or an editor's swap file cannot.
+
+### Fixed
+
 - **`pkf run lint:workflows` (actionlint) joins the preflight gate.** A
   workflow can be perfectly valid YAML and still be rejected by GitHub
   Actions, in which case it runs *no jobs at all* — the failure looks

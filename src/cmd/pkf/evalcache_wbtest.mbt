@@ -136,3 +136,30 @@ test "records are sorted, so one evaluation yields one entry" {
   assert_eq(deps.modules[0].0, "moon.mod")
   assert_eq(deps.modules[1].0, "moon.work")
 }
+
+///|
+test "only module names reach the directory digest" {
+  // The digest exists so a *new module* matching a glob import
+  // invalidates the entry. Hashing everything else in the directory
+  // made the entry depend on things no evaluation can read — and the
+  // entry point's directory is the project root, so with the
+  // documented `PKFIRE_MBT_CACHE_DIR=.pkf-cache` layout every build
+  // wrote into it and invalidated the plan it had just cached.
+  let dir = scratch("dir-digest")
+  @fs.write_string_to_file(dir + "/a.pkl", "x = 1") catch { _ => () }
+  let before = dir_listing_digest(dir)
+
+  // Things a module glob can never match: the cache directory a build
+  // writes, a build output, an editor's leftovers.
+  mkdir_p(dir + "/.pkf-cache")
+  @fs.write_string_to_file(dir + "/.pkf-cache/entry", "blob") catch { _ => () }
+  @fs.write_string_to_file(dir + "/out.txt", "built") catch { _ => () }
+  @fs.write_string_to_file(dir + "/a.pkl.swp", "vim") catch { _ => () }
+  assert_eq(dir_listing_digest(dir), before)
+
+  // A new module still moves it, which is the whole point.
+  @fs.write_string_to_file(dir + "/b.pkl", "y = 2") catch { _ => () }
+  assert_true(dir_listing_digest(dir) != before)
+  rm_rf(dir)
+}
+
