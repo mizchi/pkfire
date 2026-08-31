@@ -52,6 +52,8 @@ complete -c pkf -f -n '__fish_seen_subcommand_from run' -l explain-cache -d 'exp
 complete -c pkf -f -n '__fish_seen_subcommand_from run' -l no-cache -d 'disable cache for this run'
 complete -c pkf -f -n '__fish_seen_subcommand_from run' -l refresh -d 'skip lookup but store outputs'
 complete -c pkf -f -n '__fish_seen_subcommand_from run' -l timing -d 'print task durations'
+complete -c pkf -f -n '__fish_seen_subcommand_from run' -l execution-log -d 'write a JSON Lines record of the run'
+complete -c pkf -f -n '__fish_seen_subcommand_from run' -l config -d 'build setting KEY=VALUE for this run'
 complete -c pkf -f -n '__fish_seen_subcommand_from run' -l quiet -d 'suppress per-task log lines'
 complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
 complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'

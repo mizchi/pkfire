@@ -1,3 +1,3 @@
-build
-hello  — smoke task
-test 
+hello  smoke task
+build  
+test   
