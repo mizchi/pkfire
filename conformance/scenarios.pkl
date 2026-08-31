@@ -748,6 +748,61 @@ scenarios {
     contract = new { exit = true; stdoutNonEmpty = true; mustContain { "cache" } }
   }
   new {
+    // `config` propagates down the graph: `lib` declares nothing and is
+    // built with what `app` asked for, while `codegen` pins `mode` and
+    // still inherits `lto`. Asserted from inside the fixture so the check
+    // sees the settings the way a command does — through the environment.
+    id = "config-propagates-and-merges-per-key"
+    fixture = "examples/config-flags"
+    argv { "run"; "app"; "check-config" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "settings reached the commands" }
+    }
+  }
+  new {
+    // Two tasks want the same undeclared `lib` in different modes. Both
+    // would write the same `outputs`, so pkfire refuses rather than
+    // silently handing one consumer the other's artifact.
+    id = "config-conflict-is-refused"
+    fixture = "examples/config-flags"
+    argv { "run"; "app"; "debug-app" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContainStderr {
+        "Differs on: mode: debug vs release"
+        "cannot build it twice yet"
+      }
+    }
+  }
+  new {
+    // A retry recovers a flaky task. The counter the command appends to
+    // is undeclared, so the cache neither stores nor restores it and the
+    // second attempt genuinely sees what the first left.
+    id = "retries-recover-a-flaky-task"
+    fixture = "examples/retries"
+    argv { "run"; "flaky" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContainStderr { "retrying (attempt 2 of 3)" }
+    }
+  }
+  new {
+    // The half that matters: a retry must not turn a task that is simply
+    // broken into a green one.
+    id = "retries-do-not-rescue-a-broken-task"
+    fixture = "examples/retries"
+    argv { "run"; "doomed" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContainStderr { "failed" }
+    }
+  }
+  new {
     // The vacuum reports its limits and what it did before it does it,
     // so a dry run is a safe way to pin that surface: nothing on disk
     // changes, and the numbers still have to line up.

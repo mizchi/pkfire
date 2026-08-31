@@ -5,4 +5,4 @@ pkf: - after (skipped: `bad` failed)
 other ran
 pkf: $ other
 pkf: - all (skipped: `bad` failed)
-pkf: 4 task(s) · 2 ran · 2 skipped · 5ms
+pkf: 4 task(s) · 2 ran · 2 skipped · 6ms

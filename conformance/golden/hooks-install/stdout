@@ -1,2 +1,2 @@
-installed /tmp/pkfconf-hooks-install-.13145.5f4dfb9b/work/.git/hooks/pre-commit → pkf run pre-commit
-installed /tmp/pkfconf-hooks-install-.13145.5f4dfb9b/work/.git/hooks/pre-push → pkf run pre-push
+installed /tmp/pkfconf-hooks-install-.16423.d0db8c7d/stage/examples/hooks-tf/.git/hooks/pre-commit → pkf run pre-commit
+installed /tmp/pkfconf-hooks-install-.16423.d0db8c7d/stage/examples/hooks-tf/.git/hooks/pre-push → pkf run pre-push

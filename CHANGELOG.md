@@ -12,6 +12,19 @@ Action version all move together — there is one tag per release
 
 ### Added
 
+- **Conformance coverage for `retries` and `config`.** Both features
+  shipped without a scenario, because their fixtures amend the in-repo
+  schema by a relative path — an unreleased field has no package URI to
+  point at — and the harness copied only the fixture directory, leaving
+  that path outside the temp tree. The harness now mirrors the repo
+  layout when it stages: the fixture keeps its path relative to the repo
+  root and `pkl/` is staged alongside, so a relative `amends` resolves.
+  Four scenarios follow: settings propagating down the graph and merging
+  per key, a configuration conflict being refused, a retry recovering a
+  flaky task, and a retry not rescuing a broken one.
+
+### Added
+
 - **`pkf cache vacuum` holds the cache under a size ceiling, and runs on
   its own.** `pkf cache prune` has always existed, but it is a policy
   someone has to remember to apply — so a cache left alone grows until

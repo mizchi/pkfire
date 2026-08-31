@@ -1,0 +1,5 @@
+pkf: task `lib` is needed for two build configurations in one run: the execution platform (linux/amd64) with lto=on, mode=debug (via `debug-app`) and the execution platform (linux/amd64) with lto=on, mode=release (via `app`).
+  Differs on: mode: debug vs release
+  Both would write the same `outputs`, so pkfire cannot build it twice yet.
+  Either run them separately, or give `lib` its own `config`
+  so it pins one configuration regardless of who depends on it.

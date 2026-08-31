@@ -1,0 +1,6 @@
+pkf: $ lib
+pkf: $ codegen
+pkf: $ app
+settings reached the commands
+pkf: $ check-config
+pkf: 4 task(s) · 4 ran · 20ms

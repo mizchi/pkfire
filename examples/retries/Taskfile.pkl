@@ -8,8 +8,9 @@
 /// is simply broken into a green one.
 /// Relative `amends`: `retries` is unreleased, so this fixture cannot
 /// point at a published package yet. It moves to `pkfire@<next>` once
-/// that ships, and the conformance harness — which copies fixtures to a
-/// temp tree and so cannot follow a relative path — picks it up then.
+/// that ships. The conformance harness stages the in-repo schema
+/// alongside the fixture, so the relative path resolves there too and
+/// this fixture is covered without waiting for the release.
 amends "../../pkl/Taskfile.pkl"
 
 local flaky = new Task {

@@ -1,7 +1,7 @@
 task:        build
 action key:  19c4a7f500c59854f468379fc769053d1ea0826e7c50c8ae3b37f9a305f4ed5c
 cache:       true
-workdir:     /tmp/pkfconf-explain-structural-.13145.5f5cad00/work  (Taskfile dir)
+workdir:     /tmp/pkfconf-explain-structural-.16423.2a8980d9/stage/examples/basic  (Taskfile dir)
 deps:        (none)
 dependents:  test
 

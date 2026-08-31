@@ -26,6 +26,15 @@ Re-captures `golden/<id>/*` from the current `PKF_MBT_BIN` output.
 Review the diff before committing — the goldens lock pkf's contracted
 behavior, so a regeneration is an intentional contract change.
 
+## Fixture staging
+
+A scenario runs in a temp tree that mirrors the repo layout: the fixture
+is copied to `<tmp>/stage/<fixture path>` and the in-repo `pkl/` schema
+to `<tmp>/stage/pkl`. A fixture for an unreleased schema field has no
+package URI to amend yet, so it amends `../../pkl/Taskfile.pkl`; staging
+the schema at the same relative position is what lets such a fixture have
+a scenario at all instead of waiting for the next release.
+
 ## What a golden is actually compared against
 
 `compare` in `src/differ.mbt` applies only what the scenario's contract
