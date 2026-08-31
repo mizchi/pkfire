@@ -35,24 +35,42 @@ fn eval_cache_dir() -> String {
 struct EvalDeps {
   /// (module path, content digest) for every module the loader read.
   modules : Array[(String, String)]
-  /// (directory, digest of its sorted entry names) for every directory
-  /// containing one of those modules.
+  /// (directory, digest of its sorted `.pkl` entry names) for every
+  /// directory containing one of those modules.
   ///
   /// A glob import — `import* "rules/*.pkl"` — expands at load time, so
   /// a *new* file matching it belongs in the graph even though no
   /// existing module's bytes changed. Nothing in `modules` would notice
   /// that. Hashing the listing does, and it does so without the entry
   /// having to know which imports were globs.
+  ///
+  /// Only module names are hashed. See `dir_listing_digest`.
   dirs : Array[(String, String)]
 }
 
 ///|
-/// Digest of a directory's sorted entry names.
+/// Digest of a directory's sorted *module* entry names.
+///
+/// Only names that could be reached by a module glob are hashed —
+/// `import* "rules/*.pkl"` can only ever match a `.pkl` file. Hashing
+/// the whole listing instead makes the entry depend on everything that
+/// shares a directory with a module, and the entry point's directory is
+/// the project root: `.pkf-cache` appearing there, a `dist/` being
+/// written, an editor's swap file, all invalidated an evaluation that
+/// none of them could affect. With `PKFIRE_MBT_CACHE_DIR=.pkf-cache` —
+/// the documented layout — that meant *every build* invalidated the
+/// evaluation cache, so a warm plan cost the full evaluation again.
+///
+/// Narrowing to `.pkl` keeps what the digest is for: a new module
+/// matching a glob still changes the listing, with nothing else able
+/// to.
 fn dir_listing_digest(dir : String) -> String {
   let names = @fs.read_dir(dir) catch { _ => [] }
   let sorted : Array[String] = []
   for name in names {
-    sorted.push(name)
+    if name.has_suffix(".pkl") {
+      sorted.push(name)
+    }
   }
   sorted.sort()
   let buf = StringBuilder()
