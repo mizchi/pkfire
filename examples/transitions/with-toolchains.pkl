@@ -1,0 +1,35 @@
+/// The toolchain half of the transitions fixture, run by CI with
+/// `bin/` in front on `PATH`.
+///
+/// A transition is only useful if it reaches toolchain *resolution*:
+/// `lib` declares no platform, so before transitions it resolved `cc`
+/// to the host compiler even inside an arm64 build. `pkf explain` shows
+/// which executable each task selected.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.16.0#/Taskfile.pkl"
+
+local ccTool = new Toolchain {
+  name = "cc"
+  forTarget {
+    ["linux/arm64"] = "aarch64-linux-gnu-gcc"
+  }
+}
+
+local lib = new Task {
+  name = "lib"
+  cmd = "mkdir -p dist && cc > dist/lib.txt"
+  inputs { "src/**" }
+  outputs { "dist/lib.txt" }
+  toolchains { ccTool }
+}
+
+local app = new Task {
+  name = "app"
+  cmd = "mkdir -p dist && cat dist/lib.txt > dist/app.txt"
+  inputs { "dist/lib.txt" }
+  outputs { "dist/app.txt" }
+  targetPlatform = "linux/arm64"
+  toolchains { ccTool }
+  deps { lib }
+}
+
+tasks { lib; app }

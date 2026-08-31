@@ -1,0 +1,4 @@
+pkf: task `lib` is needed for two target platforms in one run: linux/riscv64 (via `other-app`) and linux/arm64 (via `app`).
+  Both would write the same `outputs`, so pkfire cannot build it twice yet.
+  Either run them separately, or give `lib` its own `targetPlatform`
+  so it pins one configuration regardless of who depends on it.

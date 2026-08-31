@@ -130,6 +130,252 @@ jobs:
             || { echo "no platform diagnostic"; cat elsewhere.err; exit 1; }
           rm -f hang.out hang.err elsewhere.err
 
+      # The split store, end to end: sharing across two keys, a
+      # pre-split entry still hitting after an upgrade, and a prune that
+      # keeps a blob another entry still names.
+      - name: Smoke - the cache shares blobs and still reads pre-split entries
+        working-directory: examples/cas-share
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-cas-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          "$BIN" run build > /dev/null
+          printf 'two\n' > src/changing.txt
+          "$BIN" run build > /dev/null
+          # Two keys, four declared outputs, three distinct contents.
+          entries=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | wc -l | tr -d ' ')
+          blobs=$(find "$PKFIRE_MBT_CACHE_DIR/blobs" -type f | wc -l | tr -d ' ')
+          [ "$entries" = "2" ] || { echo "expected 2 entries, got $entries"; exit 1; }
+          [ "$blobs" = "3" ] || { echo "expected 3 blobs, got $blobs"; exit 1; }
+          "$BIN" cache stats | grep -q '^shared:' \
+            || { echo "stats did not report sharing"; "$BIN" cache stats; exit 1; }
+
+          # Dropping one of the two entries frees only what it alone
+          # named; the blob the other still names has to survive.
+          key=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | head -1 \
+            | sed "s|$PKFIRE_MBT_CACHE_DIR/ac/||; s|/result.json||; s|/||")
+          "$BIN" cache rm "$key" | grep -q 'blob' \
+            || { echo "rm did not report a sweep"; exit 1; }
+          left=$(find "$PKFIRE_MBT_CACHE_DIR/blobs" -type f | wc -l | tr -d ' ')
+          [ "$left" = "2" ] || { echo "expected 2 blobs after rm, got $left"; exit 1; }
+          # The surviving entry must still restore.
+          rm -rf dist
+          "$BIN" run build | grep -q 'cache hit' \
+            || { echo "the surviving entry stopped hitting after the sweep"; exit 1; }
+          cmp -s dist/changing.txt src/changing.txt \
+            || { echo "the restored output is wrong"; exit 1; }
+
+          # A pre-split entry, planted by hand under the key the runner
+          # asks for, with contents no run could produce.
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist stage
+          key=$("$BIN" run build --print-hash | awk '$2 == "build" { print $1 }')
+          mkdir -p stage/dist
+          echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/changing.txt
+          echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/stable.txt
+          mkdir -p "$PKFIRE_MBT_CACHE_DIR/cas/${key:0:2}/${key:2}"
+          tar czf "$PKFIRE_MBT_CACHE_DIR/cas/${key:0:2}/${key:2}/entry.tar.gz" -C stage dist
+          rm -rf stage
+          "$BIN" run build | grep -q 'cache hit' \
+            || { echo "a pre-split entry stopped hitting"; exit 1; }
+          grep -q FROM-A-PRE-SPLIT-ENTRY dist/changing.txt \
+            || { echo "the pre-split entry did not restore its contents"; exit 1; }
+          printf 'one\n' > src/changing.txt
+          rm -rf dist
+
+      # Three things at once: a flaky task recovers, a broken one still
+      # fails with its own exit code, and a task that did not ask for a
+      # retry gets exactly one attempt. The last is the guard against a
+      # loop that retries everything.
+      - name: Smoke - retries recover a flaky task without hiding a broken one
+        working-directory: examples/retries
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-retries-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" attempts.log ok.txt once.log run.jsonl
+          "$BIN" run flaky --execution-log=run.jsonl > flaky.out 2> flaky.err
+          [ -f ok.txt ] || { echo "the retry did not produce the output"; exit 1; }
+          grep -q 'retrying (attempt 2 of 3)' flaky.err \
+            || { echo "the retry was not reported"; cat flaky.err; exit 1; }
+          # Two spawns, not one: the counter the command appends to is
+          # undeclared, so the cache neither stores nor restores it and
+          # its size is a direct count of attempts.
+          n=$(wc -c < attempts.log | tr -d ' ')
+          [ "$n" = "2" ] || { echo "expected 2 attempts, counter says $n"; exit 1; }
+          grep -q '"attempts":2' run.jsonl || { echo "no attempt count in the log"; exit 1; }
+          grep -q '"retried":1' run.jsonl || { echo "summary did not count the retry"; exit 1; }
+
+          # A task that fails every time still fails, with the command's
+          # own exit code rather than something the retry invented.
+          set +e
+          "$BIN" run doomed 2> doomed.err
+          code=$?
+          set -e
+          [ "$code" = "9" ] || { echo "expected 9, got $code"; cat doomed.err; exit 1; }
+          [ "$(grep -c 'retrying' doomed.err)" = "1" ] \
+            || { echo "wrong number of retries"; cat doomed.err; exit 1; }
+
+          # No `retries`, so exactly one attempt.
+          set +e
+          "$BIN" run once 2> once.err
+          set -e
+          o=$(wc -c < once.log | tr -d ' ')
+          [ "$o" = "1" ] || { echo "a task without retries was retried $o times"; exit 1; }
+          grep -q 'retrying' once.err && { echo "a task without retries reported one"; exit 1; }
+
+          # Under --sandbox every attempt gets a fresh tree, so the
+          # counter never survives and nothing leaks into the workspace.
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" attempts.log ok.txt
+          set +e
+          "$BIN" run flaky --sandbox 2> box.err
+          code=$?
+          set -e
+          [ "$code" = "7" ] || { echo "expected 7 from a sandboxed flaky task, got $code"; exit 1; }
+          [ "$(grep -c 'retrying' box.err)" = "2" ] \
+            || { echo "expected 2 retries under sandbox"; cat box.err; exit 1; }
+          [ ! -f attempts.log ] || { echo "a failed attempt leaked into the workspace"; exit 1; }
+          rm -f flaky.out flaky.err doomed.err once.err box.err once.log run.jsonl ok.txt
+
+      # The remote cache against a backend that reads bodies by
+      # `Content-Length` only, the way an object store does. Uploads
+      # used to go out chunked with no length, so such a backend stored
+      # a zero-byte object, returned 200, and every later fetch got a
+      # well-formed empty archive — a remote cache that was silently
+      # doing nothing.
+      - name: Smoke - the remote cache uploads a body a strict backend can read
+        working-directory: examples/cache-hit
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-remote-cache
+          PKFIRE_MBT_REMOTE_CACHE: http://127.0.0.1:8760
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          STORE="${{ runner.temp }}/pkfire-remote-store"
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" "$STORE" runs.log out.log said.txt
+          python3 ../remote-cache-worker/testing/strict_cache_server.py "$STORE" 8760 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -s -o /dev/null --noproxy '*' http://127.0.0.1:8760/probe && break
+            sleep 1
+          done
+
+          # Run once: stores locally, then uploads. The server rejects a
+          # chunked body with 411, so a regression shows up as an empty
+          # store rather than as a passing test.
+          "$BIN" run say > /dev/null
+          sleep 1
+          uploaded=$(find "$STORE" -name entry.tar.gz | head -1)
+          [ -n "$uploaded" ] || { echo "nothing reached the remote"; exit 1; }
+          size=$(wc -c < "$uploaded" | tr -d ' ')
+          [ "$size" -gt 0 ] || { echo "the remote stored a zero-byte entry"; exit 1; }
+          tar tzf "$uploaded" > /dev/null || { echo "the uploaded archive is not readable"; exit 1; }
+
+          # And it comes back: a cold local cache must be a remote hit
+          # that replays the transcript, not a re-run.
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" said.txt
+          "$BIN" run say > fetched.out
+          grep -q 'remote cache hit' fetched.out \
+            || { echo "the entry did not come back from the remote"; cat fetched.out; exit 1; }
+          grep -q 'built the thing' fetched.out \
+            || { echo "the replayed transcript is missing"; cat fetched.out; exit 1; }
+          rm -f fetched.out runs.log out.log said.txt
+
+      # Build settings that transition. `config` is unreleased, so the
+      # fixture amends the schema by relative path and the conformance
+      # harness — which copies fixtures to a temp tree — cannot reach
+      # it; this covers it until the schema ships.
+      - name: Smoke - build settings reach dependencies and pinning holds
+        working-directory: examples/config-flags
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-config-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          "$BIN" run app > /dev/null
+          # `lib` declares nothing and is built in `app`'s configuration;
+          # `codegen` pins `mode` and still inherits `lto`.
+          grep -q 'lib mode=release lto=on' dist/lib.txt \
+            || { echo "lib did not inherit the settings"; cat dist/lib.txt; exit 1; }
+          grep -q 'gen mode=debug lto=on' dist/gen.txt \
+            || { echo "codegen did not pin mode while inheriting lto"; cat dist/gen.txt; exit 1; }
+
+          # The setting is in the key, so the same task in two
+          # configurations is two entries.
+          plain=$("$BIN" run lib --print-hash | awk '$2 == "lib" { print $1 }')
+          via=$("$BIN" run app --print-hash | awk '$2 == "lib" { print $1 }')
+          [ "$plain" != "$via" ] \
+            || { echo "lib keyed the same with and without the settings"; exit 1; }
+
+          # `--config` seeds the run; a task that pinned the setting
+          # still wins, or pinning would mean nothing from the outside.
+          rm -rf dist
+          "$BIN" run lib codegen --config mode=release > /dev/null
+          grep -q 'lib mode=release' dist/lib.txt \
+            || { echo "--config did not reach lib"; cat dist/lib.txt; exit 1; }
+          grep -q 'gen mode=debug' dist/gen.txt \
+            || { echo "--config overrode a pinned task"; cat dist/gen.txt; exit 1; }
+
+          # A bare key is refused rather than read as an empty value.
+          set +e
+          "$BIN" run lib --config release 2> bad.err
+          code=$?
+          set -e
+          [ "$code" != "0" ] || { echo "a bare --config was accepted"; exit 1; }
+          grep -q 'KEY=VALUE' bad.err \
+            || { echo "no diagnostic for a bare --config"; cat bad.err; exit 1; }
+
+          # Two configurations of one task in one run: refused, named for
+          # what actually differs.
+          set +e
+          "$BIN" run app debug-app 2> conflict.err
+          code=$?
+          set -e
+          [ "$code" != "0" ] || { echo "two configurations were not refused"; exit 1; }
+          grep -q 'two build configurations' conflict.err \
+            || { echo "wrong diagnostic"; cat conflict.err; exit 1; }
+          grep -q 'Differs on: mode: debug vs release' conflict.err \
+            || { echo "the differing setting was not named"; cat conflict.err; exit 1; }
+          rm -f bad.err conflict.err
+          rm -rf dist
+
+      # A transition is only worth anything if it reaches toolchain
+      # *resolution*. `lib` declares no platform, so before this it
+      # resolved `cc` to the host compiler even inside an arm64 build —
+      # and two different cross builds shared that one entry.
+      - name: Smoke - a transition reaches the dependency's toolchain
+        working-directory: examples/transitions
+        env:
+          PKFIRE_MBT_CACHE_DIR: ${{ runner.temp }}/pkfire-transitions-cache
+        run: |
+          set -eu
+          BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
+          export PATH="$PWD/bin:$PATH"
+          rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
+          # On its own, `lib` is a host build.
+          "$BIN" explain -f with-toolchains.pkl lib | grep -q 'cc  cc (host)' \
+            || { echo "lib did not resolve the host compiler on its own"; exit 1; }
+          # Reached through the arm64 app, it selects the cross compiler
+          # and records the target it was built for.
+          "$BIN" run -f with-toolchains.pkl app --dry-run --explain-cache > box.txt
+          grep -q 'toolchain.cc.selected=aarch64-linux-gnu-gcc' box.txt \
+            || { echo "the transition did not reach toolchain resolution"; cat box.txt; exit 1; }
+          [ "$(grep -c 'target:     linux/arm64' box.txt)" = "2" ] \
+            || { echo "the target platform did not reach both actions"; cat box.txt; exit 1; }
+          # And the key moves with it, which is the whole point: a host
+          # build of `lib` and an arm64 build of `lib` are not the same
+          # entry.
+          alone=$("$BIN" run -f with-toolchains.pkl lib --print-hash | awk '$2 == "lib" { print $1 }')
+          via=$("$BIN" run -f with-toolchains.pkl app --print-hash | awk '$2 == "lib" { print $1 }')
+          [ "$alone" != "$via" ] \
+            || { echo "lib keyed the same for a host build and an arm64 build"; exit 1; }
+          rm -f box.txt
+          rm -rf dist
+
       # One `cc` declaration, two targets, two compilers, two keys.
       # This is what makes a toolchain a resolver rather than a lookup.
       - name: Smoke - the target platform selects the toolchain

@@ -252,8 +252,12 @@ fn shell_quote(value : String) -> String {
 async fn toolchain_key_fields(
   task : Task,
   shell : String,
+  // The configuration this task is *reached* in, which is not always
+  // the one it declares: a dependency of a cross build inherits the
+  // target it is being built for. See `configuration.mbt`.
+  config~ : Configuration? = None,
 ) -> Array[(String, String)] {
-  let target = task.target_platform.unwrap_or("")
+  let target = config_or_declared(config, task).target_platform
   let out : Array[(String, String)] = []
   for tc in task.toolchains {
     let resolved = resolve_toolchain(tc, shell, target)

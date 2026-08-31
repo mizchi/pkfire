@@ -48,11 +48,16 @@ struct Task {
   toolchains : Array[Toolchain]
   /// Seconds after which the command is killed. 0 = no limit.
   timeout_seconds : Int
+  /// Extra attempts after a failure. 0 = one attempt, no retry.
+  retries : Int
   /// Execution platforms this task can run on. Empty = any.
   requires_platform : Array[String]
   /// What this task builds *for*, when that differs from where it
   /// runs. None means the execution platform.
   target_platform : String?
+  /// Build settings this task and everything under it are built with.
+  /// Propagates down the graph like `target_platform`, merged per key.
+  config : Map[String, String]
   /// Commands this task runs, each cached on its own. Empty for an
   /// ordinary single-command task. See `steps.mbt`.
   steps : Array[Step]
@@ -307,6 +312,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       Some(Number(n, ..)) => n.to_int()
       _ => 0
     }
+    let retries = match task_entries.get("retries") {
+      Some(Number(n, ..)) => n.to_int()
+      _ => 0
+    }
     let requires_platform = match task_entries.get("requiresPlatform") {
       Some(v) => parse_string_array(v)
       None => []
@@ -314,6 +323,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
     let target_platform = match task_entries.get("targetPlatform") {
       Some(String(v)) => Some(v)
       _ => None
+    }
+    let config = match task_entries.get("config") {
+      Some(v) => parse_string_map(v)
+      None => Map([], capacity=0)
     }
     let steps : Array[Step] = []
     match task_entries.get("steps") {
@@ -463,8 +476,10 @@ fn parse_plan(raw : String, taskfile~ : String = "") -> Plan {
       hermetic,
       toolchains,
       timeout_seconds,
+      retries,
       requires_platform,
       target_platform,
+      config,
       steps,
       provides,
       params,
@@ -1527,7 +1542,16 @@ const CACHE_MAX_EXPANDED_BYTES : Int64 = 4294967296L
 /// decode still happens in `cache_restore`, and a failure there falls
 /// back to executing the action.
 async fn cache_hit(key : String) -> Bool {
-  let path = join_path(entry_dir(key), CACHE_ENTRY_FILE)
+  // A manifest is written last, after every blob it names, so its
+  // presence already means the entry is complete. No decode here for
+  // the same reason the archive probe below reads three bytes: this
+  // runs once per task per run.
+  if @fs.path_exists(join_path(ac_dir(key), AC_RESULT_FILE)) {
+    return true
+  }
+  // Pre-split entry. Still a hit, so upgrading does not cold-start a
+  // warm cache.
+  let path = legacy_entry_path(key)
   if !@fs.path_exists(path) {
     return false
   }
@@ -1622,28 +1646,25 @@ fn is_safe_symlink_target(link_rel : String, target : String) -> Bool {
 }
 
 ///|
-/// Pack `outputs` (paths relative to `root`) into the entry for `key`.
+/// Store `outputs` (paths relative to `root`) as the entry for `key`.
 ///
-/// Returns false when nothing could be written. Publication is atomic:
-/// the archive is built in a temp file inside the entry directory and
-/// renamed into place, so a concurrent `cache_hit` either sees no blob
-/// or sees a complete one. Two processes storing the same key race on
-/// the rename, and the loser's identical bytes are simply replaced —
-/// the content is a pure function of the key, so either winner is
-/// correct.
+/// Returns false when nothing could be written. Publication is atomic
+/// at both levels: every blob and the manifest go through a temp file
+/// and a rename, and the manifest is written last, so a concurrent
+/// `cache_hit` either sees no entry or one whose contents are all
+/// already on disk. Two processes storing the same key race on the
+/// rename, and the loser's identical bytes are simply replaced — the
+/// content is a pure function of the key, so either winner is correct.
 async fn cache_store(
   key : String,
   root : String,
   outputs : Array[String],
   logs~ : CapturedLogs? = None,
 ) -> Bool {
-  let dir = entry_dir(key)
-  mkdir_p(dir)
-  let tb = tar_new()
   // Collect (relative path, kind) for every output, expanding declared
   // directories through `walk_tree` — which records symlinks rather
-  // than following them, so what goes into the archive has the same
-  // shape as what the task produced.
+  // than following them, so what is stored has the same shape as what
+  // the task produced.
   let members : Array[(String, TarKind)] = []
   for rel in outputs {
     let src = if root.length() == 0 || root == "." {
@@ -1657,46 +1678,14 @@ async fn cache_store(
       None => continue
     }
   }
-  for output in members {
-    let rel = output.0
-    let src = if root.length() == 0 || root == "." {
-      rel
-    } else {
-      join_path(root, rel)
-    }
-    match output.1 {
-      TarDir => tar_write_dir_entry(tb, rel, detect_file_mode(src))
-      TarSymlink(target) => tar_write_symlink_entry(tb, rel, target)
-      TarFile => {
-        let content = @fs.read_file_to_bytes(src) catch { _ => continue }
-        tar_write_entry(tb, rel, content, detect_file_mode(src))
-      }
-    }
-  }
-  // The captured streams ride along under the reserved prefix, so a
-  // hit — local or remote — can reproduce the transcript of the run
-  // that filled the entry. They are written last and read back by
-  // name, never into the workspace.
-  match logs {
-    Some(captured) => {
-      if captured.stdout.length() > 0 {
-        tar_write_entry(tb, LOG_STDOUT_MEMBER, captured.stdout, 0o644)
-      }
-      if captured.stderr.length() > 0 {
-        tar_write_entry(tb, LOG_STDERR_MEMBER, captured.stderr, 0o644)
-      }
-    }
-    None => ()
-  }
-  let archive = @zlib.gzip_compress(tar_finish(tb))
-  cache_publish_archive(dir, archive)
+  // Each file becomes a content-named blob shared with every other
+  // entry that produced the same bytes, and the manifest records what
+  // this key produced. The captured streams are blobs too, so a task
+  // whose transcript did not change stores it once.
+  ac_store_outputs(key, root, members, logs~)
 }
 
 ///|
-/// Write `archive` to `<dir>/entry.tar.gz` via a temp file + rename.
-///
-/// Shared by the local store and the remote fetch so both publish
-/// entries the same way: no reader ever observes a partial blob.
 /// Monotonic within one process, to name temp files uniquely.
 let store_seq : Ref[Int] = Ref(0)
 
@@ -1706,33 +1695,6 @@ fn next_store_seq() -> Int {
   store_seq.val
 }
 
-///|
-async fn cache_publish_archive(dir : String, archive : Bytes) -> Bool {
-  mkdir_p(dir)
-  let final_path = join_path(dir, CACHE_ENTRY_FILE)
-  // The temp name carries the pid so two concurrent stores of the same
-  // key do not scribble on each other's partial file before the rename,
-  // and a counter so two *actions within one process* cannot either —
-  // under `-j` the pid no longer tells one writer from another.
-  // A process killed between the write and the rename leaves the temp
-  // file behind; `pkf cache prune` / `clear` reclaim it, and it is never
-  // mistaken for an entry because lookups name `entry.tar.gz` exactly.
-  let tmp_path = final_path +
-    ".tmp." +
-    current_pid().to_string() +
-    "." +
-    next_store_seq().to_string()
-  @fs.write_bytes_to_file(tmp_path, archive) catch {
-    _ => return false
-  }
-  @xfs.rename(tmp_path.view(), final_path.view(), replace=true) catch {
-    _ => {
-      @fs.remove_file(tmp_path) catch { _ => () }
-      return false
-    }
-  }
-  true
-}
 
 ///|
 /// Restore the entry for `key` under `root`.
@@ -1747,9 +1709,16 @@ async fn cache_restore(
   root : String,
   logs~ : CapturedLogs? = None,
 ) -> Bool {
-  let dir = entry_dir(key)
-  let archive_path = join_path(dir, CACHE_ENTRY_FILE)
-  let gz = @fs.read_file_to_bytes(archive_path) catch { _ => return false }
+  // The split store is the only thing this runner writes. A key with no
+  // manifest is either pre-split or absent, and the archive path below
+  // tells those apart.
+  match ac_restore(key, root, logs~) {
+    Some(ok) => return ok
+    None => ()
+  }
+  let gz = @fs.read_file_to_bytes(legacy_entry_path(key)) catch {
+    _ => return false
+  }
   let tar = @zlib.gzip_decompress(gz) catch { _ => return false }
   let entries = match tar_iter(tar) {
     TarOk(es) => es
@@ -1908,10 +1877,54 @@ async fn remote_get_bytes(url : String) -> Bytes? {
 }
 
 ///|
+/// Split an absolute URL into `(origin, path)`.
+///
+/// `Client::new` wants an origin and `Client::put` wants a path, and
+/// the remote base may itself carry a prefix (`https://host/v1`), so
+/// the split has to happen after the authority rather than at the
+/// configured base. Returns `None` for anything that is not
+/// `scheme://authority/...`.
+fn split_url_origin(url : String) -> (String, String)? {
+  let marker = "://"
+  let scheme_end = match url.find(marker) {
+    Some(i) => i + marker.length()
+    None => return None
+  }
+  let rest = url[scheme_end:].to_owned()
+  match rest.find("/") {
+    Some(i) =>
+      Some((url[:scheme_end].to_owned() + rest[:i].to_owned(), rest[i:].to_owned()))
+    // No path at all: the whole URL is the origin.
+    None => Some((url, "/"))
+  }
+}
+
+///|
 async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
   let headers = remote_headers()
+  // Declare the length. Without it the body goes out
+  // `Transfer-Encoding: chunked`, which is legal HTTP and which the
+  // reference Worker handles — but a backend that reads only
+  // `Content-Length` sees zero and stores an empty object. The upload
+  // then "succeeds", every later fetch gets a valid-looking empty
+  // archive, and the remote cache is silently useless.
+  //
+  // Only on the write path: `remote_headers` is shared with the GET,
+  // which has no body.
+  headers["Content-Length"] = bytes.length().to_string()
+  // `@http.put` cannot carry it. That convenience wrapper hands headers
+  // to the *connection*, and only a request's `extra_headers` are
+  // scanned for a content length — so a `Content-Length` passed there
+  // is dropped and the body still goes out chunked. Driving the client
+  // directly is what puts the header on the request itself.
+  let (origin, path) = match split_url_origin(url) {
+    Some(pair) => pair
+    None => return false
+  }
   try {
-    let (resp, _) = @http.put(url, bytes, headers~)
+    let client = @http.Client::new(origin)
+    defer client.close()
+    let resp = client.put(path, bytes, extra_headers=headers)
     resp.code >= 200 && resp.code < 300
   } catch {
     _ => false
@@ -1936,18 +1949,16 @@ async fn cache_remote_fetch(
     Some(b) => b
     None => return false
   }
-  let dir = entry_dir(key)
-  // Publish into the local CAS the same way a local store does, so the
-  // fetched entry is a real local hit on the next run rather than a
-  // repeated remote round-trip.
-  if !cache_publish_archive(dir, archive) {
+  // A remote entry is untrusted input. `ac_ingest_archive` validates
+  // every member before a byte of it reaches the blob store, so a bad
+  // archive leaves no manifest and cannot be re-read as a local hit.
+  // Ingesting rather than parking the archive is what makes the fetched
+  // entry a real local hit next run instead of another round-trip.
+  if !ac_ingest_archive(key, archive) {
     return false
   }
-  // A remote entry is untrusted input. `cache_restore` validates it and
-  // returns false on anything it will not unpack; drop the local copy
-  // in that case so the bad blob is not re-read as a local hit forever.
   if !cache_restore(key, root, logs~) {
-    rm_rf(dir)
+    rm_rf(ac_dir(key))
     return false
   }
   true
@@ -1961,9 +1972,13 @@ async fn cache_remote_push(key : String) -> Unit {
     Some(b) => b
     None => return
   }
-  let dir = entry_dir(key)
-  let archive_path = join_path(dir, CACHE_ENTRY_FILE)
-  let body = @fs.read_file_to_bytes(archive_path) catch { _ => return }
+  // Rebuilt from the blobs: the wire format is still one archive per
+  // key, so a remote shared with clients that predate the split keeps
+  // working.
+  let body = match entry_archive_bytes(key) {
+    Some(b) => b
+    None => return
+  }
   let entry_url = remote_entry_url(base, key) + "/" + CACHE_ENTRY_FILE
   let ok = remote_put_bytes(entry_url, body)
   if !ok {
@@ -2350,6 +2365,11 @@ fn action_for_task(
   // in the async caller — and a call site that quietly passed nothing
   // would compute a key the runner never looks up.
   toolchains~ : Array[(String, String)],
+  // The configuration this task is reached in. `None` falls back to
+  // what the task itself declares, so a caller without a run set (a
+  // bare `describe`) behaves as it always did; the runner passes the
+  // resolved one, which is what the key must reflect.
+  config~ : Configuration? = None,
   graph~ : ActionGraph? = None,
   repo_root~ : String = ".",
 ) -> ActionDescriptor {
@@ -2378,6 +2398,7 @@ fn action_for_task(
     consumed_artifacts=consumed,
     providers~,
     toolchains~,
+    config~,
   )
 }
 
@@ -2427,6 +2448,17 @@ async fn[X] run_task(
   positionals : Array[String],
   opts~ : RunOptions = RunOptions::default(),
   graph~ : ActionGraph? = None,
+  // The configuration this task is reached in. The runner resolves it
+  // over the whole run set — a dependency of a cross build inherits the
+  // target being built — and it must reach both the toolchain resolver
+  // and the action key, or the two would disagree about what was built.
+  config~ : Configuration? = None,
+  // How many attempts the command took, written back for the caller's
+  // run record. An out-parameter rather than a wider return type: every
+  // early exit above returns before a command is ever spawned, and
+  // spelling `0` at each of them would be a dozen chances to write the
+  // wrong number.
+  attempts~ : Ref[Int] = Ref(0),
 ) -> TaskOutcome {
   if task.cmd.length() == 0 {
     // deps-only umbrella task — nothing to spawn.
@@ -2482,7 +2514,8 @@ async fn[X] run_task(
       params,
       positionals,
       opts,
-      toolchains=toolchain_key_fields(task, task.shell),
+      toolchains=toolchain_key_fields(task, task.shell, config~),
+      config~,
       graph~,
       repo_root~,
     )
@@ -2594,6 +2627,15 @@ async fn[X] run_task(
   if opts.profile.length() > 0 {
     extra_env["PKF_PROFILE"] = opts.profile
   }
+  // Build settings from the resolved configuration, as
+  // `$PKF_CONFIG_<KEY>`. Prefixed rather than bare so a setting cannot
+  // shadow a param or an `env` entry, and set from the same
+  // configuration the key hashed — a command that saw a setting the key
+  // did not describe is exactly the drift the action IR exists to
+  // prevent.
+  for pair in config_or_declared(config, task).settings {
+    extra_env[config_env_name(pair.0)] = pair.1
+  }
   // Start declared services before running cmd. Cache hit above
   // short-circuits the spawn; reuse semantics apply per service.
   let running : Array[RunningService] = []
@@ -2631,7 +2673,20 @@ async fn[X] run_task(
   // whose `workdir` leaves the repo cannot be mirrored — both run
   // unsandboxed, and say so rather than pretending.
   let sandboxed = (opts.sandbox || task.hermetic) && task.inputs.length() > 0
-  let box : Sandbox? = if sandboxed {
+  // Retry loop. A task marked `retries` is one whose failure is not
+  // reliable information, and re-running it is cheaper than the human
+  // cost of a red build on a green tree. Everything per-attempt lives
+  // inside: a retry gets a fresh sandbox, a fresh log capture and a
+  // fresh deadline, so it can never inherit the debris of the attempt
+  // that failed. Services started above stay up across attempts — a
+  // flaky test usually needs its database still running.
+  let mut attempt = 0
+  let mut box : Sandbox? = None
+  let mut captured : CapturedLogs? = None
+  let mut code = 0
+  while true {
+  attempt = attempt + 1
+  box = if sandboxed {
     match sandbox_create(repo_root, task_cwd) {
       Some(b) => {
         let artifacts = match graph {
@@ -2676,7 +2731,7 @@ async fn[X] run_task(
   // Only an action whose result is about to be stored needs its output
   // kept. Capturing everything would hand a pipe to every interactive
   // and hook task for no gain — they have no entry to attach a log to.
-  let captured : CapturedLogs? = if key is Some(_) {
+  captured = if key is Some(_) {
     Some(CapturedLogs::empty())
   } else {
     None
@@ -2766,7 +2821,7 @@ async fn[X] run_task(
   }
   code
   }
-  let code = if task.timeout_seconds > 0 {
+  code = if task.timeout_seconds > 0 {
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
     }
@@ -2799,6 +2854,34 @@ async fn[X] run_task(
     }
   } else {
     spawn_code()
+  }
+  attempts.val = attempt
+  if code == 0 || attempt > task.retries {
+    break
+  }
+  // Said on every attempt, not summarised at the end. A retry that
+  // reports nothing turns a task that fails four runs in five into one
+  // that looks perfectly healthy, which is how a real regression hides
+  // behind a `retries` line somebody added a year ago.
+  //
+  // Flushed first: stdout is block-buffered when piped and stderr is
+  // not, so without this the notice about attempt N arrives above the
+  // output of attempt N-1 and reads as though it came first.
+  flush_stdout()
+  eprintln(
+    "pkf: task `\{task.name}` failed with exit code \{code}; " +
+    "retrying (attempt \{attempt + 1} of \{task.retries + 1})",
+  )
+  // The failed attempt's sandbox goes with it. Collecting from it
+  // would move a half-written output into the workspace, and reusing
+  // it would let the retry read what the failure left behind.
+  match box {
+    Some(b) => {
+      sandbox_destroy(b)
+      box = None
+    }
+    None => ()
+  }
   }
   stop_services(running)
   match box {
@@ -3028,6 +3111,16 @@ struct ParsedRunArgs {
   /// stays the default: raising it changes when side effects happen
   /// relative to each other, which is the Taskfile author's call.
   jobs : Int
+  /// Build settings given on the command line, seeding the run's
+  /// default configuration. Like `keep_going`, this describes the run
+  /// rather than one task — it is the configuration every target starts
+  /// in, and a task's own `config` still wins for its subtree.
+  config_settings : Map[String, String]
+  /// Where to write the machine-readable run record, or "" for none.
+  /// Like `keep_going`, this describes the run rather than any single
+  /// task, so it stays out of `RunOptions` — which is hashed into every
+  /// action key, and must not vary with where a log file went.
+  execution_log : String
 }
 
 ///|
@@ -3047,7 +3140,7 @@ fn runner_bool_flags() -> Array[String] {
 ///|
 /// Reserved runner flags that take a value.
 fn runner_value_flags() -> Array[String] {
-  ["profile", "jobs"]
+  ["profile", "jobs", "execution-log", "config"]
 }
 
 ///|
@@ -3127,6 +3220,8 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
   let mut sandbox = false
   let mut profile = ""
   let mut jobs = 1
+  let mut execution_log = ""
+  let config_settings : Map[String, String] = Map([], capacity=2)
   let mut i = 0
   let mut after_dash_dash = false
   while i < args.length() {
@@ -3194,8 +3289,28 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
               return None
             }
         }
-        if name == "profile" {
+        if name == "config" {
+          // `KEY=VALUE`, repeatable. A bare key is refused rather than
+          // read as an empty value: `--config release` looks like it
+          // turns something on and would silently set nothing.
+          match v.find("=") {
+            Some(eq) => {
+              let key = v[:eq].to_owned()
+              if key.length() == 0 {
+                die("pkf run: `--config` needs a KEY=VALUE (got `\{v}`)")
+                return None
+              }
+              config_settings[key] = v[eq + 1:].to_owned()
+            }
+            None => {
+              die("pkf run: `--config` needs a KEY=VALUE (got `\{v}`)")
+              return None
+            }
+          }
+        } else if name == "profile" {
           profile = v
+        } else if name == "execution-log" {
+          execution_log = v
         } else if name == "jobs" {
           jobs = match parse_jobs(v) {
             Some(n) => n
@@ -3257,6 +3372,8 @@ fn parse_run_args(args : ArrayView[String]) -> ParsedRunArgs? {
     positionals,
     keep_going,
     jobs,
+    config_settings,
+    execution_log,
     opts: RunOptions::{
       no_cache,
       refresh,
@@ -5186,7 +5303,7 @@ fn completion_bash() -> String {
     #|      ;;
     #|    run)
     #|      if [[ "$cur" == -* ]]; then
-    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --remote-only -j --jobs" -- "$cur"))
+    #|        COMPREPLY=($(compgen -W "-f --file --dry-run --print-hash --explain-cache --no-cache --refresh --timing --quiet --keep-going --profile --config --execution-log --remote-only -j --jobs" -- "$cur"))
     #|        return
     #|      fi
     #|      local tasks
@@ -5364,6 +5481,8 @@ fn completion_zsh() -> String {
     #|          '--no-cache[disable cache for this run]' \
     #|          '--refresh[skip lookup but store outputs]' \
     #|          '--timing[print task durations]' \
+    #|          '--execution-log[write a JSON Lines record of the run]' \
+    #|          '--config[build setting KEY=VALUE for this run]' \
     #|          '--quiet[suppress per-task log lines]' \
     #|          '--keep-going[do not stop on first failure]' \
     #|          '--profile[profile name for cache keys]' \
@@ -5538,6 +5657,8 @@ fn completion_fish() -> String {
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l no-cache -d 'disable cache for this run'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l refresh -d 'skip lookup but store outputs'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l timing -d 'print task durations'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l execution-log -d 'write a JSON Lines record of the run'
+    #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l config -d 'build setting KEY=VALUE for this run'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l quiet -d 'suppress per-task log lines'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l keep-going -d 'do not stop on first failure'
     #|complete -c pkf -f -n '__fish_seen_subcommand_from run' -l profile -d 'profile name for cache keys'
@@ -5579,6 +5700,7 @@ fn usage_text() -> String {
     #|  run <task>... [-j N|auto] [--dry-run] [--print-hash] [--no-cache]
     #|              [--refresh] [--explain-cache] [--remote-only]
     #|              [--keep-going] [--profile=NAME] [--quiet] [--timing]
+    #|              [--execution-log=FILE] [--config=KEY=VALUE]...
     #|              [--name=value]... [-- positional...]
     #|  list [-v] [--all]
     #|  graph [--all]
@@ -5896,6 +6018,12 @@ async fn explain_cmd(
   // that run looks up — artifacts consumed from its dependencies
   // included.
   let graph = build_action_graph(plan, repo_root, [task_name])
+  // Resolved over this task's own run set, so `pkf explain X` reports
+  // the key `pkf run X` looks up. Explaining a task that a *different*
+  // run reaches in another configuration reports that run's key only if
+  // you explain the target that run asked for.
+  let (configs, _) = resolve_configurations(plan, graph)
+  let config = Some(config_of(configs, task_name))
   let action = action_for_task(
     plan,
     task,
@@ -5903,7 +6031,8 @@ async fn explain_cmd(
     Map([], capacity=0),
     [],
     RunOptions::default(),
-    toolchains=toolchain_key_fields(task, task.shell),
+    toolchains=toolchain_key_fields(task, task.shell, config~),
+    config~,
     graph=Some(graph),
     repo_root~,
   )
@@ -6476,6 +6605,23 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
       } else {
         { ..parsed.opts, stream_output: true }
       }
+      // What each task builds *for*, propagated down the graph before
+      // anything runs. Refused rather than resolved when one task is
+      // wanted in two configurations at once: both would write the same
+      // `outputs`, and picking either silently gives one consumer the
+      // other's artifact.
+      let (configs, conflict) = resolve_configurations(
+        plan,
+        graph,
+        seed=config_with_settings("", parsed.config_settings),
+      )
+      match conflict {
+        Some(c) => {
+          die(config_conflict_message(c))
+          return 2
+        }
+        None => ()
+      }
       let result = run_action_graph(
         group,
         plan,
@@ -6487,12 +6633,16 @@ async fn[X] run_main(group : @async.TaskGroup[X], args : Array[String]) -> Int {
         opts,
         jobs,
         parsed.keep_going,
+        configs,
       )
       if !parsed.opts.quiet {
         report_summary(result)
       }
       if parsed.opts.timing {
         report_timing(result, graph)
+      }
+      if parsed.execution_log != "" {
+        write_execution_log(parsed.execution_log, result, graph)
       }
       result.exit_code
     }
@@ -7412,22 +7562,70 @@ fn walk_cas_entries(
 ///|
 fn cache_stats_cmd(cas_dir : String) -> Int {
   let mut count = 0
-  let mut total_size : Int64 = 0L
   let mut oldest : Int64 = 0L
   let mut newest : Int64 = 0L
-  walk_cas_entries(cas_dir, fn(_, _, size, mtime) {
+  let note = fn(mtime : Int64) {
     count = count + 1
-    total_size = total_size + size
     if oldest == 0L || mtime < oldest {
       oldest = mtime
     }
     if mtime > newest {
       newest = mtime
     }
+  }
+  let mut blob_count = 0
+  let mut blob_bytes = 0L
+  let sizes : Map[String, Int64] = Map([], capacity=64)
+  walk_blobs(fn(digest, _, size) {
+    blob_count = blob_count + 1
+    blob_bytes = blob_bytes + size
+    sizes[digest] = size
   })
+  // What the entries would cost with no sharing: every blob counted
+  // once per entry that names it. Both sides of the comparison are
+  // on-disk bytes, so the difference is dedup alone — comparing the
+  // uncompressed content against the compressed store would fold in
+  // compression, and on small outputs gzip's own overhead would make a
+  // cache that shares perfectly look like it saved nothing.
+  let mut unshared : Int64 = 0L
+  walk_ac_entries(fn(key, _, mtime) {
+    note(mtime)
+    match ac_load(key) {
+      Some(result) => {
+        let charge = fn(digest : String) {
+          if digest.length() > 0 {
+            unshared = unshared + sizes.get(digest).unwrap_or(0L)
+          }
+        }
+        for out in result.outputs {
+          charge(out.digest)
+        }
+        charge(result.stdout_digest)
+        charge(result.stderr_digest)
+      }
+      None => ()
+    }
+  })
+  // Pre-split entries are still entries. They share nothing, so their
+  // bytes count the same on both sides.
+  let mut legacy_bytes = 0L
+  walk_cas_entries(cas_dir, fn(_, _, size, mtime) {
+    note(mtime)
+    legacy_bytes = legacy_bytes + size
+    unshared = unshared + size
+  })
+  let on_disk = blob_bytes + legacy_bytes
   println("cache dir: \{cache_root()}")
   println("entries:   \{count}")
-  println("size:      \{human_bytes(total_size)}")
+  println("blobs:     \{blob_count}")
+  println("size:      \{human_bytes(on_disk)}")
+  if unshared > on_disk {
+    let saved = unshared - on_disk
+    let pct = (saved * 100L / unshared).to_int()
+    println(
+      "shared:    \{human_bytes(saved)} saved (\{pct}% of \{human_bytes(unshared)} stored once)",
+    )
+  }
   if count > 0 {
     let now = now_sec()
     println(
@@ -7511,30 +7709,52 @@ fn cache_prune_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
   let cutoff = now_sec() - threshold_sec
   let mut removed = 0
   let mut freed : Int64 = 0L
+  // Entries no longer own their bytes: several name the same blob, so
+  // removing one frees nothing on its own. Collect the doomed keys
+  // first, then let the sweep say what actually goes.
+  let doomed : Map[String, Bool] = Map([], capacity=16)
+  let report = fn(hex : String, mtime : Int64) {
+    removed = removed + 1
+    let short_hex = if hex.length() > 12 { hex[0:12].to_owned() } else { hex }
+    let age = now_sec() - mtime
+    let verb = if dry_run { "would remove" } else { "removed" }
+    println("\{verb} \{short_hex} (\{format_duration_sec(age)} old)")
+  }
+  walk_ac_entries(fn(key, dir, mtime) {
+    if mtime > cutoff {
+      return
+    }
+    doomed[key] = true
+    report(key, mtime)
+    if !dry_run {
+      rm_rf(dir)
+    }
+  })
+  // Pre-split entries own their single archive outright, so theirs is
+  // the one size that can be reported per entry.
   walk_cas_entries(cas_dir, fn(hex, entry_dir, size, mtime) {
     if mtime > cutoff {
       return
     }
     freed = freed + size
-    removed = removed + 1
-    let short_hex = if hex.length() > 12 { hex[0:12].to_owned() } else { hex }
-    let age = now_sec() - mtime
-    if dry_run {
-      println(
-        "would remove \{short_hex} (\{human_bytes(size)}, \{format_duration_sec(age)} old)",
-      )
-      return
+    report(hex, mtime)
+    if !dry_run {
+      rm_rf(entry_dir)
     }
-    rm_rf(entry_dir)
-    println(
-      "removed \{short_hex} (\{human_bytes(size)}, \{format_duration_sec(age)} old)",
-    )
   })
+  // A dry run still has every entry on disk, so it asks what would be
+  // unreferenced once `doomed` were gone.
+  let (swept, swept_bytes) = sweep_blobs(skip=doomed, dry_run~)
+  freed = freed + swept_bytes
   println("")
   if dry_run {
-    println("would remove \{removed} entries (\{human_bytes(freed)})")
+    println(
+      "would remove \{removed} entries and \{swept} blob(s) (\{human_bytes(freed)})",
+    )
   } else {
-    println("removed \{removed} entries (\{human_bytes(freed)} freed)")
+    println(
+      "removed \{removed} entries and \{swept} blob(s) (\{human_bytes(freed)} freed)",
+    )
   }
   0
 }
@@ -7546,6 +7766,9 @@ fn cache_rm_cmd(cas_dir : String, keys : Array[String]) -> Int {
     return 1
   }
   let mut removed = 0
+  // Both layouts are searched, so a key names the same entry whether it
+  // was stored before or after the split.
+  let roots = [join_path(cache_root(), "ac"), cas_dir]
   for key in keys {
     if key.length() < 2 {
       eprintln(
@@ -7554,50 +7777,63 @@ fn cache_rm_cmd(cas_dir : String, keys : Array[String]) -> Int {
       return 1
     }
     let prefix2 = key[:2].to_owned()
-    let bucket = join_path(cas_dir, prefix2)
-    if key.length() >= 64 {
-      // Full 64-char hex: direct path.
-      let rest = key[2:].to_owned()
-      let entry_dir = join_path(bucket, rest)
-      if !@fs.path_exists(entry_dir) {
-        eprintln("[pkf] cache rm: no entry at \{key}")
+    let rest_prefix = key[2:].to_owned()
+    // Directories to delete for this key, across both layouts. Gathered
+    // before anything is removed so an ambiguous prefix is refused
+    // without having half-deleted the entries it matched.
+    let targets : Array[String] = []
+    let mut ambiguous = 0
+    for root in roots {
+      let bucket = join_path(root, prefix2)
+      if key.length() >= 64 {
+        // Full 64-char hex: direct path.
+        let dir = join_path(bucket, rest_prefix)
+        if @fs.path_exists(dir) {
+          targets.push(dir)
+        }
         continue
       }
-      rm_rf(entry_dir)
-      println("removed \{key}")
-      removed = removed + 1
-    } else {
-      // Prefix match.
-      let rest_prefix = key[2:].to_owned()
-      let candidates = @fs.read_dir(bucket) catch {
-        _ => {
-          eprintln("[pkf] cache rm: no entry matching \{key}")
-          continue
-        }
-      }
+      let candidates = @fs.read_dir(bucket) catch { _ => continue }
       let matches : Array[String] = []
       for cand in candidates {
         if cand.has_prefix(rest_prefix) {
           matches.push(cand)
         }
       }
-      if matches.length() == 0 {
-        eprintln("[pkf] cache rm: no entry matching \{key}")
-        continue
-      } else if matches.length() > 1 {
-        eprintln(
-          "pkf: cache rm: prefix \"\{key}\" matches \{matches.length()} entries; disambiguate",
-        )
-        return 1
+      // Counted per layout: the same key present in both is one entry
+      // that was rewritten, not two the caller has to disambiguate.
+      if matches.length() > 1 {
+        ambiguous = ambiguous + matches.length()
+      } else if matches.length() == 1 {
+        targets.push(join_path(bucket, matches[0]))
       }
-      let entry_dir = join_path(bucket, matches[0])
-      rm_rf(entry_dir)
-      println("removed \{key}")
-      removed = removed + 1
     }
+    if ambiguous > 1 {
+      eprintln(
+        "pkf: cache rm: prefix \"\{key}\" matches \{ambiguous} entries; disambiguate",
+      )
+      return 1
+    }
+    if targets.length() == 0 {
+      eprintln("[pkf] cache rm: no entry matching \{key}")
+      continue
+    }
+    for dir in targets {
+      rm_rf(dir)
+    }
+    println("removed \{key}")
+    removed = removed + 1
   }
+  // Blobs the removed entries were the last to name.
+  let (swept, swept_bytes) = sweep_blobs()
   println("")
-  println("removed \{removed} entries")
+  if swept > 0 {
+    println(
+      "removed \{removed} entries and \{swept} blob(s) (\{human_bytes(swept_bytes)} freed)",
+    )
+  } else {
+    println("removed \{removed} entries")
+  }
   0
 }
 
@@ -7609,18 +7845,28 @@ fn cache_clear_cmd(cas_dir : String, args : ArrayView[String]) -> Int {
       yes = true
     }
   }
-  if !@fs.path_exists(cas_dir) {
+  // Everything the action cache owns: the manifests, the blobs they
+  // name, and any pre-split archives still around. The Pkl evaluation
+  // cache is a different store under the same root and is left alone,
+  // exactly as before the split.
+  let ac_root = join_path(cache_root(), "ac")
+  let blob_root = join_path(cache_root(), "blobs")
+  if !@fs.path_exists(cas_dir) &&
+    !@fs.path_exists(ac_root) &&
+    !@fs.path_exists(blob_root) {
     println("cache already empty")
     return 0
   }
   if !yes {
     eprintln(
-      "pkf: refusing to clear \{cas_dir} without --yes (use --yes for scripts)",
+      "pkf: refusing to clear \{cache_root()} without --yes (use --yes for scripts)",
     )
     return 1
   }
+  rm_rf(ac_root)
+  rm_rf(blob_root)
   rm_rf(cas_dir)
-  println("cleared \{cas_dir}")
+  println("cleared \{cache_root()}")
   0
 }
 

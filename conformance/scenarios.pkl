@@ -427,6 +427,135 @@ scenarios {
     contract = new { exit = true; mustContain { "cache hit" } }
   }
   new {
+    id = "execution-log-records-what-ran"
+    fixture = "examples/execution-log"
+    // `setup` performs the run that writes the log; the scenario's own
+    // run reads it back and asserts every field a consumer parses.
+    // Checking from inside a task rather than from the harness is the
+    // point: the assertions read the file the way a dashboard would, so
+    // a renamed field fails here rather than downstream.
+    setup { "\"$PKF_MBT_BIN\" run pack --execution-log=run.jsonl" }
+    argv { "run"; "check-log" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "execution log ok" }
+    }
+  }
+  new {
+    id = "execution-log-records-a-cached-run-as-cached"
+    fixture = "examples/execution-log"
+    // The second run hits, so nothing executes. A log that reported it
+    // as work would be exactly wrong for the question it exists to
+    // answer, and an `exitCode` on a hit reads as "ran and succeeded".
+    setup {
+      "\"$PKF_MBT_BIN\" run pack"
+      "\"$PKF_MBT_BIN\" run pack --execution-log=cached.jsonl"
+    }
+    argv { "run"; "check-cached" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "cached log ok" }
+    }
+  }
+  new {
+    id = "cas-shares-unchanged-outputs-between-entries"
+    fixture = "examples/cas-share"
+    // Two runs, one edited input, so two action keys covering four
+    // declared outputs. Three blobs, not four: the output that did not
+    // change is stored once. The old single-archive layout stored both
+    // outputs twice, which is the whole reason the entry was split.
+    setup {
+      "\"$PKF_MBT_BIN\" run build"
+      "printf 'two\\n' > src/changing.txt"
+      "\"$PKF_MBT_BIN\" run build"
+    }
+    argv { "run"; "check-store" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "store shares blobs" }
+    }
+  }
+  new {
+    id = "a-pre-split-entry-is-still-a-hit"
+    fixture = "examples/cas-share"
+    // An upgrade that silently emptied a warm cache would cost every
+    // user a full rebuild, so the old single-archive layout is still
+    // read. The setup plants one by hand under the key the runner will
+    // ask for, with contents no run of this task could produce — so a
+    // hit proves the entry came from there and not from re-executing.
+    setup {
+      """
+      key=$("$PKF_MBT_BIN" run build --print-hash | awk '$2 == "build" { print $1 }')
+      mkdir -p stage/dist
+      echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/changing.txt
+      echo FROM-A-PRE-SPLIT-ENTRY > stage/dist/stable.txt
+      mkdir -p ".pkf-cache/cas/${key:0:2}/${key:2}"
+      tar czf ".pkf-cache/cas/${key:0:2}/${key:2}/entry.tar.gz" -C stage dist
+      rm -rf stage
+      """
+    }
+    argv { "run"; "build" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "cache hit" }
+      fsDelta = true
+    }
+  }
+  new {
+    id = "a-transition-reaches-dependencies"
+    fixture = "examples/transitions"
+    // `lib` declares no platform. On its own it is a host build; under
+    // `app` it is part of an arm64 build and must key as one, or two
+    // different cross builds share an entry that describes neither.
+    // `codegen` pins itself and must keep its own key either way.
+    setup {
+      "\"$PKF_MBT_BIN\" run lib --print-hash > alone.txt"
+      "\"$PKF_MBT_BIN\" run codegen --print-hash > gen-alone.txt"
+      "\"$PKF_MBT_BIN\" run app --print-hash > via-app.txt"
+    }
+    argv { "run"; "check-transition" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      mustContain { "transitions reach dependencies" }
+    }
+  }
+  new {
+    id = "one-task-for-two-targets-is-refused"
+    fixture = "examples/transitions"
+    // Both apps want the undeclared `lib`, for different targets. There
+    // is one `dist/lib.txt`, so building it once and handing it to both
+    // is wrong for one of them — which is what happened before. Refused
+    // by name, with the two ways out.
+    argv { "run"; "app"; "other-app" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new {
+      exit = true
+      stdoutEmpty = true
+      mustContainStderr {
+        "`lib` is needed for two target platforms"
+        "linux/arm64"
+        "linux/riscv64"
+        "targetPlatform"
+      }
+    }
+  }
+  new {
+    id = "each-target-alone-still-builds"
+    fixture = "examples/transitions"
+    // The refusal is about one run, not about the Taskfile: running
+    // them separately is the workaround the message names, so it has to
+    // work.
+    setup { "\"$PKF_MBT_BIN\" run app" }
+    argv { "run"; "other-app" }
+    env { ["PKFIRE_MBT_CACHE_DIR"] = ".pkf-cache" }
+    contract = new { exit = true; fsDelta = true }
+  }
+  new {
     id = "reserved-output-prefix-is-refused"
     fixture = "examples/reserved-output"
     // `.pkf-meta/` is where an entry keeps the captured logs. A task

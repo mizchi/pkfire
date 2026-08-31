@@ -1,0 +1,75 @@
+/// Fixture for build settings that transition.
+///
+/// `targetPlatform` says *where* a subtree's output is meant to run and
+/// propagates down the graph. `config` is the same mechanism for
+/// everything else about how it is built: `app` asks for release mode
+/// and `lib` is built that way too, without saying so and without being
+/// duplicated per mode.
+///
+/// `codegen` pins `mode` for itself — the host-tool case — while still
+/// inheriting every setting it does not name. That per-key merge is the
+/// part worth pinning: replacing the whole map instead would force
+/// every pinned task to restate settings it has no opinion about.
+///
+/// Relative `amends`: `config` is unreleased, so this cannot point at a
+/// published package yet.
+amends "../../pkl/Taskfile.pkl"
+
+local lib = new Task {
+  name = "lib"
+  cmd = "mkdir -p dist && echo \"lib mode=$PKF_CONFIG_MODE lto=$PKF_CONFIG_LTO\" > dist/lib.txt"
+  inputs { "src/**" }
+  outputs { "dist/lib.txt" }
+}
+
+local codegen = new Task {
+  name = "codegen"
+  cmd = "mkdir -p dist && echo \"gen mode=$PKF_CONFIG_MODE lto=$PKF_CONFIG_LTO\" > dist/gen.txt"
+  inputs { "src/**" }
+  outputs { "dist/gen.txt" }
+  config { ["mode"] = "debug" }
+}
+
+local app = new Task {
+  name = "app"
+  cmd = "mkdir -p dist && cat dist/lib.txt dist/gen.txt > dist/app.txt"
+  inputs { "dist/lib.txt"; "dist/gen.txt" }
+  outputs { "dist/app.txt" }
+  config {
+    ["mode"] = "release"
+    ["lto"] = "on"
+  }
+  deps { lib; codegen }
+}
+
+/// Wants the same undeclared `lib` in a different mode, which is the
+/// case pkfire cannot build yet: one `outputs` path, two answers.
+local debugApp = new Task {
+  name = "debug-app"
+  cmd = "mkdir -p dist && cat dist/lib.txt > dist/debug.txt"
+  inputs { "dist/lib.txt" }
+  outputs { "dist/debug.txt" }
+  config {
+    ["mode"] = "debug"
+    ["lto"] = "on"
+  }
+  deps { lib }
+}
+
+/// Reads back what each task was actually built with. Asserted from a
+/// task rather than from the harness so the check sees the settings the
+/// way a real command does — through the environment.
+local checkConfig = new Task {
+  name = "check-config"
+  cmd =
+    """
+    grep -q 'lib mode=release lto=on' dist/lib.txt \
+      || { echo "lib did not inherit the settings"; cat dist/lib.txt; exit 1; }
+    grep -q 'gen mode=debug lto=on' dist/gen.txt \
+      || { echo "codegen did not pin mode while inheriting lto"; cat dist/gen.txt; exit 1; }
+    echo settings reached the commands
+    """
+  cache = false
+}
+
+tasks { lib; codegen; app; debugApp; checkConfig }

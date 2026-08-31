@@ -142,6 +142,29 @@ actions.
 critical path — the longest chain of actions the graph required to run
 in sequence.
 
+## Execution log
+
+`--execution-log=FILE` writes a JSON Lines record of the run: one
+`{"kind":"action"}` object per action in completion order, then one
+`{"kind":"summary"}` object.
+
+Action fields: `task`, `status`, `startMs`, `durationMs`. `status` is
+`ran`, `cached-local`, `cached-remote`, `umbrella`, `reported` (under
+`--dry-run` / `--print-hash`) or `skipped`. `exitCode` is present only
+for `ran`; `blockedBy` only for `skipped`, naming the action that
+stopped it.
+
+Summary fields: `version` (schema, currently `1`), `exitCode`,
+`wallMs`, `actions`, `ran`, `cached`, `skipped`, and — when the chain is
+longer than one action — `criticalPathMs` and `criticalPath`. The
+critical path lives here because the log records no edges, so it cannot
+be recomputed from the action lines.
+
+The flag is a run-level concern like `--keep-going` and `-j`: it is not
+part of any action key, so adding it never invalidates a cache entry.
+An unwritable path is reported on stderr and leaves the exit code
+alone.
+
 ## Sandboxing
 
 `pkf run --sandbox` materializes an action's declared inputs, and the
@@ -228,6 +251,57 @@ Resolutions are memoized per process by (name, versionCmd, hashBinary).
 `targetPlatform` is a descriptor field of its own, distinct from the
 observed `executionPlatform`; null means "builds for the machine it
 runs on".
+
+## Configuration transitions
+
+`targetPlatform` propagates down the graph before a run starts, over
+the same edges the action graph has — declared `deps` and the artifact
+edges derived from what a task reads. A dependency of a cross build is
+part of that cross build: it keys for the target, and its `toolchains`
+resolve for the target.
+
+- Only a **declared** `targetPlatform` transitions anything. A task
+  without one passes no opinion down, so an umbrella over a host task
+  and a cross task does not force the execution platform onto shared
+  dependencies.
+- A task that declares its own is **never transitioned** by a consumer,
+  and re-originates the transition for everything below it. That is the
+  host-tool-inside-a-cross-build case.
+- A task with nothing above it and no declaration builds for the
+  execution platform.
+- A task named on the command line alongside a cross build that needs
+  it is built the way that build needs it: there is one `outputs` path
+  and only one answer that satisfies both. On its own it is a host
+  build, as before.
+
+`config` carries build settings through the same transition. They merge
+**per key**, so a task inherits every setting from whoever depends on it
+and overrides only the ones it names — a declared `targetPlatform`, by
+contrast, *replaces* the inherited one, since a host tool inside a cross
+build is not building for arm64 in any sense. Each setting reaches the
+command as `$PKF_CONFIG_<KEY>` uppercased, and is hashed as
+`config.<key>` in the action's execution properties because the command
+sees it.
+
+`pkf run --config KEY=VALUE` (repeatable) seeds the run's default
+configuration; a task's own `config` still wins for its subtree. A bare
+key with no `=` is refused rather than read as an empty value.
+
+A task reached in **two different declared configurations in one run**
+is refused before anything runs, naming both configurations, the task
+that originated each, and — for settings — exactly which keys differ. Both would write the same `outputs`; building it
+twice needs per-configuration output roots, which do not exist yet. The
+two ways out are running the targets separately or giving the shared
+task its own `targetPlatform`.
+
+Callers with no run set (`describe`) fall back to the task's own
+declaration. `pkf explain X` resolves over the run set rooted at `X`,
+so it reports the key `pkf run X` looks up; a task that a *different*
+run reaches in another configuration keys differently there, and
+`pkf run <that target> --print-hash` is what shows it.
+
+`targetPlatform` itself is unchanged, only where it reaches. Action keys move for any task that is a dependency of one
+declaring a `targetPlatform` — they were keyed wrong before.
 
 ## Steps
 
@@ -320,6 +394,15 @@ command is spawned; empty means any. A mismatch is fatal and names the
 task, the requirement and the machine. Not hashed — the execution
 platform already is.
 
+`retries > 0` re-spawns the command after a failure, up to that many
+extra attempts. Each attempt is announced on stderr; the count reaches
+`--execution-log` as `attempts` (omitted when 1) and the summary's
+`retried`. Services stay up across attempts, but a sandbox does not — a
+retry always gets a fresh tree, so it cannot inherit the debris of the
+attempt that failed, and a failed attempt's partial outputs are never
+collected. Exhausting the budget fails with the command's own exit
+code. Not hashed: only the successful attempt is stored.
+
 ## Evaluation cache
 
 The rendered Taskfile is memoized under `<cache_root>/eval/<slot>`.
@@ -362,24 +445,56 @@ The cache root is selected in this order:
 3. `$HOME/.cache/pkfire-mbt`
 4. `.pkfire-mbt-cache`
 
-Entries live under:
+An entry is an ActionCache manifest plus content-named blobs:
 
 ```text
-<root>/cas/<first-two-key-chars>/<remaining-key>/entry.tar.gz
+<root>/ac/<first-two-key-chars>/<remaining-key>/result.json
+<root>/blobs/<first-two-digest-chars>/<remaining-digest>
 ```
 
-On hit, the gzip-compressed tar is restored into the Taskfile directory.
-After a successful miss, pkf expands existing `outputs`, archives
-regular files and recursive directory contents, preserves file modes
-best-effort, and writes the entry.
+`result.json` is `{version, outputs, stdout?, stderr?}`. Each output is
+`{path, kind, mode}` plus `{digest, size}` for a file or `{target}` for
+a symlink; `kind` is `file`, `dir` or `symlink`, and the list keeps the
+order outputs were collected in, so a directory is created before what
+is inside it. A manifest whose `version` this runner does not recognise
+is a miss, never a partial restore.
 
-The entry also carries the run's stdout and stderr under a reserved
-`.pkf-meta/` prefix, capped at 1 MiB per stream. A restore hands those
-members to the runner and never writes them into the workspace; the
-hit line becomes `# name (cache hit <key>, replaying logs)` and the
-stored streams are printed verbatim. A task that printed nothing keeps
-the plain hit line. Declaring an output under `.pkf-meta/` is rejected
-at load time — it would be stored and then dropped on every hit.
+Blobs are named by the SHA-256 of their **uncompressed** content and
+stored gzipped — the same bytes must land on the same name whichever
+run wrote them, and gzip output is not guaranteed identical across
+versions. Blobs are immutable and shared: two entries whose outputs
+differ in one file cost one blob, not two trees.
+
+After a successful miss, pkf expands existing `outputs`, walks declared
+directories (recording symlinks rather than following them), writes one
+blob per file, and publishes the manifest last — so an entry that exists
+is one whose contents are all already on disk. Every blob and the
+manifest go through a temp file and a rename.
+
+On hit the manifest is validated in full before anything is written:
+unsafe paths, escaping symlinks, a missing blob, or a claimed expansion
+past the 4 GiB cap all read as a miss with a reason on stderr.
+
+The entry also carries the run's stdout and stderr as blobs, capped at
+1 MiB per stream (they ride the archive under a reserved `.pkf-meta/`
+prefix on the wire). A restore hands those to the runner and never
+writes them into the workspace; the hit line becomes
+`# name (cache hit <key>, replaying logs)` and the stored streams are
+printed verbatim. A task that printed nothing keeps the plain hit line.
+Declaring an output under `.pkf-meta/` is rejected at load time — it
+would be stored and then dropped on every hit.
+
+Entries written before the split live at
+`<root>/cas/<first-two>/<remaining>/entry.tar.gz` and are still read, so
+an upgrade does not cold-start a warm cache. Nothing writes there again.
+
+Because entries share blobs, removing one frees nothing by itself.
+`pkf cache prune` and `pkf cache rm` delete manifests and then sweep
+every blob no remaining manifest names, reporting what the sweep
+actually deleted. `pkf cache clear` removes manifests, blobs and any
+pre-split archives; the Pkl evaluation cache under the same root is left
+alone. `pkf cache stats` reports entries, blob count, bytes on disk, and
+how much the sharing saved.
 
 Capture uses pipes, so a cached task's command does not see a terminal
 and colour-on-tty detection turns colour off. Uncacheable tasks
@@ -409,7 +524,18 @@ GET|PUT <base>/cas/<first-two>/<remaining>/entry.tar.gz
 Authorization: Bearer <token>
 ```
 
-A remote hit warms the local CAS and restores outputs. A successful
+Uploads declare `Content-Length`; the body is never chunked. A backend
+that reads by length alone would otherwise store a zero-byte object and
+return success, and every later fetch would get a well-formed empty
+archive.
+
+The wire format is unchanged by the local split: still one archive per
+key. A push rebuilds it from the blobs; a fetch validates it and takes
+it apart into blobs and a manifest, so the fetched entry is a real local
+hit next run rather than another round-trip. A remote entry that fails
+validation never reaches the blob store.
+
+A remote hit warms the local store and restores outputs. A successful
 local execution stores locally, then uploads best-effort. Remote GET
 misses and network failures fall back to execution; PUT failure is
 logged and does not fail the task.

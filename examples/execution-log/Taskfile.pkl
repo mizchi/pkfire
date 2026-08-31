@@ -1,0 +1,64 @@
+/// Fixture for `--execution-log`.
+///
+/// The log is a contract with tooling that is not in this repository:
+/// CI dashboards, cache-hit-rate reports, anything asking "what did
+/// this build actually do" after the terminal is gone. Asserting its
+/// shape from a *task* rather than from the harness is deliberate —
+/// the check reads the file exactly the way a consumer would, so a
+/// field that silently changes name fails here instead of in someone's
+/// dashboard a release later.
+amends "package://pkg.pkl-lang.org/github.com/mizchi/pkfire/pkfire@0.10.0#/Taskfile.pkl"
+
+local gen = new Task {
+  name = "gen"
+  cmd = "cp seed.txt built.txt"
+  inputs { "seed.txt" }
+  outputs { "built.txt" }
+}
+
+/// Depends on `gen`, so the two form a chain the critical path can be
+/// computed over — a single action would report no path at all.
+local pack = new Task {
+  name = "pack"
+  cmd = "cp built.txt packed.txt"
+  inputs { "built.txt" }
+  outputs { "packed.txt" }
+  deps { gen }
+}
+
+/// Reads back the log a previous run wrote. Named checks rather than a
+/// pile of greps so a failure says which field went missing.
+local checkLog = new Task {
+  name = "check-log"
+  cmd =
+    """
+    test "$(wc -l < run.jsonl)" -eq 3 || { echo "expected 3 lines"; exit 1; }
+    grep -q '"kind":"action"' run.jsonl || { echo "no action line"; exit 1; }
+    grep -q '"task":"gen"' run.jsonl || { echo "gen missing"; exit 1; }
+    grep -q '"task":"pack"' run.jsonl || { echo "pack missing"; exit 1; }
+    grep -q '"status":"ran"' run.jsonl || { echo "no ran status"; exit 1; }
+    tail -n 1 run.jsonl | grep -q '"kind":"summary"' || { echo "summary not last"; exit 1; }
+    tail -n 1 run.jsonl | grep -q '"version":1' || { echo "no version"; exit 1; }
+    tail -n 1 run.jsonl | grep -q '"ran":2' || { echo "wrong ran count"; exit 1; }
+    tail -n 1 run.jsonl | grep -q '"criticalPath":\\["gen","pack"\\]' || { echo "no critical path"; exit 1; }
+    echo execution log ok
+    """
+  cache = false
+}
+
+/// Second half: a run whose actions all hit records them as hits, not
+/// as work. A log that reports a fully cached build as `ran` is worse
+/// than no log — it is the exact number a cache report is asking for.
+local checkCached = new Task {
+  name = "check-cached"
+  cmd =
+    """
+    grep -q '"status":"cached-local"' cached.jsonl || { echo "no cache-hit status"; exit 1; }
+    grep '"kind":"action"' cached.jsonl | grep -q '"exitCode"' && { echo "cache hit carried an exit code"; exit 1; }
+    tail -n 1 cached.jsonl | grep -q '"ran":0' || { echo "cached run reported work"; exit 1; }
+    echo cached log ok
+    """
+  cache = false
+}
+
+tasks { gen; pack; checkLog; checkCached }

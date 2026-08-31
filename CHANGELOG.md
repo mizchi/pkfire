@@ -10,7 +10,186 @@ Action version all move together — there is one tag per release
 
 ## [Unreleased]
 
+### Fixed
+
+- **`pkf run lint:workflows` (actionlint) joins the preflight gate.** A
+  workflow can be perfectly valid YAML and still be rejected by GitHub
+  Actions, in which case it runs *no jobs at all* — the failure looks
+  like CI skipping the checks rather than like a syntax error. A
+  duplicate `NO_PROXY` / `no_proxy` pair (legal YAML; env names are
+  case-insensitive to Actions) took the whole smoke workflow out this
+  way. The task skips with a note when `actionlint` is not installed, so
+  a contributor without it can still run the gate; CI installs it.
+
+- **The remote cache uploaded nothing to a backend that reads bodies by
+  `Content-Length`.** The PUT went out `Transfer-Encoding: chunked` with
+  no length — legal HTTP, and the reference Cloudflare Worker handles
+  it, but an object store or any handler that does not special-case
+  chunked read zero bytes, stored an empty object, and returned success.
+  Every later fetch then got a well-formed *empty* archive, so the
+  remote cache was silently doing nothing and nothing in the output said
+  so.
+
+  Uploads now declare `Content-Length`. That meant driving the HTTP
+  client directly: the convenience `put` wrapper hands headers to the
+  *connection*, and only a request's own headers are scanned for a
+  content length, so a `Content-Length` passed there was dropped and the
+  body still went out chunked.
+
+  `examples/remote-cache-worker/testing/` gains a deliberately strict
+  server that rejects a chunked body with 411; CI uploads to it and
+  fetches back, so a regression fails the build.
+
 ### Added
+
+- **`config`: build settings that propagate down the graph.**
+  `targetPlatform` says *where* a subtree's output is meant to run and
+  now transitions to dependencies. `config` is the same mechanism for
+  everything else about how a subtree is built.
+
+  ```pkl
+  local app = new Task {
+    name = "app"
+    config { ["mode"] = "release" }
+    deps { lib }
+  }
+  ```
+
+  `lib` is built in release mode too — without saying so, and without
+  being duplicated once per mode. Each setting reaches the command as
+  `$PKF_CONFIG_<KEY>` uppercased, so a script can act on it, and is part
+  of the action key because the command sees it.
+
+  Settings **merge per key** rather than replacing wholesale, so a host
+  tool that must always build unoptimized pins the one setting it cares
+  about and inherits the rest. A declared `targetPlatform`, by contrast,
+  replaces the inherited one — a host tool inside a cross build is not
+  building for arm64 in any sense.
+
+  `pkf run --config KEY=VALUE` (repeatable) seeds the run; a task's own
+  declaration still wins for its subtree, so pinning cannot be
+  overridden from the outside. A bare key with no `=` is refused rather
+  than read as an empty value.
+
+  Two different values for one setting on one task in the same run are
+  refused exactly as two platforms are, and the message names the
+  setting that differs rather than making the reader diff two
+  configurations by eye.
+
+- **`targetPlatform` propagates down the graph.** It said what a task
+  builds *for*, and it was read straight off the task — so it stopped at
+  the task that declared it. A cross build's dependencies were resolved
+  and keyed for the *host*, which meant two different cross builds
+  shared one entry for a library that should have been built twice, and
+  a library's `toolchains` resolved to the host compiler inside an arm64
+  build.
+
+  ```pkl
+  local lib = new Task { name = "lib" }                                  // no platform
+  local app = new Task { name = "app"; targetPlatform = "linux/arm64"; deps { lib } }
+  ```
+
+  `pkf run lib` builds `lib` for the machine it runs on; `pkf run app`
+  builds it for `linux/arm64`, with a different action key and the cross
+  compiler selected. This is Bazel's configuration transition in its
+  simplest form: a target's identity is the task *and* the configuration
+  it was reached in.
+
+  Only a declared `targetPlatform` transitions anything — a task without
+  one passes no opinion down, so a `ci` umbrella does not force the
+  execution platform onto everything beneath it — and a task that
+  declares its own is never transitioned by a consumer, which is what a
+  code generator that must run on the build machine needs.
+
+  A task reached in two different declared configurations in one run is
+  **refused by name**, with both platforms and both origins, rather than
+  silently built once and handed to both. Building it twice needs
+  per-configuration output roots, which do not exist yet.
+
+  No schema change: `targetPlatform` is unchanged, only where it
+  reaches. Action keys move for any task that is a dependency of one
+  declaring a `targetPlatform` — those entries were keyed wrong.
+
+- **The cache entry is split into an ActionCache manifest and
+  content-addressed blobs.** An entry used to be one gzipped tar per
+  action key, which stores every output of every key in full — and
+  outputs mostly do not change. Measured on a task with 300 declared
+  outputs, editing one input file stored a second 8 MB archive of which
+  all but one file was a byte-identical copy of the first.
+
+  ```
+  <cache>/ac/<key[0:2]>/<key[2:]>/result.json    what the action produced
+  <cache>/blobs/<digest[0:2]>/<digest[2:]>       the bytes, named by content
+  ```
+
+  On that task the second run now costs one blob instead of 8 MB, and
+  `pkf cache stats` reports the difference as a `shared:` line. Blobs are
+  named by the SHA-256 of their uncompressed content and stored gzipped,
+  so the same bytes land on the same name whichever run wrote them. The
+  manifest is written last, after every blob it names, so an entry that
+  exists is one whose contents are already on disk; a manifest is
+  validated in full — paths, symlink targets, blob presence, expansion
+  cap — before anything is written, so an unusable entry is a miss and
+  never a partial restore.
+
+  Entries written before the split are still read, so upgrading does not
+  cold-start a warm cache. The remote wire format is unchanged — still
+  one archive per key, rebuilt from the blobs on push and taken apart
+  into them on fetch — so a shared remote keeps working with older
+  clients.
+
+  Because entries share blobs, removing one frees nothing by itself:
+  `pkf cache prune` and `pkf cache rm` now sweep every blob no remaining
+  entry names and report what the sweep actually deleted. `pkf cache
+  clear` removes manifests, blobs and any pre-split archives, and still
+  leaves the Pkl evaluation cache alone.
+
+- **`retries` on a task: extra attempts after a failure.** For the test
+  suite that fails one run in fifty on a race nobody has time to find
+  this week. Without it the choice is a red build on a green tree or
+  `|| true` in the `cmd`, and `|| true` never comes back out — it hides
+  the day the test starts failing every time.
+
+  ```pkl
+  retries = 2
+  ```
+
+  A retry keeps the failure visible: every attempt is announced on
+  stderr, and the count reaches `--execution-log` as `attempts` on the
+  action and `retried` on the summary, so "this task retries constantly"
+  is a number rather than a feeling. A task that fails every time still
+  fails, with the command's own exit code.
+
+  Each attempt gets a fresh sandbox under `--sandbox`, so a retry cannot
+  read what the failed attempt left behind and a half-written output
+  never reaches the workspace. Services started for the task stay up
+  across attempts — a flaky test usually needs its database still
+  running. Not part of the action key, for the same reason as
+  `timeoutSeconds`: only the attempt that succeeded is stored.
+
+- **`pkf run --execution-log=FILE` writes a machine-readable record of
+  the run.** `--timing` prints, and printing is where the record ends —
+  the numbers scroll past and nothing else can read them. The questions
+  that outlast one terminal (is CI's cache hitting, which action has
+  been getting slower, what did last night's build redo) are asked by
+  tooling, over many runs.
+
+  One JSON object per line: an `action` line per action in completion
+  order, then a `summary` line.
+
+  ```
+  {"kind":"action","task":"gen","status":"ran","exitCode":0,"startMs":0,"durationMs":5}
+  {"kind":"summary","version":1,"exitCode":0,"wallMs":10,"actions":2,"ran":2,"cached":0,"skipped":0,"criticalPathMs":10,"criticalPath":["gen","pack"]}
+  ```
+
+  `status` distinguishes `cached-local` from `cached-remote`, since the
+  two cost very different amounts of time. Only `ran` carries an
+  `exitCode` — a hit has none rather than a zero, so a consumer
+  filtering on "exited zero" cannot pick up work that never ran — and
+  only `skipped` carries `blockedBy`. The summary carries the critical
+  path because the log records no edges and it cannot be recomputed
+  from start times. The flag is not part of any action key, so using it
+  never invalidates a cache entry.
 
 - **`run` is optional: `pkf build` means `pkf run build`.** Running a
   task is the overwhelmingly common thing to do with this tool, and

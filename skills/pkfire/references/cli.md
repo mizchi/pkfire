@@ -32,7 +32,7 @@ implemented.
 
 | Command | Implemented arguments | Result |
 | --- | --- | --- |
-| `run` | `<task>... [-j N\|auto] [--sandbox] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
+| `run` | `<task>... [-j N\|auto] [--sandbox] [--dry-run] [--print-hash] [--explain-cache] [--no-cache] [--refresh] [--remote-only] [--quiet] [--timing] [--execution-log=FILE] [--config=KEY=VALUE]... [--keep-going] [--profile=NAME] [--declared=value]... [-- positional...]` | Run one or more targets and their transitive deps. Task-name globs are expanded. |
 | `affected` | `<path>...`, `--changed=<file>`, or `--check` | Print the affected plan or run authored workflow tests. |
 | `watch` | `[task...]` | Watch the Taskfile directory and run affected non-service tasks, optionally filtered to exact names. |
 | `up` | `[service...]` | Start all or selected service tasks in the foreground. |
@@ -94,10 +94,10 @@ reported findings and changed nothing.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `cache stats` | none | Print root, entry count, size, and oldest/newest timestamps. |
-| `cache prune` | `--older-than DUR`, `--dry-run` | Remove old entries; duration accepts `d`, `h`, `m`, or `s`. |
-| `cache rm` | one or more full keys or unique prefixes | Remove matching entries. |
-| `cache clear` | `--yes` | Remove the entire CAS; refuses without confirmation. |
+| `cache stats` | none | Print root, entry count, blob count, bytes on disk, how much blob sharing saved, and oldest/newest timestamps. |
+| `cache prune` | `--older-than DUR`, `--dry-run` | Remove old entries, then sweep blobs no remaining entry names; duration accepts `d`, `h`, `m`, or `s`. |
+| `cache rm` | one or more full keys or unique prefixes | Remove matching entries, then sweep unreferenced blobs. |
+| `cache clear` | `--yes` | Remove every entry, blob, and pre-split archive; leaves the Pkl evaluation cache. Refuses without confirmation. |
 
 ## Recommended inspection sequence
 

@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "aarch64-linux-gnu-gcc 13.2"

@@ -376,6 +376,30 @@ class Task {
   /// punish tuning the number.
   timeoutSeconds: Int(this >= 0) = 0
 
+  /// Extra attempts after a failure, before the task is called failed.
+  /// 0 (the default) means one attempt and no retry.
+  ///
+  /// For the test suite that fails one run in fifty on a race nobody
+  /// has time to find this week. Without it the choice is a red build
+  /// on a green tree or `|| true` in the `cmd`, and `|| true` never
+  /// comes back out — it hides the day the test starts failing every
+  /// time. A retry keeps the failure visible: every attempt is printed,
+  /// and the count lands in `--execution-log`, so "this task retries
+  /// constantly" is a number someone can act on.
+  ///
+  /// Only a task that is honestly non-deterministic should set this. A
+  /// retry cannot fix a missing `inputs` line — the second attempt
+  /// reads the same undeclared file — and it costs the run the time of
+  /// every attempt.
+  ///
+  /// Under `--sandbox` each attempt gets a fresh sandbox, so a retry
+  /// never inherits the debris of the attempt that failed.
+  ///
+  /// Not part of the action key, for the same reason as
+  /// `timeoutSeconds`: only the attempt that succeeded is stored, and
+  /// what it produced does not depend on how many came before it.
+  retries: Int(this >= 0) = 0
+
   /// Execution platforms this task can run on, as `<os>/<arch>`
   /// strings — `{ "linux/amd64"; "linux/arm64" }`. Empty means any.
   ///
@@ -396,6 +420,42 @@ class Task {
   /// result is meant to run must not share a cache entry. Null means
   /// the task builds for the machine it runs on.
   targetPlatform: String? = null
+
+  /// Build settings this task and everything under it are built with.
+  ///
+  /// `targetPlatform` says *where* a subtree's output is meant to run
+  /// and propagates down the graph. This is the same mechanism for
+  /// everything else about how it is built:
+  ///
+  ///     local app = new Task {
+  ///       name = "app"
+  ///       config { ["mode"] = "release" }
+  ///       deps { lib }
+  ///     }
+  ///
+  /// `lib` is now built in release mode too, without saying so and
+  /// without being duplicated for each mode. Each setting reaches the
+  /// command as `$PKF_CONFIG_<KEY>` uppercased — `$PKF_CONFIG_MODE`
+  /// here — so a script can act on it.
+  ///
+  /// Merged per key, not replaced: a task inherits every setting from
+  /// whoever depends on it and overrides only the keys it names. A host
+  /// tool that must always build unoptimized can pin `mode` for itself
+  /// and its own subtree while inheriting everything else.
+  ///
+  /// `pkf run --config KEY=VALUE` seeds the targets named on the
+  /// command line. A task's own declaration still wins for its subtree,
+  /// so pinning cannot be overridden from the outside.
+  ///
+  /// Part of the action key, because the command sees it. Distinct from
+  /// `env`, which is this task's environment and reaches nothing else,
+  /// and from `params`, which are per-invocation flags rather than a
+  /// property of a subtree.
+  ///
+  /// A task reached with two different values for one setting in one
+  /// run is refused: it has one set of `outputs`, so both would write
+  /// the same paths.
+  config: Mapping<String, String> = new {}
 
   /// Commands this task runs, each cached separately. See `Step`.
   ///
@@ -525,8 +585,10 @@ class RenderedTask {
   params: Listing<RenderedParam>
   toolchains: Listing<RenderedToolchain>
   timeoutSeconds: Int
+  retries: Int
   requiresPlatform: Listing<String>
   targetPlatform: String?
+  config: Mapping<String, String>
   steps: Listing<RenderedStep>
   provides: RenderedProviders
   specRef: String?
@@ -615,8 +677,10 @@ local rendered: Mapping<String, RenderedTask> = new Mapping {
         }
       }
       timeoutSeconds = t.timeoutSeconds
+      retries = t.retries
       requiresPlatform = t.requiresPlatform
       targetPlatform = t.targetPlatform
+      config = t.config
       steps = new Listing {
         for (st in t.steps) {
           new RenderedStep {
