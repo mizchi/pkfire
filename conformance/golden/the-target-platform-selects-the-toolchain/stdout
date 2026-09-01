@@ -1,7 +1,7 @@
 task:        cross
 action key:  799efa41eb820c581cbf42fa04ec5d8789d79baf5ee710d633c24fd213da0cab
 cache:       true
-workdir:     /tmp/pkfconf-the-target-platform-selects-the-toolchain-.1697.655abda1/work  (Taskfile dir)
+workdir:     /tmp/pkfconf-the-target-platform-selects-the-toolchain-.16423.bca7cf43/stage/examples/cross  (Taskfile dir)
 deps:        (none)
 dependents:  (none)
 

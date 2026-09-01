@@ -1,58 +1,16 @@
-pkf — pkfire task runner
-
-usage:
-  pkf <command> [args]
+usage: pkf <command> [args...]
 
 commands:
-  init [-f FILE] [--force]              write a starter Taskfile.pkl
-  run [-f FILE] [-j N] [--watch] [--dry-run] [--print-hash|--explain-cache] [--no-cache|--refresh] [--timing] [task...]
-                                        run one or more tasks (no arg = the default task); multi-target runs the union
-  up  [-f FILE] [-j N] [--watch] <task> start every service in <task>'s subgraph;
-                                        Ctrl+C releases the whole process tree
-  list [-f FILE] [-v|--long|--json] [--all] [--unsorted] [--color=auto|always|never]
-                                        list declared public tasks (-v: detail; --long: audit table; --json: machine-readable)
-  describe [-f FILE] [--json] <task>    show a single task's desc / params / inputs / outputs / cache / deps
-                                        (also reachable as 'pkf run <task> --help')
-  info [-f FILE] [--json] [--all]       structured snapshot: schema version + defaults + tasks + workflowTests
-                                        (intended as the single JSON source for downstream doc / report generators)
-  graph [-f FILE] [--format FMT|--json] [--target TASK] [--all] [--unsorted]
-                                        emit DAG (formats: dot, mermaid, tree, json)
-  doctor [-f FILE] [--json] [--fix]     diagnose pkfire setup (pkf/pkl/cache/remote/taskfile)
-  lint [-f FILE] [--json] [--fix]       detect Taskfile dead code and suspicious task definitions
-  format [-f FILE] [--check] [PATH...]  pkl format -w (no PATH = the Taskfile's directory)
-  hooks <install|uninstall|list> [-f FILE] [--force]
-                                        manage .git/hooks shims that delegate to pkf run
-  affected [--since=<ref>|--files=PATH] [--explain] [--dry-run] [task...]
-                                        run only tasks whose inputs changed (and their dependents); --check runs workflowTests
-  clean [-f FILE] [--dry-run] [task...] remove tasks' declared outputs (no arg = every task with outputs)
-  cache <stats|prune|rm|clear> [args]   inspect / clean the local CAS at $PKFIRE_CACHE_DIR
-  completion <bash|zsh|fish>            emit a shell-completion script to stdout
-  explain [--diff OLD_FILE] <task>       dump or compare inputs to the task's action key
-  migrate --to=<ver> [-f FILE] [--dry-run]
-                                        rewrite Taskfile.pkl's amends URI; verify via pkl eval
-  pkl-cache warm [-f FILE] [PATH...]    pre-evaluate Pkl files so ~/.pkl/cache is populated before parallel jobs
-  version                               print pkf version
-  help                                  show this message
-
-flags:
-  -f, --file FILE        path to Taskfile.pkl (default: ./Taskfile.pkl)
-  -j, --jobs N           max concurrent tasks (default: NumCPU)
-      --watch            re-run on input changes (Ctrl+C to stop)
-      --dry-run          print the plan and exit (run/affected/clean/migrate/doctor/lint)
-      --files PATH       (affected only) simulate changed file(s); repeat or comma-separate
-      --explain          (affected only) show which input patterns matched
-      --check            (affected only) run Taskfile workflowTests
-      --print-hash       print action keys for the target subgraph and exit
-      --explain-cache    explain per-task cache hit/miss/forced-run decisions and exit
-      --no-cache         disable cache lookup and store for this run
-      --refresh          skip cache lookup but still store results (re-baseline)
-      --json             (list/graph/doctor/lint) machine-readable output
-      --fix              (doctor/lint) apply safe fixes
-      --long             (list only) compact audit table
-      --all              (list/graph) include internal tasks
-      --unsorted         (list/graph) use declaration order instead of alphabetical
-      --color MODE       (list only) auto, always, never (default: auto)
-  -v, --verbose          (list only) include cmd preview and deps
-
-cache directory:
-  $PKFIRE_CACHE_DIR if set, otherwise $XDG_CACHE_HOME/pkfire (~/.cache/pkfire).
+  run <task>... [-j N|auto] [--dry-run] [--print-hash] [--no-cache]
+              [--refresh] [--explain-cache] [--remote-only]
+              [--keep-going] [--profile=NAME] [--quiet] [--timing]
+              [--execution-log=FILE] [--config=KEY=VALUE]...
+              [--name=value]... [-- positional...]
+  list [-v] [--all]
+  graph [--all]
+  affected <path>... | --check
+  watch [task...]
+  up [service...]
+  trace [--check] [--emit] <task>
+  info [--json] [--all]
+  completion <bash|zsh|fish>

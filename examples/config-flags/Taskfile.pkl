@@ -12,7 +12,9 @@
 /// every pinned task to restate settings it has no opinion about.
 ///
 /// Relative `amends`: `config` is unreleased, so this cannot point at a
-/// published package yet.
+/// published package yet. The conformance harness stages the in-repo
+/// schema alongside the fixture, so the relative path resolves there too
+/// and this fixture is covered without waiting for the release.
 amends "../../pkl/Taskfile.pkl"
 
 local lib = new Task {

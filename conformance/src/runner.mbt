@@ -20,9 +20,20 @@ pub struct RunResult {
 /// snapshot -> diff.
 pub async fn run(bin : String, s : Scenario, repo_root : String) -> RunResult {
   let tmp = @xfs.tmpdir(prefix="pkfconf-\{s.id}-")
-  let work = tmp + "/work"
+  // The fixture keeps its path relative to the repo root inside the
+  // staging tree, and the in-repo schema is staged at the same relative
+  // position. A fixture for an unreleased schema field has no package
+  // URI to amend yet, so it amends `../../pkl/Taskfile.pkl`; copying only
+  // the fixture directory left that pointing outside the temp tree, which
+  // is why such fixtures had no conformance scenario at all.
+  //
+  // `work` still names the fixture root, so the snapshot, the run
+  // directory, the setup cwd and every `fsDelta` path are unchanged.
+  let stage = tmp + "/stage"
+  let work = stage + "/" + s.fixture
   let cache = tmp + "/cache"
   copy_tree(repo_root + "/" + s.fixture, work)
+  copy_tree(repo_root + "/pkl", stage + "/pkl")
   @xfs.mkdir(cache, recursive=true)
 
   // Environment: process env + PKFIRE_CACHE_DIR + scenario env (extra_env on

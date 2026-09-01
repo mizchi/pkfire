@@ -1,7 +1,7 @@
 task:        smoke
 action key:  c96f509e0a2810650a8cc9f5e389971f974da30c1c29def48e466463610fe0cb
 cache:       true
-workdir:     /tmp/pkfconf-a-provider-resolves-into-the-consumers-workdir-.1697.f63646a7/work/apps/web  (Taskfile dir)
+workdir:     /tmp/pkfconf-a-provider-resolves-into-the-consumers-workdir-.16423.7ba914e7/stage/examples/providers/apps/web  (Taskfile dir)
 deps:        cli
 dependents:  (none)
 

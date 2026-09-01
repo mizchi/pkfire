@@ -1,3 +1,7 @@
-cache dir: /var/folders/_h/_rf455xj4h3_3g6z86pg244c0000gn/T/pkfconf-cache-stats-structural-4034549257/cache
-entries:   0
-size:      0 B
+cache dir: /root/.cache/pkfire-mbt
+entries:   304
+blobs:     23
+size:      155.1 MB
+shared:    5.5 KB saved (0% of 155.1 MB stored once)
+oldest:    2026-08-29 (1d ago)
+newest:    2026-08-31 (3m ago)

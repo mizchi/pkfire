@@ -1,1 +1,1 @@
-pkf: describe takes a single task name, got [deploy --json]
+pkf: describe takes a single task name, got [deploy, --json]

@@ -86,6 +86,8 @@ _pkf() {
           '--no-cache[disable cache for this run]' \
           '--refresh[skip lookup but store outputs]' \
           '--timing[print task durations]' \
+          '--execution-log[write a JSON Lines record of the run]' \
+          '--config[build setting KEY=VALUE for this run]' \
           '--quiet[suppress per-task log lines]' \
           '--keep-going[do not stop on first failure]' \
           '--profile[profile name for cache keys]' \
