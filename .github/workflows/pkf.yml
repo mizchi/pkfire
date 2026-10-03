@@ -142,6 +142,9 @@ jobs:
           BIN=../../_build/native/release/build/mizchi/pkf/src/cmd/pkf/pkf.exe
           rm -rf "$PKFIRE_MBT_CACHE_DIR" dist
           "$BIN" run build > /dev/null
+          # Record the original key before changing inputs. Directory iteration
+          # order differs across filesystems and may select the current key.
+          key=$("$BIN" run build --print-hash | awk '$2 == "build" { print $1 }')
           printf 'two\n' > src/changing.txt
           "$BIN" run build > /dev/null
           # Two keys, four declared outputs, three distinct contents.
@@ -154,8 +157,6 @@ jobs:
 
           # Dropping one of the two entries frees only what it alone
           # named; the blob the other still names has to survive.
-          key=$(find "$PKFIRE_MBT_CACHE_DIR/ac" -name result.json | head -1 \
-            | sed "s|$PKFIRE_MBT_CACHE_DIR/ac/||; s|/result.json||; s|/||")
           "$BIN" cache rm "$key" | grep -q 'blob' \
             || { echo "rm did not report a sweep"; exit 1; }
           left=$(find "$PKFIRE_MBT_CACHE_DIR/blobs" -type f | wc -l | tr -d ' ')
