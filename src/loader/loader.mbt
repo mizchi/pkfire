@@ -35,6 +35,9 @@ pub suberror LoaderError {
 }
 
 ///|
+pub extend LoaderError with Show::{to_string, output}
+
+///|
 pub impl Show for LoaderError with fn output(self, logger) {
   logger.write_string(self.message())
 }

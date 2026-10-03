@@ -4,7 +4,6 @@ import {
   "mizchi/x/process",
   "mizchi/x/fs" @xfs,
   "moonbitlang/async",
-  "moonbitlang/async/io",
   "moonbitlang/x/crypto",
   "moonbitlang/x/sys",
   "moonbitlang/core/json",
