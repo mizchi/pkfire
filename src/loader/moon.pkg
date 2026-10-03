@@ -7,7 +7,6 @@ import {
   "moonbitlang/x/crypto",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/x/fs",
-  "moonbitlang/core/string",
 }
 
 import {

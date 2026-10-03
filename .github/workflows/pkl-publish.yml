@@ -96,7 +96,7 @@ jobs:
           # build (`Unsupported platform: Darwin x86_64`) and moon does
           # not honour CC for cross-arch, so Intel macOS is unsupported.
           - target: darwin-arm64
-            runs-on: macos-14
+            runs-on: macos-15
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30

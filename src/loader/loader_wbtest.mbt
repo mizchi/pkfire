@@ -73,3 +73,12 @@ async test "read_module_source fetches http:// module text" {
     assert_eq(got, module_text)
   })
 }
+
+///|
+test "LoaderError keeps Show methods available explicitly" {
+  let error = LoaderError("failed to load module")
+  inspect(error.to_string(), content="failed to load module")
+  let logger = StringBuilder()
+  error.output(logger)
+  inspect(logger.to_string(), content="failed to load module")
+}
