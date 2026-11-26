@@ -635,3 +635,27 @@ Installation is idempotent. Non-pkfire hooks are preserved unless
 `--force` is used. Uninstall removes only marked shims. Hook tasks
 should set `cache = false`; use `acceptsArgs = true` when the Git
 event supplies positional arguments.
+
+### Installing on entering the repo (mise)
+
+To keep the shims installed and in step with the Taskfile without
+anyone remembering to run the command, run it from a mise `enter`
+hook in the repository's `mise.toml`:
+
+```toml
+[tools]
+"github:mizchi/pkfire" = { version = "<x.y.z>", version_prefix = "pkfire@", matching = "pkf-" }
+
+# Enter hooks are experimental in mise; without this they warn and do not run.
+[settings]
+experimental = true
+
+[hooks]
+enter = "pkf hooks install >/dev/null 2>&1 || true"
+```
+
+- The hook runs when a shell with `mise activate` enters the directory,
+  not on every prompt. It does not run under `mise exec`.
+- `pkf` from `[tools]` is already on `PATH` when the hook runs.
+- With no task named after a git event, `hooks install` prints a notice
+  and exits 0. The redirect keeps that notice out of every `cd`.
