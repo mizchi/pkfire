@@ -32,7 +32,7 @@ priv struct TarBuilder {
 
 ///|
 fn tar_new() -> TarBuilder {
-  TarBuilder::{ buf: @buffer.Buffer(size_hint=4096) }
+  TarBuilder::{ buf: @buffer.Buffer(capacity=4096) }
 }
 
 ///|
@@ -65,7 +65,7 @@ fn tar_write_dir_entry(tb : TarBuilder, name : String, mode : Int) -> Unit {
   if name_bytes.length() > 100 {
     tar_write_long_name(tb, name_bytes, b'L')
   }
-  tar_write_raw_entry(tb, name, Bytes::new(0), mode, b'5', link_target="")
+  tar_write_raw_entry(tb, name, b"", mode, b'5', link_target="")
 }
 
 ///|
@@ -87,7 +87,7 @@ fn tar_write_symlink_entry(
     tar_write_long_name(tb, target_bytes, b'K')
   }
   tar_write_raw_entry(
-    tb, name, Bytes::new(0), 0o777, b'2', link_target=target,
+    tb, name, b"", 0o777, b'2', link_target=target,
   )
 }
 
@@ -99,7 +99,7 @@ fn tar_write_long_name(
   value : Bytes,
   typeflag : Byte,
 ) -> Unit {
-  let payload = @buffer.Buffer(size_hint=value.length() + 1)
+  let payload = @buffer.Buffer(capacity=value.length() + 1)
   for b in value {
     payload.write_byte(b)
   }
@@ -218,11 +218,12 @@ fn tar_write_octal(
 /// What an archive member is. Restoring a `TarSymlink` as a regular
 /// file (which is what storing only file members amounted to) turns a
 /// link into a copy — a different tree, silently.
+#derive(Eq)
 priv enum TarKind {
   TarFile
   TarDir
   TarSymlink(String)
-} derive(Eq)
+}
 
 ///|
 priv struct TarEntry {

@@ -299,7 +299,7 @@ async fn eval_cache_store(
   ) catch {
     _ => return
   }
-  @xfs.rename(tmp_path.view(), final_path.view(), replace=true) catch {
+  @xfs.rename(tmp_path[:], final_path[:], replace=true) catch {
     _ => @fs.remove_file(tmp_path) catch { _ => () }
   }
 }

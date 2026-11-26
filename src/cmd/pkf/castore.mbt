@@ -118,7 +118,7 @@ async fn blob_put(content : Bytes) -> String? {
   @fs.write_bytes_to_file(tmp, gz) catch {
     _ => return None
   }
-  @xfs.rename(tmp.view(), path.view(), replace=true) catch {
+  @xfs.rename(tmp[:], path[:], replace=true) catch {
     _ => {
       @fs.remove_file(tmp) catch { _ => () }
       return None
@@ -273,7 +273,7 @@ async fn ac_store(key : String, result : ActionResult) -> Bool {
   @fs.write_bytes_to_file(tmp, @utf8.encode(text)) catch {
     _ => return false
   }
-  @xfs.rename(tmp.view(), final_path.view(), replace=true) catch {
+  @xfs.rename(tmp[:], final_path[:], replace=true) catch {
     _ => {
       @fs.remove_file(tmp) catch { _ => () }
       return false
@@ -347,7 +347,7 @@ async fn ac_materialize(result : ActionResult, root : String) -> Bool {
         // it first. No chmod after: a symlink's own mode means nothing
         // and chmod would follow the link and change its target.
         @fs.remove_file(dst) catch { _ => () }
-        @xfs.symlink(target=target.view(), dst.view()) catch {
+        @xfs.symlink(target=target[:], dst[:]) catch {
           _ => return false
         }
         continue
@@ -364,7 +364,7 @@ async fn ac_materialize(result : ActionResult, root : String) -> Bool {
     }
     // Best-effort: a read-only target FS must not abort a restore that
     // otherwise succeeded.
-    @xfs.chmod(dst.view(), out.mode) catch { _ => () }
+    @xfs.chmod(dst[:], out.mode) catch { _ => () }
   }
   true
 }

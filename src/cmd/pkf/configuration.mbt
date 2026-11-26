@@ -37,6 +37,7 @@
 /// string because the next things to land here — configuration flags,
 /// an execution platform distinct from the host — belong beside it and
 /// have to reach the action key the same way.
+#derive(Eq)
 struct Configuration {
   /// `<os>/<arch>` this task builds for, or "" for the execution
   /// platform.
@@ -46,7 +47,7 @@ struct Configuration {
   /// mapping happened to be ordered — the same reason provider env and
   /// toolchain fields are sorted before they reach the key.
   settings : Array[(String, String)]
-} derive(Eq)
+}
 
 ///|
 fn Configuration::host() -> Configuration {

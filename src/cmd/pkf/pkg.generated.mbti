@@ -6,11 +6,52 @@ package "mizchi/pkf/src/cmd/pkf"
 // Errors
 
 // Types and methods
+type AcOutput
+
+type ActionDescriptor
+
+type ActionEdge
+
+type ActionGraph
+
+type ActionNode
+
+#derive(Eq)
+type ActionOutcome
+
+type ActionResult
+
+type ActionRun
+
+#derive(Eq)
+type Artifact
+
+type CapturedLogs
+
+type ConfigConflict
+
+type ConfigReach
+
+#derive(Eq)
+type Configuration
+
+#derive(Eq)
+type EdgeReason
+
+type EvalDeps
+
+type GlobBounds
+
 type GlobCharProductState
 
 type GlobCharTransition
 
 type GlobPathProductState
+
+type GraphEdge
+
+#derive(Eq)
+type GraphFormat
 
 type LintFinding
 
@@ -22,9 +63,34 @@ type ParsedRunArgs
 
 type Plan
 
+type ProvidedValue
+
+type Providers
+
+type ResolvedToolchain
+
+type RunOptions
+
 type RunningService
 
+type Sandbox
+
+type ScheduleResult
+
+type Step
+
 type Task
+
+#derive(Eq)
+type TaskOutcome
+
+type Toolchain
+
+type TracedAccess
+
+type VacuumEntry
+
+type VacuumReport
 
 type WatchCycle
 

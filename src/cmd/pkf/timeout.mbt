@@ -10,12 +10,12 @@
 // So a timed task is spawned in its own process group and torn down
 // through `signal_pid_tree`, the same SIGTERM-then-SIGKILL walk that
 // stops a service. That needs the child's pid, which only
-// `@process.spawn` hands back — `run_inherit` and `collect_output` do
+// `@process.spawn` hands back — `@process.run` and `collect_output` do
 // not — so this is a separate path.
 //
 // It is *only* taken when `timeoutSeconds > 0`. The untimed paths are
 // left exactly as they were, because they carry behaviour worth not
-// disturbing: `run_inherit` gives the command the real terminal, and
+// disturbing: `@process.run` gives the command the real terminal, and
 // the tee forwards output as it arrives. Duplicating a little spawn
 // code is cheaper than making every task pay for a feature most tasks
 // do not use.
@@ -72,28 +72,27 @@ async fn[X] run_with_deadline(
     Some(((_, w_out), (_, w_err))) =>
       @process.spawn(
         group,
-        shell.view(),
+        shell[:],
         argv[:],
         extra_env~,
         inherit_env~,
         stdout=w_out,
         stderr=w_err,
-        cwd=cwd.view(),
+        cwd=cwd[:],
         no_wait=true,
-        new_process_group=true,
       )
     None =>
       @process.spawn(
         group,
-        shell.view(),
+        shell[:],
         argv[:],
         extra_env~,
         inherit_env~,
-        cwd=cwd.view(),
+        cwd=cwd[:],
         no_wait=true,
-        new_process_group=true,
       )
   }
+  set_process_group(proc.pid)
   // The readers must be running while the process does, or a child
   // that fills a pipe buffer blocks and the deadline fires on a
   // command that was only ever waiting for us to read.
@@ -194,9 +193,8 @@ async fn descendant_pids(pid : Int) -> Array[Int] {
 /// worst with — the child it is waiting on. Signalling the child first
 /// is what let `sleep 60; echo never` print `never` after its deadline:
 /// the shell saw its child die, concluded the command had finished, and
-/// carried on. `new_process_group` would have made this a single group
-/// kill, but it does not reliably take (the spawned shell's pgid is not
-/// its own pid), so the tree is enumerated instead of assumed.
+/// carried on. The child can exec before setpgid succeeds, so enumerate
+/// the tree even when a separate process group was requested.
 async fn signal_command_tree(
   pid : Int,
   descendants : Array[Int],

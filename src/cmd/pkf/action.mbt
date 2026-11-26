@@ -128,7 +128,7 @@ fn canon_field(buf : @buffer.Buffer, tag : String, value : String) -> Unit {
 /// Sequence fields emit their length first so a 2-element and a
 /// 3-element list can never produce the same bytes.
 fn canonical_form(a : ActionDescriptor) -> Bytes {
-  let buf = @buffer.Buffer(size_hint=1024)
+  let buf = @buffer.Buffer(capacity=1024)
   canon_field(buf, "version", ACTION_IR_VERSION)
   canon_field(buf, "mnemonic", a.mnemonic)
   canon_field(buf, "executable", a.executable)

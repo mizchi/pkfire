@@ -28,9 +28,10 @@ pub struct Scenario {
 }
 
 ///|
+#derive(Debug)
 suberror ScenarioError {
   ScenarioError(String)
-} derive(Debug)
+}
 
 ///|
 impl Show for ScenarioError with fn output(self, logger) {

@@ -32,7 +32,7 @@ async fn main {
     Some(d) => d
     None => {
       println("conformance: cannot determine cwd")
-      @sys.exit(2)
+      @env.exit(2)
       return
     }
   }
@@ -40,7 +40,7 @@ async fn main {
   let scenarios = load_scenarios("scenarios.pkl") catch {
     e => {
       println("conformance: load scenarios: \{e}")
-      @sys.exit(2)
+      @env.exit(2)
       return
     }
   }
@@ -48,7 +48,7 @@ async fn main {
     Some(b) => b
     None => {
       println("conformance: PKF_MBT_BIN not set")
-      @sys.exit(2)
+      @env.exit(2)
       return
     }
   }
@@ -100,7 +100,7 @@ async fn main {
   }
   print_ledger(rows, pass)
   if pass != rows.length() {
-    @sys.exit(1)
+    @env.exit(1)
   }
 }
 

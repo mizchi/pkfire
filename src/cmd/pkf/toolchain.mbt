@@ -170,7 +170,7 @@ async fn resolve_toolchain(
   // `command -v` rather than `which`: POSIX, built into the shell, and
   // it reports the same executable the command itself will get.
   let (locate_code, located, _) = @process.collect_output(
-    shell.view(),
+    shell[:],
     ["-c", "command -v " + shell_quote(executable)][:],
   )
   let path = if locate_code == 0 {
@@ -190,7 +190,7 @@ async fn resolve_toolchain(
     return missing
   }
   let (version_code, out, err) = @process.collect_output(
-    shell.view(),
+    shell[:],
     ["-c", toolchain_version_command(tc, executable)][:],
   )
   // Version banners land on stdout or stderr depending on the tool, so

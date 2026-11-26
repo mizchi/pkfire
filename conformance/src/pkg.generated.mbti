@@ -14,7 +14,7 @@ pub fn contains_normalized(String, String) -> Bool
 
 pub fn diff_json(String, String, Array[String]) -> String
 
-pub fn lex_compare(String, String) -> Int
+pub fn lex_compare(String, String) -> Int32
 
 pub async fn load_golden(String, Scenario) -> Golden
 
@@ -29,7 +29,8 @@ pub async fn run(String, Scenario, String) -> RunResult
 pub fn strip_json_keys(String, Array[String]) -> String
 
 // Errors
-type ScenarioError derive(@debug.Debug)
+#derive(@debug.Debug)
+type ScenarioError
 
 // Types and methods
 pub struct Contract {
@@ -48,7 +49,7 @@ pub struct Contract {
 pub struct Golden {
   stdout : String
   stderr : String
-  exit : Int
+  exit : Int32
   fs_delta : Array[String]
   fs_deleted : Array[String]
 }
@@ -58,7 +59,7 @@ type LedgerRow
 pub struct RunResult {
   stdout : String
   stderr : String
-  exit : Int
+  exit : Int32
   fs_delta : Array[String]
   fs_deleted : Array[String]
 }

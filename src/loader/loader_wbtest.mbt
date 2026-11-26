@@ -12,7 +12,7 @@ async test "read_module_source downloads package:// on cache miss then reads cac
   let zip = build_fixture_zip()
   let zip_sha = hex_of_bytes(zip)
   @async.with_task_group(group => {
-    let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
+    let server = @http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
     // The cache root is process-global and last-writer-wins across tests
     // (see `set_temp_cache_root`), so this suffix does not isolate anything
@@ -56,7 +56,7 @@ async test "read_module_source downloads package:// on cache miss then reads cac
 ///|
 async test "read_module_source fetches http:// module text" {
   @async.with_task_group(group => {
-    let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
+    let server = @http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
     let module_text = "x = 1"
     group.spawn_bg(() => {

@@ -1,5 +1,5 @@
 // Whitebox tests for the in-process `package://` downloader ported into the
-// loader package (phase 3). A loopback `@async_http.Server` serves both a
+// loader package (phase 3). A loopback `@http.Server` serves both a
 // metadata JSON endpoint (`packageZipUrl` + `packageZipChecksums.sha256`) and
 // the fixture ZIP bytes, so `download_package_uri_to_cache` is exercised end
 // to end against the very ZIP `build_fixture_zip` (from `zip_wbtest.mbt`)
@@ -43,7 +43,7 @@ async test "download_package_uri_to_cache extracts at the loader-resolved path" 
   let zip_sha = hex_of_bytes(zip)
   set_temp_cache_root("ok")
   @async.with_task_group(group => {
-    let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
+    let server = @http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
     // The downloader derives the metadata URL from the `package://` URI:
     //   package://127.0.0.1:<port>/dl-ok/n@1.0.0  ->  http://127.0.0.1:<port>/dl-ok/n@1.0.0
@@ -91,7 +91,7 @@ async test "download_package_uri_to_cache raises on sha256 mismatch" {
   let zip = build_fixture_zip()
   set_temp_cache_root("bad")
   @async.with_task_group(group => {
-    let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
+    let server = @http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
     let metadata = "{\"packageZipUrl\":\"http://127.0.0.1:\{port}/p.zip\",\"packageZipChecksums\":{\"sha256\":\"deadbeef\"}}"
     group.spawn_bg(() => {

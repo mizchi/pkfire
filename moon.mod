@@ -7,8 +7,11 @@ import {
   "mizchi/pkl@0.7.0",
   "mizchi/x@0.5.2",
   "mizchi/zlib@0.4.8",
-  "moonbitlang/async@0.20.3",
-  "moonbitlang/x@0.5.1",
+  "moonbitlang/async@0.22.10",
+  // mizchi/pkl 0.7.0 depends on older releases that do not build with RC1.
+  "moonbit-community/yaml@0.0.10",
+  "moonbitlang/regexp@0.3.7",
+  "moonbitlang/x@0.5.9",
 }
 
 readme = "README.md"

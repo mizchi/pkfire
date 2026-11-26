@@ -3,13 +3,13 @@ import {
   "mizchi/pkf/src/loader",
   "mizchi/pkl",
   "mizchi/x/fs" @xfs,
-  "mizchi/x/http",
-  "mizchi/x/process",
-  "mizchi/x/signal",
-  "mizchi/x/socket",
   "mizchi/zlib",
   "moonbitlang/async",
+  "moonbitlang/async/http",
+  "moonbitlang/async/process",
   "moonbitlang/async/semaphore",
+  "moonbitlang/async/signal",
+  "moonbitlang/async/socket",
   "moonbitlang/core/buffer",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
@@ -17,7 +17,6 @@ import {
   "moonbitlang/core/string",
   "moonbitlang/x/crypto",
   "moonbitlang/x/fs",
-  "moonbitlang/x/sys",
 }
 
 pkgtype(kind: "executable")

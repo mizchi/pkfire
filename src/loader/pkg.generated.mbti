@@ -8,6 +8,8 @@ import {
 // Values
 pub async fn eval_module_path(String) -> @pkl.EvalResult raise LoaderError
 
+pub async fn eval_module_path_tracked(String) -> (@pkl.EvalResult, Array[String]) raise LoaderError
+
 pub fn package_cache_root() -> String
 
 // Errors
@@ -15,6 +17,8 @@ pub suberror LoaderError {
   LoaderError(String)
 }
 pub fn LoaderError::message(Self) -> String
+pub fn LoaderError::output(Self, &Logger) -> Unit
+pub fn LoaderError::to_string(Self) -> String
 pub impl Show for LoaderError
 
 // Types and methods

@@ -1,15 +1,13 @@
 import {
   "mizchi/pkf/src/loader",
   "mizchi/pkl",
-  "mizchi/x/process",
   "mizchi/x/fs" @xfs,
-  "moonbitlang/async",
-  "moonbitlang/x/crypto",
-  "moonbitlang/x/sys",
-  "moonbitlang/core/json",
-  "moonbitlang/core/string",
+  "moonbitlang/async/process",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
+  "moonbitlang/core/json",
+  "moonbitlang/core/string",
+  "moonbitlang/x/crypto",
 }
 
 pkgtype(kind: "executable")
