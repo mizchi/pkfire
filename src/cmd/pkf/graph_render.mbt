@@ -17,6 +17,7 @@
 
 ///|
 /// How to render the graph.
+#derive(Eq)
 enum GraphFormat {
   /// Indented dependency tree; the default, and what `pkf graph` has
   /// printed since the port.
@@ -27,7 +28,7 @@ enum GraphFormat {
   GraphMermaid
   /// `{tasks, edges}`; also reachable as the older `--json`.
   GraphJson
-} derive(Eq)
+}
 
 ///|
 fn parse_graph_format(value : String) -> GraphFormat? {

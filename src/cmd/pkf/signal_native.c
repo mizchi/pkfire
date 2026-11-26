@@ -3,6 +3,9 @@
 #include <stdint.h>
 #ifndef _WIN32
 #include <pthread.h>
+#include <unistd.h>
+#else
+#include <windows.h>
 #endif
 
 /*
@@ -67,4 +70,25 @@ MOONBIT_FFI_EXPORT int32_t mizchi_pkf_signal_install(void) {
 
 MOONBIT_FFI_EXPORT int32_t mizchi_pkf_signal_check(void) {
   return (int32_t)pkf_stop_flag;
+}
+
+/* Best effort: a child may already have exec'd by the time spawn returns. */
+MOONBIT_FFI_EXPORT void mizchi_pkf_set_process_group(int32_t pid) {
+#ifndef _WIN32
+  (void)setpgid(pid, pid);
+#else
+  (void)pid;
+#endif
+}
+
+MOONBIT_FFI_EXPORT void mizchi_pkf_send_process_signal(int32_t pid, int32_t sig) {
+#ifndef _WIN32
+  (void)kill(pid, sig);
+#else
+  HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+  if (process != NULL) {
+    TerminateProcess(process, (UINT)sig);
+    CloseHandle(process);
+  }
+#endif
 }

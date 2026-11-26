@@ -41,7 +41,7 @@ async fn ensure_fspy_lib() -> String? {
   // Build to a temp name and rename, so two concurrent traces cannot
   // hand a half-written .so to the dynamic loader.
   let tmp_lib = lib + ".tmp." + current_pid().to_string()
-  let (code, out) = @process.collect_output_merged(cc.view(), [
+  let (code, out) = @process.collect_output_merged(cc[:], [
     "-shared", "-fPIC", "-O2", "-o", tmp_lib, source_path, "-ldl",
   ]) catch {
     _ => {
@@ -55,7 +55,7 @@ async fn ensure_fspy_lib() -> String? {
     die("pkf trace: failed to build the fspy shim with `\{cc}`:\n" + out.text())
     return None
   }
-  @xfs.rename(tmp_lib.view(), lib.view(), replace=true) catch {
+  @xfs.rename(tmp_lib[:], lib[:], replace=true) catch {
     err => {
       die("pkf trace: cannot install the built shim at \{lib}: \{err}")
       return None
@@ -272,12 +272,12 @@ async fn trace_cmd(
   }
   argv.push(task.cmd)
   println("pkf: $ \{target}  (traced)")
-  let code = @process.run_inherit(
-    task.shell.view(),
+  let code = @process.run(
+    task.shell[:],
     argv[:],
     extra_env~,
     inherit_env=task.inherit_env,
-    cwd=task_cwd.view(),
+    cwd=task_cwd[:],
   )
   let log = @fs.read_file_to_string(log_path) catch { _ => "" }
   @fs.remove_file(log_path) catch { _ => () }

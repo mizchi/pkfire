@@ -57,8 +57,6 @@ async fn fetch_uri(url : String) -> String? {
     try {
       let (resp, body) = @http.get(current)
       if resp.code >= 300 && resp.code < 400 {
-        // native lowercases response header keys, so only `location` is ever
-        // present (the capital-L fallback was dead).
         match resp.headers.get("location") {
           Some(next) => {
             let target = resolve_location(current, next)
@@ -106,8 +104,6 @@ async fn fetch_uri_bytes(url : String) -> Bytes? {
     try {
       let (resp, body) = @http.get(current)
       if resp.code >= 300 && resp.code < 400 {
-        // native lowercases response header keys, so only `location` is ever
-        // present (the capital-L fallback was dead).
         match resp.headers.get("location") {
           Some(next) => {
             let target = resolve_location(current, next)

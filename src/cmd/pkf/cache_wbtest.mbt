@@ -362,7 +362,7 @@ test "tar rejects member kinds the cache never writes" {
   // carrying one did not come from it.
   let tb = tar_new()
   tar_write_raw_entry(
-    tb, "out/hard", Bytes::new(0), 0o644, b'1', link_target="out/f.txt",
+    tb, "out/hard", b"", 0o644, b'1', link_target="out/f.txt",
   )
   match tar_iter(tar_finish(tb)) {
     TarOk(_) => fail("expected the hardlink member to be rejected")

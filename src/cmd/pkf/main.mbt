@@ -97,7 +97,7 @@ struct Plan {
 ///|
 fn die(message : String) -> Unit {
   eprintln("pkf: \{message}")
-  @sys.exit(1)
+  @env.exit(1)
 }
 
 ///|
@@ -1098,7 +1098,7 @@ fn detect_file_mode(path : String) -> Int {
   }
   // Fallback (Windows or stat error): the previous magic-byte heuristic.
   // 0o755 for ELF / Mach-O / PE / shebang, 0o644 otherwise.
-  let bytes = @fs.read_file_to_bytes(path) catch { _ => Bytes::new(0) }
+  let bytes = @fs.read_file_to_bytes(path) catch { _ => b"" }
   if looks_executable(bytes) {
     0o755
   } else {
@@ -1444,7 +1444,7 @@ fn hex_digit(n : Int) -> Char {
 
 ///|
 fn hex_encode(bytes : FixedArray[Byte]) -> String {
-  let buf = StringBuilder(size_hint=bytes.length() * 2)
+  let buf = StringBuilder(capacity=bytes.length() * 2)
   for i in 0..<bytes.length() {
     let b = bytes[i].to_int()
     buf.write_char(hex_digit((b >> 4) & 0xf))
@@ -1465,7 +1465,7 @@ fn sorted_keys(map : Map[String, String]) -> Array[String] {
 
 ///|
 fn hash_file(path : String) -> FixedArray[Byte] {
-  let bytes = @fs.read_file_to_bytes(path) catch { _ => Bytes::new(0) }
+  let bytes = @fs.read_file_to_bytes(path) catch { _ => b"" }
   @crypto.sha256(bytes)
 }
 
@@ -1701,7 +1701,7 @@ async fn cache_hit(key : String) -> Bool {
   }
   // Read only the three-byte header, not the whole blob: this runs once
   // per task per run, and an entry can be hundreds of megabytes.
-  let file = @xfs.open(path.view(), mode=ReadOnly) catch { _ => return false }
+  let file = @xfs.open(path[:], mode=ReadOnly) catch { _ => return false }
   defer file.close()
   let header = file.read_exactly_at(3, position=0L) catch { _ => return false }
   // gzip magic (0x1f 0x8b) + deflate method (0x08).
@@ -1929,7 +1929,7 @@ async fn cache_restore(
         // A path already there is whatever the previous run left; the
         // link cannot be created over it, so clear it first.
         @fs.remove_file(dst) catch { _ => () }
-        @xfs.symlink(target=target.view(), dst.view()) catch {
+        @xfs.symlink(target=target[:], dst[:]) catch {
           _ => return false
         }
         // No chmod: a symlink's own mode is not meaningful, and chmod
@@ -1945,7 +1945,7 @@ async fn cache_restore(
     // Preserve the recorded mode (executable bit, etc.). Best-effort:
     // chmod failures are swallowed so a read-only target FS doesn't
     // abort the restore.
-    @xfs.chmod(dst.view(), entry.mode) catch {
+    @xfs.chmod(dst[:], entry.mode) catch {
       _ => ()
     }
   }
@@ -1988,8 +1988,8 @@ fn remote_token() -> String? {
 }
 
 ///|
-fn remote_headers() -> Map[String, String] {
-  let h : Map[String, String] = Map([], capacity=2)
+fn remote_headers() -> @http.Headers {
+  let h : @http.Headers = Map([], capacity=2)
   match remote_token() {
     Some(t) => h["Authorization"] = "Bearer " + t
     None => ()
@@ -2059,17 +2059,13 @@ async fn remote_put_bytes(url : String, bytes : Bytes) -> Bool {
   // Only on the write path: `remote_headers` is shared with the GET,
   // which has no body.
   headers["Content-Length"] = bytes.length().to_string()
-  // `@http.put` cannot carry it. That convenience wrapper hands headers
-  // to the *connection*, and only a request's `extra_headers` are
-  // scanned for a content length — so a `Content-Length` passed there
-  // is dropped and the body still goes out chunked. Driving the client
-  // directly is what puts the header on the request itself.
+  // Set Content-Length on the request so fixed-length cache servers accept it.
   let (origin, path) = match split_url_origin(url) {
     Some(pair) => pair
     None => return false
   }
   try {
-    let client = @http.Client::new(origin)
+    let client = @http.Client(origin)
     defer client.close()
     let resp = client.put(path, bytes, extra_headers=headers)
     resp.code >= 200 && resp.code < 300
@@ -2175,14 +2171,14 @@ async fn run_ready_cmd(task : Task) -> Bool {
   let (code, _, _) = match task.workdir {
     Some(cwd) =>
       @process.collect_output(
-        task.shell.view(),
+        task.shell[:],
         argv[:],
         inherit_env=task.inherit_env,
-        cwd=cwd.view(),
+        cwd=cwd[:],
       )
     None =>
       @process.collect_output(
-        task.shell.view(),
+        task.shell[:],
         argv[:],
         inherit_env=task.inherit_env,
       )
@@ -2259,27 +2255,26 @@ async fn[X] start_service(
     Some(cwd) =>
       @process.spawn(
         group,
-        service_task.shell.view(),
+        service_task.shell[:],
         argv[:],
         extra_env~,
         inherit_env=service_task.inherit_env,
-        cwd=cwd.view(),
+        cwd=cwd[:],
         cancel_handler=handler,
         no_wait=true,
-        new_process_group=true,
       )
     None =>
       @process.spawn(
         group,
-        service_task.shell.view(),
+        service_task.shell[:],
         argv[:],
         extra_env~,
         inherit_env=service_task.inherit_env,
         cancel_handler=handler,
         no_wait=true,
-        new_process_group=true,
       )
   }
+  set_process_group(proc.pid)
   // Wait for readiness (readyPort + readyCmd, whichever are set).
   let ok = wait_until_ready(service_task)
   if !ok {
@@ -2297,12 +2292,7 @@ async fn[X] start_service(
 
 ///|
 async fn signal_pid_tree(pid : Int, signal : @signal.Signal) -> Unit {
-  // Send `signal` to `pid` and every descendant. mizchi/x/process's
-  // `new_process_group` is best-effort (sub-millisecond race against
-  // child exec / setpgid), so we still need to walk the parent-pid
-  // tree via `pkill -P` for the subtree. The direct leaf signal
-  // dispatches through the native `kill(2)` wrapper added in
-  // mizchi/x@0.3.3 — one fewer subprocess per teardown.
+  // The child can exec before setpgid succeeds, so signal its children by PID.
   let sig_name = match signal {
     @signal.SIGTERM => "TERM"
     @signal.SIGINT => "INT"
@@ -2315,7 +2305,7 @@ async fn signal_pid_tree(pid : Int, signal : @signal.Signal) -> Unit {
   catch {
     _ => ()
   }
-  @process.kill(pid, signal)
+  send_process_signal(pid, signal.to_int())
 }
 
 ///|
@@ -2341,7 +2331,7 @@ async fn stop_services(running : Array[RunningService]) -> Unit {
           ignore(j)
         }
         if !exited {
-          // SIGKILL is not in mizchi/x/signal.Signal — fall back to the
+          // SIGKILL is not in @signal.Signal — fall back to the
           // subprocess `kill -KILL` for the hard shutdown path.
           try
             @process.collect_output("pkill", ["-KILL", "-P", p.pid.to_string()])
@@ -2454,6 +2444,7 @@ struct RunOptions {
 /// How a task finished. The exit code alone cannot tell a run that did
 /// the work from one that skipped it, which is exactly what a reader
 /// wants to know at the end of a build.
+#derive(Eq)
 enum TaskOutcome {
   /// The command ran and exited with this code.
   Ran(Int)
@@ -2465,7 +2456,7 @@ enum TaskOutcome {
   Umbrella
   /// `--dry-run` / `--print-hash`: reported and executed nothing.
   Reported
-} derive(Eq)
+}
 
 ///|
 /// The exit code a `TaskOutcome` implies.
@@ -2917,30 +2908,30 @@ async fn[X] run_task(
           // Pipes unavailable: run the task rather than fail it, and
           // store an entry without a log rather than no entry at all.
           None =>
-            @process.run_inherit(
-              task.shell.view(),
+            @process.run(
+              task.shell[:],
               argv[:],
               extra_env~,
               inherit_env=task.inherit_env && !task.hermetic,
-              cwd=run_cwd.view(),
+              cwd=run_cwd[:],
             )
         }
       None =>
-        @process.run_inherit(
-          task.shell.view(),
+        @process.run(
+          task.shell[:],
           argv[:],
           extra_env~,
           inherit_env=task.inherit_env && !task.hermetic,
-          cwd=run_cwd.view(),
+          cwd=run_cwd[:],
         )
     }
   } else {
     let (status, out_data, err_data) = @process.collect_output(
-      task.shell.view(),
+      task.shell[:],
       argv[:],
       extra_env~,
       inherit_env=task.inherit_env && !task.hermetic,
-      cwd=run_cwd.view(),
+      cwd=run_cwd[:],
     )
     if !opts.quiet && !task.quiet {
       println("pkf: $ \{task.name}")
@@ -3604,12 +3595,12 @@ fn validate_param_value(p : Param, value : String) -> Bool {
 
 ///|
 fn pkf_version() -> String {
-  "0.16.0"
+  "0.17.0"
 }
 
 ///|
 fn upcase(name : String) -> String {
-  let buf = StringBuilder(size_hint=name.length())
+  let buf = StringBuilder(capacity=name.length())
   for i in 0..<name.length() {
     let c = name[i]
     if c >= 'a' && c <= 'z' {
@@ -4412,6 +4403,12 @@ async fn[X] watch_cmd(
   }
   0
 }
+
+///|
+extern "C" fn set_process_group(pid : Int32) -> Unit = "mizchi_pkf_set_process_group"
+
+///|
+extern "C" fn send_process_signal(pid : Int32, signal : Int32) -> Unit = "mizchi_pkf_send_process_signal"
 
 ///|
 /// FFI: install custom SIGINT/SIGTERM handler that flips a sig_atomic_t
@@ -7093,7 +7090,7 @@ async fn format_cmd(
   for p in paths {
     pkl_args.push(p)
   }
-  let pkl_exit = @process.run_inherit("pkl", pkl_args[:])
+  let pkl_exit = @process.run("pkl", pkl_args[:])
   if pkl_exit != 0 {
     eprintln("pkf: pkl format exited \{pkl_exit}")
     return 1
@@ -7116,7 +7113,7 @@ fn replace_pkfire_version(
 ) -> (String, Bool, Bool) {
   let marker = "pkfire@"
   let mlen = marker.length()
-  let buf = StringBuilder(size_hint=src.length())
+  let buf = StringBuilder(capacity=src.length())
   let mut i = 0
   let mut changed = false
   let mut found = false
@@ -7284,7 +7281,7 @@ async fn migrate_cmd(
     return 0
   }
   // Run `pkl eval` to verify.
-  let pkl_code = @process.run_inherit("pkl", ["eval", taskfile][:])
+  let pkl_code = @process.run("pkl", ["eval", taskfile][:])
   if pkl_code != 0 {
     // Revert the file.
     @fs.write_bytes_to_file(taskfile, @utf8.encode(src)) catch {
@@ -7470,7 +7467,7 @@ async fn hooks_cmd(
 ///|
 /// Join an Array[String] with a separator (used for events list).
 fn join_with(items : Array[String], sep : String) -> String {
-  let buf = StringBuilder(size_hint=64)
+  let buf = StringBuilder(capacity=64)
   for i, item in items {
     if i > 0 {
       buf.write_string(sep)
@@ -7531,7 +7528,7 @@ async fn hooks_install(plan : Plan, hooks_dir : String, force : Bool) -> Int {
           }
         }
         // Set executable bit 0o755 via @xfs.chmod.
-        @xfs.chmod(path.view(), 0o755) catch {
+        @xfs.chmod(path[:], 0o755) catch {
           _ => ()
         }
         println("installed \{path} → pkf run \{event}")
@@ -7608,7 +7605,7 @@ fn pad_right(s : String, width : Int) -> String {
   if len >= width {
     s
   } else {
-    let buf = StringBuilder(size_hint=width)
+    let buf = StringBuilder(capacity=width)
     buf.write_string(s)
     for _ in 0..<(width - len) {
       buf.write_char(' ')
@@ -7808,35 +7805,35 @@ fn parse_duration_to_sec(s : String) -> Int64 {
   if s.has_suffix("d") {
     let num_str = s[:s.length() - 1].to_owned()
     try {
-      return @string.parse_int(num_str, base=10).to_int64() * 86400L
+      return @string.parse_int(num_str, radix=10).to_int64() * 86400L
     } catch {
       _ => ()
     }
   } else if s.has_suffix("h") {
     let num_str = s[:s.length() - 1].to_owned()
     try {
-      return @string.parse_int(num_str, base=10).to_int64() * 3600L
+      return @string.parse_int(num_str, radix=10).to_int64() * 3600L
     } catch {
       _ => ()
     }
   } else if s.has_suffix("m") {
     let num_str = s[:s.length() - 1].to_owned()
     try {
-      return @string.parse_int(num_str, base=10).to_int64() * 60L
+      return @string.parse_int(num_str, radix=10).to_int64() * 60L
     } catch {
       _ => ()
     }
   } else if s.has_suffix("s") {
     let num_str = s[:s.length() - 1].to_owned()
     try {
-      return @string.parse_int(num_str, base=10).to_int64()
+      return @string.parse_int(num_str, radix=10).to_int64()
     } catch {
       _ => ()
     }
   }
   // Default fallback: treat as seconds.
   try {
-    return @string.parse_int(s, base=10).to_int64()
+    return @string.parse_int(s, radix=10).to_int64()
   } catch {
     _ => ()
   }
@@ -8231,5 +8228,5 @@ async fn main {
     trimmed.push(args[i])
   }
   let code = @async.with_task_group(group => run_main(group, trimmed))
-  @sys.exit(code)
+  @env.exit(code)
 }

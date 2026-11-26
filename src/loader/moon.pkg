@@ -1,17 +1,16 @@
 import {
   "mizchi/pkl",
-  "mizchi/x/http",
   "mizchi/zlib",
+  "moonbitlang/async/http",
+  "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/json",
   "moonbitlang/x/crypto",
-  "moonbitlang/core/encoding/utf8",
   "moonbitlang/x/fs",
 }
 
 import {
   "moonbitlang/async",
-  "moonbitlang/async/http" @async_http,
   "moonbitlang/async/socket",
 } for "wbtest"
 

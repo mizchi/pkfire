@@ -129,7 +129,7 @@ async fn sandbox_link(
   if @fs.path_exists(dest) {
     return true
   }
-  @xfs.symlink(target=source.view(), dest.view()) catch {
+  @xfs.symlink(target=source[:], dest[:]) catch {
     _ => return false
   }
   true
@@ -218,7 +218,7 @@ async fn sandbox_collect(
       // modes and large trees cheap. Copy is the fallback for a cache
       // directory on a different device from the workspace.
       let renamed = try {
-        @xfs.rename(from.view(), to.view(), replace=true)
+        @xfs.rename(from[:], to[:], replace=true)
         true
       } catch {
         _ => false
@@ -255,7 +255,7 @@ fn copy_tree_into(from : String, to : String) -> Unit {
       }
     }
     _ => {
-      let bytes = @fs.read_file_to_bytes(from) catch { _ => Bytes::new(0) }
+      let bytes = @fs.read_file_to_bytes(from) catch { _ => b"" }
       @fs.write_bytes_to_file(to, bytes) catch { _ => () }
     }
   }

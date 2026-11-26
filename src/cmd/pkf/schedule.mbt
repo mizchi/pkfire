@@ -56,6 +56,7 @@ fn auto_jobs() -> Int {
 
 ///|
 /// What happened to one action.
+#derive(Eq)
 enum ActionOutcome {
   /// Reached a conclusion of its own — ran, hit the cache, or had
   /// nothing to do. The exit code is inside the `TaskOutcome`.
@@ -64,7 +65,7 @@ enum ActionOutcome {
   /// already failed and `--keep-going` was not set. The `String` names
   /// the action that caused it.
   Skipped(String)
-} derive(Eq)
+}
 
 ///|
 /// Per-action record of a completed run, in completion order.

@@ -60,7 +60,7 @@ struct CapturedLogs {
 
 ///|
 fn CapturedLogs::empty() -> CapturedLogs {
-  CapturedLogs::{ stdout: Bytes::new(0), stderr: Bytes::new(0), }
+  CapturedLogs::{ stdout: b"", stderr: b"", }
 }
 
 ///|
@@ -104,8 +104,8 @@ fn cap_log(data : Bytes, cap : Int) -> Bytes {
   if data.length() <= cap {
     return data
   }
-  let buf = @buffer.Buffer(size_hint=cap + 64)
-  buf.write_bytes(data[0:cap])
+  let buf = @buffer.Buffer(capacity=cap + 64)
+  buf.write_bytesview(data[0:cap])
   append_truncation_note(buf, cap, data.length() - cap)
   buf.to_bytes()
 }
@@ -124,7 +124,7 @@ fn append_truncation_note(
   if so_far.length() > 0 && so_far[so_far.length() - 1] != b'\n' {
     buf.write_byte(b'\n')
   }
-  buf.write_bytes(
+  buf.write_bytesview(
     @utf8.encode(
       "[pkf: log truncated at \{cap} bytes; \{dropped} more were not stored]\n",
     )[:],
@@ -143,7 +143,7 @@ async fn pump_stream(
   to_stderr : Bool,
   cap : Int,
 ) -> Bytes {
-  let buf = @buffer.Buffer(size_hint=4096)
+  let buf = @buffer.Buffer(capacity=4096)
   let mut seen = 0
   while (reader.read_some() catch { _ => None }) is Some(chunk) {
     if chunk.length() == 0 {
@@ -157,9 +157,9 @@ async fn pump_stream(
     if seen < cap {
       let room = cap - seen
       if chunk.length() <= room {
-        buf.write_bytes(chunk[:])
+        buf.write_bytesview(chunk[:])
       } else {
-        buf.write_bytes(chunk[0:room])
+        buf.write_bytesview(chunk[0:room])
       }
     }
     // Counted whether or not it was kept: past the cap the reading has
@@ -176,7 +176,7 @@ async fn pump_stream(
 ///|
 /// Run a command, showing its output live *and* keeping a copy.
 ///
-/// `run_inherit` hands the child our own file descriptors, which is why
+/// `@process.run` hands the child our own file descriptors, which is why
 /// a sequential run streams — and why nothing can be captured from it.
 /// This gives the child pipes instead and copies through, which is the
 /// only way to have both. The cost is that the child sees a pipe rather
@@ -204,13 +204,13 @@ async fn tee_run(
   @async.with_task_group(group => {
     let exit_code = group.spawn(() => {
       @process.run(
-        cmd.view(),
+        cmd[:],
         argv[:],
         extra_env~,
         inherit_env~,
         stdout=w_out,
         stderr=w_err,
-        cwd=cwd.view(),
+        cwd=cwd[:],
       )
     })
     let out = group.spawn(() => {

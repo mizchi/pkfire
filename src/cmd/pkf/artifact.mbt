@@ -37,16 +37,18 @@
 /// `GeneratedArtifact` is the output of another action in this graph
 /// and its content is a *result* — which is why consuming one has to
 /// create an edge to whatever produced it.
+#derive(Eq)
 enum Artifact {
   /// A pattern matching files nothing in the graph produces.
   SourceArtifact(String)
   /// A pattern that reaches into `String`'s declared outputs — the
   /// second field is the producing task's name.
   GeneratedArtifact(String, String)
-} derive(Eq)
+}
 
 ///|
 /// Why one action must run before another.
+#derive(Eq)
 enum EdgeReason {
   /// The Taskfile said so: `deps { producer }`.
   DeclaredDep
@@ -55,7 +57,7 @@ enum EdgeReason {
   /// a concrete path in both, which is what makes the inference
   /// reviewable rather than a claim.
   ConsumedArtifact(String, String, String)
-} derive(Eq)
+}
 
 ///|
 /// One edge of the action graph, pointing at the action that must run

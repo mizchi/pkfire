@@ -1,5 +1,5 @@
 // Whitebox tests for the in-process HTTP fetch ported into the loader
-// package (phase 3). A loopback `@async_http.Server` serves
+// package (phase 3). A loopback `@http.Server` serves
 //   /a -> 302 Location: /b
 //   /b -> 200 "hello"
 // so we exercise the redirect-follow path end to end, including the
@@ -8,7 +8,7 @@
 ///|
 async test "fetch_uri follows a relative 302 redirect" {
   @async.with_task_group(group => {
-    let server = @async_http.Server(@socket.Addr::parse("127.0.0.1:0"))
+    let server = @http.Server(@socket.Addr::parse("127.0.0.1:0"))
     let port = server.addr.port()
     group.spawn_bg(() => {
       defer server.close()
@@ -18,7 +18,7 @@ async test "fetch_uri follows a relative 302 redirect" {
         defer conn.close()
         ignore(conn.read_request())
         conn.skip_request_body()
-        let extra : Map[String, String] = { "Location": "/b" }
+        let extra : @http.Headers = { "Location": "/b" }
         conn.send_response(302, "Found", extra_headers=extra)
         conn.end_response()
       }
